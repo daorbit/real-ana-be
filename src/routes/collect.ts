@@ -8,7 +8,17 @@ const router = Router();
 // Public ingest endpoint. Called by tracker.js embedded on customer sites.
 router.post("/", async (req, res) => {
   try {
-    const { siteId, type, name, path, referrer, utm } = req.body ?? {};
+    // Body arrives as JSON (fetch) or as a raw text/plain string (sendBeacon).
+    let body: any = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        return res.status(400).json({ error: "invalid body" });
+      }
+    }
+
+    const { siteId, type, name, path, referrer, utm } = body ?? {};
     if (!siteId) return res.status(400).json({ error: "siteId required" });
 
     // Verify site exists (reject unknown keys to avoid junk data)

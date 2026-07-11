@@ -10,6 +10,9 @@ import v1Routes from "./routes/v1.js";
 
 const app = express();
 app.use(express.json());
+// The tracker sends beacons as text/plain (an application/json beacon would
+// trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.
+app.use(express.text({ type: ["text/plain", "text/*"] }));
 
 const dashboardOrigins = [
   "http://localhost:5173",
