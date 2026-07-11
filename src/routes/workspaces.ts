@@ -59,6 +59,27 @@ router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   res.json(sites);
 });
 
+// Install status for a site — has the tracking script ever reported?
+router.get("/:wid/sites/:siteId/status", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
+  if (!site) return res.status(404).json({ error: "site not found" });
+
+  const siteId = site.siteId as string;
+  const [eventCount, last] = await Promise.all([
+    Event.countDocuments({ siteId }),
+    Event.findOne({ siteId }).sort({ ts: -1 }).select("ts"),
+  ]);
+
+  res.json({
+    siteId,
+    installed: eventCount > 0,
+    eventCount,
+    lastEventAt: last?.ts ?? null,
+  });
+});
+
 // Aggregate analytics across all sites in a workspace
 router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
