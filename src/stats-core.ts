@@ -93,6 +93,40 @@ async function screenSizes(match: Match) {
     .sort((a, b) => b.count - a.count);
 }
 
+/**
+ * Which CTAs were clicked, and on which page. We group by the label + the page
+ * it was clicked from, so the same button on two pages shows as two rows.
+ */
+async function topClicks(match: Match, limit = 10) {
+  return Event.aggregate([
+    { $match: { ...match, type: "click" } },
+    {
+      $group: {
+        _id: {
+          // prefer an explicit data-va-cta / id, fall back to the visible text
+          label: { $cond: [{ $ne: ["$clickId", ""] }, "$clickId", "$clickText"] },
+          path: "$path",
+        },
+        count: { $sum: 1 },
+        href: { $first: "$clickHref" },
+        tag: { $first: "$clickTag" },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+    {
+      $project: {
+        _id: 0,
+        key: "$_id.label",
+        path: "$_id.path",
+        href: 1,
+        tag: 1,
+        count: 1,
+      },
+    },
+  ]);
+}
+
 /** Who is on the site right now, and what page are they looking at. */
 async function livePages(siteIds: string[]) {
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
@@ -136,6 +170,8 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     screens,
     utmSources,
     utmCampaigns,
+    clicks,
+    clickTotal,
     timeseries,
     liveNow,
   ] = await Promise.all([
@@ -154,6 +190,8 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     screenSizes(pageviewBase),
     topBy(base, "utm.source"),
     topBy(base, "utm.campaign"),
+    topClicks(base),
+    Event.countDocuments({ ...base, type: "click" }),
     Event.aggregate([
       { $match: pageviewBase },
       {
@@ -222,6 +260,13 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     screenSizes: screens,
     utmSources: clean(utmSources, "(none)"),
     utmCampaigns: clean(utmCampaigns, "(none)"),
+
+    // clicks
+    clicks: (clicks as { key: string; count: number }[]).map((c) => ({
+      ...c,
+      key: c.key || "(unlabelled)",
+    })),
+    clickCount: clickTotal,
 
     // real-time
     livePages: liveNow,

@@ -2,10 +2,16 @@ import mongoose, { Schema } from "mongoose";
 
 const eventSchema = new Schema({
   siteId: { type: String, required: true, index: true },
-  type: { type: String, default: "pageview" }, // pageview | engagement | custom
+  type: { type: String, default: "pageview" }, // pageview | engagement | click | custom
   name: { type: String }, // custom event name
   path: { type: String, default: "/" },
   referrer: { type: String, default: "" },
+
+  // click tracking (only on type: "click")
+  clickText: { type: String, default: "" }, // visible label of the element
+  clickTag: { type: String, default: "" }, // button | a | …
+  clickId: { type: String, default: "" }, // id or data-va-cta attribute
+  clickHref: { type: String, default: "" }, // destination, for links
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
   sessionId: { type: String, index: true },
 

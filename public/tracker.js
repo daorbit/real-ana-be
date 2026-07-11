@@ -229,6 +229,68 @@
   });
 
   /* ------------------------------------------------------------------
+   * Click tracking
+   * Delegated on the document, so it also covers elements added later.
+   * We report buttons, links, and anything tagged with data-va-cta.
+   * Opt out per element with data-va-ignore, or globally with
+   * data-clicks="off" on the script tag.
+   * ------------------------------------------------------------------ */
+  var trackClicks = script.getAttribute("data-clicks") !== "off";
+
+  function label(el) {
+    // An explicit name always wins over whatever text happens to be inside.
+    var explicit =
+      el.getAttribute("data-va-cta") ||
+      el.getAttribute("aria-label") ||
+      el.id ||
+      "";
+    if (explicit) return explicit.slice(0, 120);
+    var text = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+    return text.slice(0, 120);
+  }
+
+  function trackable(target) {
+    // Walk up from the clicked node: the user may have hit an icon inside a button.
+    for (var el = target; el && el !== document.body; el = el.parentElement) {
+      if (el.hasAttribute && el.hasAttribute("data-va-ignore")) return null;
+      if (!el.tagName) continue;
+      var tag = el.tagName.toLowerCase();
+      var isCta =
+        tag === "button" ||
+        tag === "a" ||
+        el.getAttribute("role") === "button" ||
+        el.hasAttribute("data-va-cta") ||
+        (tag === "input" && (el.type === "submit" || el.type === "button"));
+      if (isCta) return { el: el, tag: tag };
+    }
+    return null;
+  }
+
+  if (trackClicks) {
+    document.addEventListener(
+      "click",
+      function (e) {
+        var hit = trackable(e.target);
+        if (!hit) return;
+
+        var s = session();
+        post({
+          siteId: siteId,
+          type: "click",
+          path: location.pathname, // the page the CTA was clicked on
+          sessionId: s.id,
+          clickText: label(hit.el),
+          clickTag: hit.tag,
+          clickId: hit.el.getAttribute("data-va-cta") || hit.el.id || "",
+          clickHref: hit.el.getAttribute("href") || "",
+          utm: utm(),
+        });
+      },
+      true // capture, so a handler that stops propagation can't hide the click
+    );
+  }
+
+  /* ------------------------------------------------------------------
    * Public API
    * ------------------------------------------------------------------ */
   window.rta = {
