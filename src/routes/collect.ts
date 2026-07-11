@@ -5,6 +5,16 @@ import { visitorHash, clientIp, country, parseUA } from "../enrich.js";
 
 const router = Router();
 
+// Clamp so a hostile or buggy client can't poison the aggregates.
+const MAX_DURATION_MS = 30 * 60 * 1000; // 30 min on one page is the ceiling
+const num = (v: unknown, max = 100_000): number => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(n, max);
+};
+const str = (v: unknown, max = 200): string =>
+  typeof v === "string" ? v.slice(0, max) : "";
+
 // Public ingest endpoint. Called by tracker.js embedded on customer sites.
 router.post("/", async (req, res) => {
   try {
@@ -18,7 +28,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const { siteId, type, name, path, referrer, utm } = body ?? {};
+    const { siteId, type, name } = body ?? {};
     if (!siteId) return res.status(400).json({ error: "siteId required" });
 
     // Verify site exists (reject unknown keys to avoid junk data)
@@ -33,24 +43,42 @@ router.post("/", async (req, res) => {
     await Event.create({
       siteId,
       type: type ?? "pageview",
-      name,
-      path: path ?? "/",
-      referrer: referrer ?? "",
+      name: str(name, 80),
+      path: str(body.path, 300) || "/",
+      referrer: str(body.referrer, 300),
       visitorHash: vh,
-      sessionId: vh, // MVP: session == daily visitor hash
+      // Prefer the tracker's session id; fall back to the daily visitor hash.
+      sessionId: str(body.sessionId, 60) || vh,
+
       device,
       os,
       browser,
       country: country(req),
+      language: str(body.language, 20),
+      timezone: str(body.timezone, 60),
+      screenW: num(body.screenW, 20000),
+      screenH: num(body.screenH, 20000),
+      viewportW: num(body.viewportW, 20000),
+      viewportH: num(body.viewportH, 20000),
+
+      isEntry: !!body.isEntry,
+      isExit: !!body.isExit,
+      entryPath: str(body.entryPath, 300),
+
+      durationMs: num(body.durationMs, MAX_DURATION_MS),
+      bounce: !!body.bounce,
+
       utm: {
-        source: utm?.source ?? "",
-        medium: utm?.medium ?? "",
-        campaign: utm?.campaign ?? "",
+        source: str(body.utm?.source, 80),
+        medium: str(body.utm?.medium, 80),
+        campaign: str(body.utm?.campaign, 80),
       },
+      props: body.props,
+
       ts: new Date(),
     });
 
-    // 204 keeps beacon lightweight
+    // 204 keeps the beacon lightweight
     res.status(204).end();
   } catch {
     res.status(500).json({ error: "collect failed" });

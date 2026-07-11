@@ -16,11 +16,68 @@
   var siteId = script.getAttribute("data-site");
   if (!siteId) return;
 
-  // Endpoint: same origin as the script src
   var src = script.src || "";
   var i = src.indexOf("/tracker.js");
   var origin = i > -1 ? src.slice(0, i) : "";
   var endpoint = origin + "/api/collect";
+
+  /* ------------------------------------------------------------------
+   * Session: a 30-minute sliding window, kept in sessionStorage so it
+   * survives SPA navigation and reloads within the same tab.
+   * ------------------------------------------------------------------ */
+  var SESSION_TTL = 30 * 60 * 1000;
+  var SKEY = "_va_sess_" + siteId;
+
+  function uid() {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  function session() {
+    var now = Date.now();
+    var raw;
+    try {
+      raw = JSON.parse(sessionStorage.getItem(SKEY) || "null");
+    } catch (e) {
+      raw = null;
+    }
+    if (!raw || now - raw.last > SESSION_TTL) {
+      raw = { id: uid(), start: now, last: now, views: 0, entry: location.pathname };
+    }
+    raw.last = now;
+    try {
+      sessionStorage.setItem(SKEY, JSON.stringify(raw));
+    } catch (e) {
+      /* storage disabled — session degrades to per-pageview */
+    }
+    return raw;
+  }
+
+  function bumpViews() {
+    var s = session();
+    s.views += 1;
+    try {
+      sessionStorage.setItem(SKEY, JSON.stringify(s));
+    } catch (e) {}
+    return s;
+  }
+
+  /* ------------------------------------------------------------------
+   * Static client context — cheap, read once.
+   * ------------------------------------------------------------------ */
+  function context() {
+    var tz = "";
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch (e) {}
+    return {
+      screenW: window.screen ? window.screen.width : 0,
+      screenH: window.screen ? window.screen.height : 0,
+      viewportW: window.innerWidth || 0,
+      viewportH: window.innerHeight || 0,
+      language: navigator.language || "",
+      timezone: tz,
+    };
+  }
 
   function utm() {
     var q = new URLSearchParams(location.search);
@@ -31,22 +88,14 @@
     };
   }
 
-  var lastPath = null;
-
-  function send(type, name) {
-    var payload = {
-      siteId: siteId,
-      type: type || "pageview",
-      name: name,
-      path: location.pathname,
-      referrer: document.referrer,
-      utm: utm(),
-    };
+  /* ------------------------------------------------------------------
+   * Transport
+   * sendBeacon with an application/json Blob triggers a CORS preflight,
+   * which beacons cannot perform — the request is silently dropped.
+   * text/plain is CORS-safelisted, so no preflight is needed.
+   * ------------------------------------------------------------------ */
+  function post(payload) {
     var body = JSON.stringify(payload);
-
-    // sendBeacon with an application/json Blob triggers a CORS preflight, which
-    // beacons cannot perform — the request is silently dropped cross-origin.
-    // text/plain is a CORS-safelisted content type, so no preflight is needed.
     if (navigator.sendBeacon) {
       var ok = navigator.sendBeacon(
         endpoint,
@@ -54,28 +103,117 @@
       );
       if (ok) return;
     }
-
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=UTF-8" },
       body: body,
       keepalive: true,
       mode: "cors",
-credentials: "omit",
+      credentials: "omit",
     }).catch(function () {});
   }
 
-  function pageview() {
-    // SPA frameworks can fire several route events for one navigation.
-    if (location.pathname === lastPath) return;
-    lastPath = location.pathname;
-    send("pageview");
+  /* ------------------------------------------------------------------
+   * Engagement: measure how long the page was actually *visible*, so a
+   * backgrounded tab doesn't inflate time-on-page.
+   * ------------------------------------------------------------------ */
+  var visibleMs = 0;
+  var visibleSince = document.visibilityState === "visible" ? Date.now() : 0;
+  var lastPath = null;
+  var currentView = null; // { path, startedAt }
+
+  function accumulate() {
+    if (visibleSince) {
+      visibleMs += Date.now() - visibleSince;
+      visibleSince = 0;
+    }
   }
 
-  // Initial pageview
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") {
+      if (!visibleSince) visibleSince = Date.now();
+    } else {
+      accumulate();
+      flush(); // a hidden tab may never come back — report what we have
+    }
+  });
+
+  // Send the engagement record for the page we are leaving.
+  var flushed = false;
+  function flush() {
+    if (!currentView || flushed) return;
+    accumulate();
+    var s = session();
+    post({
+      siteId: siteId,
+      type: "engagement",
+      path: currentView.path,
+      sessionId: s.id,
+      durationMs: visibleMs,
+      // bounce = the session ended with only one pageview
+      bounce: s.views <= 1,
+      isExit: true,
+      utm: utm(),
+    });
+    flushed = true;
+  }
+
+  window.addEventListener("pagehide", flush);
+  window.addEventListener("beforeunload", flush);
+
+  /* ------------------------------------------------------------------
+   * Pageview
+   * ------------------------------------------------------------------ */
+  function pageview() {
+    // SPA routers can fire several history events for a single navigation.
+    if (location.pathname === lastPath) return;
+
+    // Leaving the previous in-SPA page: report its engagement first.
+    if (currentView) {
+      accumulate();
+      var prev = session();
+      post({
+        siteId: siteId,
+        type: "engagement",
+        path: currentView.path,
+        sessionId: prev.id,
+        durationMs: visibleMs,
+        bounce: false, // they navigated on, so it isn't a bounce
+        isExit: false,
+        utm: utm(),
+      });
+    }
+
+    lastPath = location.pathname;
+    visibleMs = 0;
+    visibleSince = document.visibilityState === "visible" ? Date.now() : 0;
+    flushed = false;
+
+    var s = bumpViews();
+    currentView = { path: location.pathname, startedAt: Date.now() };
+
+    var ctx = context();
+    post({
+      siteId: siteId,
+      type: "pageview",
+      path: location.pathname,
+      referrer: document.referrer,
+      sessionId: s.id,
+      isEntry: s.views === 1,
+      entryPath: s.entry,
+      screenW: ctx.screenW,
+      screenH: ctx.screenH,
+      viewportW: ctx.viewportW,
+      viewportH: ctx.viewportH,
+      language: ctx.language,
+      timezone: ctx.timezone,
+      utm: utm(),
+    });
+  }
+
   pageview();
 
-  // SPA route changes: patch the history API (Next.js router uses pushState)
+  // SPA route changes: Next.js and friends drive the history API.
   var push = history.pushState;
   history.pushState = function () {
     push.apply(this, arguments);
@@ -90,10 +228,21 @@ credentials: "omit",
     setTimeout(pageview, 0);
   });
 
-  // Expose custom event tracking
+  /* ------------------------------------------------------------------
+   * Public API
+   * ------------------------------------------------------------------ */
   window.rta = {
-    track: function (name) {
-      send("custom", name);
+    track: function (name, props) {
+      var s = session();
+      post({
+        siteId: siteId,
+        type: "custom",
+        name: name,
+        path: location.pathname,
+        sessionId: s.id,
+        props: props || undefined,
+        utm: utm(),
+      });
     },
   };
 })();
