@@ -5,6 +5,8 @@ import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import { computeStats } from "../stats-core.js";
+import { ApiKey } from "../models/ApiKey.js";
+import { generateKey } from "../apikey.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -108,6 +110,44 @@ router.delete("/:wid/sites/:siteId", async (req: AuthedRequest, res: Response) =
   if (!site) return res.status(404).json({ error: "site not found" });
   await Event.deleteMany({ siteId: site.siteId });
   await site.deleteOne();
+  res.status(204).end();
+});
+
+// ---- API keys (platform integration) ----
+// Create a key — returns the raw secret ONCE.
+router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const { name } = req.body ?? {};
+  const { raw, keyHash, prefix } = generateKey();
+  const key = await ApiKey.create({
+    workspaceId: ws.id,
+    userId: req.userId,
+    name: name || "Default key",
+    keyHash,
+    prefix,
+  });
+  res.status(201).json({ id: key.id, name: key.name, prefix: key.prefix, key: raw, createdAt: key.createdAt });
+});
+
+// List keys (masked — never returns the raw secret again)
+router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false }).sort({ createdAt: -1 });
+  res.json(keys.map((k) => ({
+    id: k.id, name: k.name, prefix: k.prefix, lastUsedAt: k.lastUsedAt, createdAt: k.get("createdAt"),
+  })));
+});
+
+// Revoke a key
+router.delete("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const key = await ApiKey.findOne({ _id: req.params.kid, workspaceId: ws.id });
+  if (!key) return res.status(404).json({ error: "key not found" });
+  key.set("revoked", true);
+  await key.save();
   res.status(204).end();
 });
 

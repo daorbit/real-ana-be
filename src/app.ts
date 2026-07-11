@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth.js";
 import workspaceRoutes from "./routes/workspaces.js";
 import collectRoutes from "./routes/collect.js";
 import statsRoutes from "./routes/stats.js";
+import v1Routes from "./routes/v1.js";
 
 const app = express();
 app.use(express.json());
@@ -40,6 +41,9 @@ app.get("/tracker.js", openCors, (_req, res) => {
   res.type("application/javascript");
   res.sendFile(path.join(publicDir, "tracker.js"));
 });
+
+// Platform API (server-to-server, API-key auth, any origin)
+app.use("/v1", openCors, v1Routes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
