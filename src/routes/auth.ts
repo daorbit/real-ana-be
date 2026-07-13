@@ -48,7 +48,14 @@ router.post("/login", async (req, res) => {
 router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
-  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
+  res.json({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    // Survives a refresh, so the "you are viewing as …" banner can come back.
+    impersonating: Boolean(req.impersonatorId),
+  });
 });
 
 export default router;

@@ -7,6 +7,7 @@ import workspaceRoutes from "./routes/workspaces.js";
 import collectRoutes from "./routes/collect.js";
 import statsRoutes from "./routes/stats.js";
 import v1Routes from "./routes/v1.js";
+import adminRoutes from "./routes/admin.js";
 
 const app = express();
 app.use(express.json());
@@ -52,5 +53,6 @@ app.use("/v1", openCors, v1Routes);
 app.use("/api/auth", dashboardCors, authRoutes);
 app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
+app.use("/api/admin", dashboardCors, adminRoutes);
 
 export default app;
