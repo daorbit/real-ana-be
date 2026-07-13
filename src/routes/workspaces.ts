@@ -134,6 +134,50 @@ router.delete("/:wid/sites/:siteId", async (req: AuthedRequest, res: Response) =
   res.status(204).end();
 });
 
+// ---- Home layout ----
+// Which widgets the home grid shows, in what order, and how wide each is.
+// Stored per workspace so each dashboard keeps its own arrangement.
+
+type Placed = { id: string; span: number };
+
+/**
+ * Widget ids are defined in the frontend, so validating them here would mean a
+ * second list that silently drifts. Check only the shape — the client already
+ * drops ids it doesn't recognise when it reads the layout back.
+ */
+function parseLayout(body: unknown): Placed[] | null {
+  if (!Array.isArray(body) || body.length > 50) return null;
+  const out: Placed[] = [];
+  for (const item of body) {
+    const id = (item as Placed)?.id;
+    const span = (item as Placed)?.span;
+    if (typeof id !== "string" || !id || id.length > 64) return null;
+    if (![1, 2, 3, 4].includes(span)) return null;
+    out.push({ id, span });
+  }
+  return out;
+}
+
+router.get("/:wid/layout", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  // null, not [], so the client can tell "never customised" from "emptied".
+  res.json({ layout: ws.homeLayout ?? null });
+});
+
+router.put("/:wid/layout", async (req: AuthedRequest, res: Response) => {
+  const layout = parseLayout(req.body);
+  if (!layout)
+    return res.status(400).json({ error: "layout must be an array of { id, span: 1|2|3|4 }" });
+  const ws = await Workspace.findOneAndUpdate(
+    { _id: req.params.wid, userId: req.userId },
+    { homeLayout: layout },
+    { new: true }
+  );
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  res.json({ layout: ws.homeLayout ?? [] });
+});
+
 // ---- API keys (platform integration) ----
 // Create a key — returns the raw secret ONCE.
 router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
