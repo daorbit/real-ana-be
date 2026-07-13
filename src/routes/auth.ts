@@ -13,9 +13,14 @@ router.post("/signup", async (req, res) => {
     const exists = await User.findOne({ email: email.toLowerCase() });
     if (exists) return res.status(409).json({ error: "email already registered" });
     const passwordHash = await bcrypt.hash(password, 10);
+    // `role` is deliberately not read from the body — a signup cannot ask to be
+    // an admin. The schema default makes every new account a plain user.
     const user = await User.create({ email, passwordHash, name });
     const token = signToken(user.id);
-    res.status(201).json({ token, user: { id: user.id, email: user.email, name: user.name } });
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
   } catch {
     res.status(500).json({ error: "signup failed" });
   }
@@ -31,7 +36,10 @@ router.post("/login", async (req, res) => {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "invalid credentials" });
     const token = signToken(user.id);
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+    });
   } catch {
     res.status(500).json({ error: "login failed" });
   }
@@ -40,7 +48,7 @@ router.post("/login", async (req, res) => {
 router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
-  res.json({ id: user.id, email: user.email, name: user.name });
+  res.json({ id: user.id, email: user.email, name: user.name, role: user.role });
 });
 
 export default router;
