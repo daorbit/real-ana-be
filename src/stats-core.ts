@@ -127,6 +127,194 @@ async function topClicks(match: Match, limit = 10) {
   ]);
 }
 
+/**
+ * Impressions per element, joined to clicks on the same name to give a
+ * click-through rate. An element only appears once it has been seen at least
+ * once — a CTR with no impressions behind it is noise.
+ */
+async function impressions(match: Match, limit = 10) {
+  const [seen, clicked] = await Promise.all([
+    Event.aggregate([
+      { $match: { ...match, type: "impression", impressionId: { $ne: "" } } },
+      {
+        $group: {
+          _id: "$impressionId",
+          count: { $sum: 1 },
+          label: { $first: "$clickText" },
+        },
+      },
+    ]),
+    Event.aggregate([
+      { $match: { ...match, type: "click", clickId: { $ne: "" } } },
+      { $group: { _id: "$clickId", count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const clicks = new Map(
+    (clicked as { _id: string; count: number }[]).map((c) => [c._id, c.count])
+  );
+
+  return (seen as { _id: string; count: number; label: string }[])
+    .map((s) => {
+      const clickCount = clicks.get(s._id) ?? 0;
+      return {
+        key: s._id,
+        label: s.label || s._id,
+        impressions: s.count,
+        clicks: clickCount,
+        // Rounded to one decimal: a CTR of 3.7% and 4.2% are meaningfully
+        // different, whereas 3.71% and 3.68% are not.
+        ctr: s.count > 0 ? Math.round((clickCount / s.count) * 1000) / 10 : 0,
+      };
+    })
+    .sort((a, b) => b.impressions - a.impressions)
+    .slice(0, limit);
+}
+
+/**
+ * How far down each page people actually get.
+ *
+ * Averaged per path from the engagement records, which carry the furthest point
+ * reached. Pages nobody scrolled on are excluded rather than counted as zero —
+ * a page with no engagement record has no depth, which is not the same as a
+ * page people abandoned at the top.
+ */
+async function scrollDepth(match: Match, limit = 10) {
+  return Event.aggregate([
+    { $match: { ...match, type: "engagement", scrollDepth: { $gt: 0 } } },
+    {
+      $group: {
+        _id: "$path",
+        avgDepth: { $avg: "$scrollDepth" },
+        // Reaching the bottom is the outcome people actually care about.
+        reachedEnd: { $sum: { $cond: [{ $gte: ["$scrollDepth", 90] }, 1, 0] } },
+        samples: { $sum: 1 },
+      },
+    },
+    { $sort: { samples: -1 } },
+    { $limit: limit },
+    {
+      $project: {
+        _id: 0,
+        key: "$_id",
+        count: "$samples",
+        avgDepth: { $round: ["$avgDepth", 0] },
+        completionRate: {
+          $round: [{ $multiply: [{ $divide: ["$reachedEnd", "$samples"] }, 100] }, 0],
+        },
+      },
+    },
+  ]);
+}
+
+/**
+ * First-time versus repeat visitors.
+ *
+ * A visitor counts as returning if their hash was seen before this window
+ * opened. The hash rotates daily for privacy, so this measures "came back
+ * within the retention of the hash", not lifetime loyalty — worth knowing
+ * before reading too much into it.
+ */
+async function newVsReturning(siteIds: string[], since: Date) {
+  const inSites = { $in: siteIds };
+  const [current, earlier] = await Promise.all([
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: since } }),
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $lt: since } }),
+  ]);
+
+  const before = new Set(earlier as string[]);
+  let returning = 0;
+  for (const v of current as string[]) if (before.has(v)) returning++;
+
+  const total = current.length;
+  return {
+    new: total - returning,
+    returning,
+    returningRate: total > 0 ? Math.round((returning / total) * 100) : 0,
+  };
+}
+
+/** Traffic by hour of day and day of week, for a when-are-people-here heatmap. */
+async function heatmap(match: Match) {
+  const rows = await Event.aggregate([
+    { $match: match },
+    {
+      $group: {
+        // Mongo numbers the week 1–7 from Sunday; shift to 0–6 for the client.
+        _id: { day: { $dayOfWeek: "$ts" }, hour: { $hour: "$ts" } },
+        count: { $sum: 1 },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        day: { $subtract: ["$_id.day", 1] },
+        hour: "$_id.hour",
+        count: 1,
+      },
+    },
+  ]);
+  return rows as { day: number; hour: number; count: number }[];
+}
+
+/**
+ * Per landing page: how many sessions it started, and whether those sessions
+ * went anywhere. A page can pull plenty of traffic and still leak all of it.
+ */
+async function landingPages(siteIds: string[], since: Date, limit = 10) {
+  const inSites = { $in: siteIds };
+  const window = { siteId: inSites, ts: { $gte: since } };
+
+  // The entry path lives on the pageview and the bounce outcome on the
+  // engagement record, so neither alone can answer this — roll the session up
+  // first, then group the sessions by where they started.
+  const rows = await Event.aggregate([
+    { $match: { ...window, type: { $in: ["pageview", "engagement"] } } },
+    {
+      $group: {
+        _id: "$sessionId",
+        entry: {
+          $first: {
+            $cond: [{ $eq: ["$type", "pageview"] }, "$entryPath", "$$REMOVE"],
+          },
+        },
+        views: { $sum: { $cond: [{ $eq: ["$type", "pageview"] }, 1, 0] } },
+        bounced: { $max: { $cond: ["$bounce", 1, 0] } },
+      },
+    },
+    { $match: { entry: { $nin: [null, ""] } } },
+    {
+      $group: {
+        _id: "$entry",
+        count: { $sum: 1 },
+        bounces: { $sum: "$bounced" },
+        totalViews: { $sum: "$views" },
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        key: "$_id",
+        count: 1,
+        bounceRate: {
+          $round: [{ $multiply: [{ $divide: ["$bounces", "$count"] }, 100] }, 0],
+        },
+        pagesPerSession: {
+          $round: [{ $divide: ["$totalViews", "$count"] }, 1],
+        },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+  ]);
+  return rows as {
+    key: string;
+    count: number;
+    bounceRate: number;
+    pagesPerSession: number;
+  }[];
+}
+
 /** Who is on the site right now, and what page are they looking at. */
 async function livePages(siteIds: string[]) {
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
@@ -174,6 +362,12 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     clickTotal,
     timeseries,
     liveNow,
+    impressionRows,
+    impressionTotal,
+    scrollRows,
+    visitorSplit,
+    heatmapRows,
+    landingRows,
   ] = await Promise.all([
     totals(siteIds, since, new Date(now)),
     totals(siteIds, prevSince, since),
@@ -217,6 +411,12 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
       },
     ]),
     livePages(siteIds),
+    impressions(base),
+    Event.countDocuments({ ...base, type: "impression" }),
+    scrollDepth(base),
+    newVsReturning(siteIds, since),
+    heatmap(pageviewBase),
+    landingPages(siteIds, since),
   ]);
 
   const clean = (rows: { key: string; count: number }[], fallback: string) =>
@@ -267,6 +467,23 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
       key: c.key || "(unlabelled)",
     })),
     clickCount: clickTotal,
+
+    // impressions — elements marked with data-va-impression, and how often a
+    // sighting turned into a click
+    impressions: impressionRows,
+    impressionCount: impressionTotal,
+
+    // how far down each page people get
+    scrollDepth: scrollRows,
+
+    // first-time vs repeat visitors
+    visitorSplit,
+
+    // traffic by hour and weekday
+    heatmap: heatmapRows,
+
+    // which entry points actually hold people
+    landingPages: landingRows,
 
     // real-time
     livePages: liveNow,

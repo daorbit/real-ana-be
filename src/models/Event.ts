@@ -2,7 +2,8 @@ import mongoose, { Schema } from "mongoose";
 
 const eventSchema = new Schema({
   siteId: { type: String, required: true, index: true },
-  type: { type: String, default: "pageview" }, // pageview | engagement | click | custom
+  // pageview | engagement | click | impression | custom
+  type: { type: String, default: "pageview" },
   name: { type: String }, // custom event name
   path: { type: String, default: "/" },
   referrer: { type: String, default: "" },
@@ -12,6 +13,12 @@ const eventSchema = new Schema({
   clickTag: { type: String, default: "" }, // button | a | …
   clickId: { type: String, default: "" }, // id or data-va-cta attribute
   clickHref: { type: String, default: "" }, // destination, for links
+
+  // impressions (only on type: "impression") — an element marked with
+  // data-va-impression scrolled into view. Shares the click label so the two
+  // can be joined into a click-through rate.
+  impressionId: { type: String, default: "" },
+
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
   sessionId: { type: String, index: true },
 
@@ -35,6 +42,9 @@ const eventSchema = new Schema({
   // engagement (only on type: "engagement")
   durationMs: { type: Number, default: 0 }, // visible time on the page
   bounce: { type: Boolean, default: false }, // session ended with 1 pageview
+  // Furthest point of the page reached, as a percentage. Reported on the
+  // engagement record because it is only final once the page is left.
+  scrollDepth: { type: Number, default: 0 },
 
   utm: {
     source: { type: String, default: "" },
