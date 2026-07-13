@@ -27,9 +27,17 @@ router.post("/login", async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ error: "email, password required" });
     const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) return res.status(401).json({ error: "invalid credentials" });
+    if (!user) {
+      if (process.env.NODE_ENV !== "production")
+        console.log(`[login] no user row for ${email.toLowerCase()}`);
+      return res.status(401).json({ error: "invalid credentials" });
+    }
     const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: "invalid credentials" });
+    if (!ok) {
+      if (process.env.NODE_ENV !== "production")
+        console.log(`[login] password mismatch for ${user.email}`);
+      return res.status(401).json({ error: "invalid credentials" });
+    }
     const token = signToken(user.id);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
   } catch {
