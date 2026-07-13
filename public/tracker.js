@@ -143,7 +143,6 @@
   var maxScroll = 0;
   var scrollQueued = false;
   // Elements already counted as seen on this page — see the impression block.
-  var seenImpressions = {};
 
   function measureScroll() {
     scrollQueued = false;
@@ -242,7 +241,6 @@
 
     // A new page starts unscrolled, and its height is not the old page's.
     maxScroll = 0;
-    seenImpressions = {};
     // The router may not have painted the new page yet, so measure after it has.
     setTimeout(measureScroll, 0);
 
@@ -345,64 +343,6 @@
       },
       true // capture, so a handler that stops propagation can't hide the click
     );
-  }
-
-  /* ------------------------------------------------------------------
-   * Impressions
-   * An element marked with data-va-impression counts as seen once at least
-   * half of it has been on screen. Pair it with the same name on data-va-cta
-   * and the dashboard can show a click-through rate for that element.
-   *
-   *   <div data-va-impression="pricing-cta">…</div>
-   *
-   * Counted once per element per pageview — a visitor scrolling up and down
-   * past the same banner has still only seen it once.
-   * ------------------------------------------------------------------ */
-  if (window.IntersectionObserver) {
-    var io = new IntersectionObserver(
-      function (entries) {
-        for (var i = 0; i < entries.length; i++) {
-          var entry = entries[i];
-          if (!entry.isIntersecting) continue;
-
-          var el = entry.target;
-          var id = el.getAttribute("data-va-impression") || el.id || "";
-          if (!id || seenImpressions[id]) continue;
-          seenImpressions[id] = true;
-
-          // It will never fire again for this element, so stop watching it.
-          io.unobserve(el);
-
-          var s = session();
-          post({
-            siteId: siteId,
-            type: "impression",
-            path: location.pathname,
-            sessionId: s.id,
-            impressionId: id,
-            clickText: label(el),
-            utm: utm(),
-          });
-        }
-      },
-      // Half the element visible is the usual bar for "it was actually seen".
-      { threshold: 0.5 }
-    );
-
-    var observeAll = function () {
-      var els = document.querySelectorAll("[data-va-impression]");
-      for (var i = 0; i < els.length; i++) io.observe(els[i]);
-    };
-
-    observeAll();
-
-    // Elements can arrive later — lazy-loaded sections, SPA route changes.
-    if (window.MutationObserver) {
-      new MutationObserver(observeAll).observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-      });
-    }
   }
 
   /* ------------------------------------------------------------------

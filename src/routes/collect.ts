@@ -59,7 +59,6 @@ router.post("/", async (req, res) => {
       clickTag: str(body.clickTag, 20),
       clickId: str(body.clickId, 120),
       clickHref: str(body.clickHref, 300),
-      impressionId: str(body.impressionId, 120),
       visitorHash: vh,
       // Prefer the tracker's session id; fall back to the daily visitor hash.
       sessionId: str(body.sessionId, 60) || vh,

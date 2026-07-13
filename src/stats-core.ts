@@ -134,50 +134,6 @@ async function topClicks(match: Match, limit = 10) {
 }
 
 /**
- * Impressions per element, joined to clicks on the same name to give a
- * click-through rate. An element only appears once it has been seen at least
- * once — a CTR with no impressions behind it is noise.
- */
-async function impressions(match: Match, limit = 10) {
-  const [seen, clicked] = await Promise.all([
-    Event.aggregate([
-      { $match: { ...match, type: "impression", impressionId: { $ne: "" } } },
-      {
-        $group: {
-          _id: "$impressionId",
-          count: { $sum: 1 },
-          label: { $first: "$clickText" },
-        },
-      },
-    ]),
-    Event.aggregate([
-      { $match: { ...match, type: "click", clickId: { $ne: "" } } },
-      { $group: { _id: "$clickId", count: { $sum: 1 } } },
-    ]),
-  ]);
-
-  const clicks = new Map(
-    (clicked as { _id: string; count: number }[]).map((c) => [c._id, c.count])
-  );
-
-  return (seen as { _id: string; count: number; label: string }[])
-    .map((s) => {
-      const clickCount = clicks.get(s._id) ?? 0;
-      return {
-        key: s._id,
-        label: s.label || s._id,
-        impressions: s.count,
-        clicks: clickCount,
-        // Rounded to one decimal: a CTR of 3.7% and 4.2% are meaningfully
-        // different, whereas 3.71% and 3.68% are not.
-        ctr: s.count > 0 ? Math.round((clickCount / s.count) * 1000) / 10 : 0,
-      };
-    })
-    .sort((a, b) => b.impressions - a.impressions)
-    .slice(0, limit);
-}
-
-/**
  * How far down each page people actually get.
  *
  * Averaged per path from the engagement records, which carry the furthest point
@@ -368,8 +324,6 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     clickTotal,
     timeseries,
     liveNow,
-    impressionRows,
-    impressionTotal,
     scrollRows,
     visitorSplit,
     heatmapRows,
@@ -417,8 +371,6 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
       },
     ]),
     livePages(siteIds),
-    impressions(base),
-    Event.countDocuments({ ...base, type: "impression" }),
     scrollDepth(base),
     newVsReturning(siteIds, since),
     heatmap(pageviewBase),
@@ -473,11 +425,6 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
       key: c.key || "(unlabelled)",
     })),
     clickCount: clickTotal,
-
-    // impressions — elements marked with data-va-impression, and how often a
-    // sighting turned into a click
-    impressions: impressionRows,
-    impressionCount: impressionTotal,
 
     // how far down each page people get
     scrollDepth: scrollRows,

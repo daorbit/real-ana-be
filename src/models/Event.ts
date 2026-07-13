@@ -2,7 +2,7 @@ import mongoose, { Schema } from "mongoose";
 
 const eventSchema = new Schema({
   siteId: { type: String, required: true, index: true },
-  // pageview | engagement | click | impression | custom
+  // pageview | engagement | click | custom
   type: { type: String, default: "pageview" },
   name: { type: String }, // custom event name
   path: { type: String, default: "/" },
@@ -13,12 +13,6 @@ const eventSchema = new Schema({
   clickTag: { type: String, default: "" }, // button | a | …
   clickId: { type: String, default: "" }, // id or data-va-cta attribute
   clickHref: { type: String, default: "" }, // destination, for links
-
-  // impressions (only on type: "impression") — an element marked with
-  // data-va-impression scrolled into view. Shares the click label so the two
-  // can be joined into a click-through rate.
-  impressionId: { type: String, default: "" },
-
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
   sessionId: { type: String, index: true },
 
