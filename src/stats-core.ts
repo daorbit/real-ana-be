@@ -1,5 +1,11 @@
 import { Event } from "./models/Event.js";
 
+/**
+ * Current tracker.js version. Sites reporting less than this are missing the
+ * data the newer metrics need — keep in step with `VERSION` in public/tracker.js.
+ */
+export const TRACKER_VERSION = 2;
+
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,
   "24h": 24 * 60 * 60 * 1000,

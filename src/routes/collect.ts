@@ -32,8 +32,16 @@ router.post("/", async (req, res) => {
     if (!siteId) return res.status(400).json({ error: "siteId required" });
 
     // Verify site exists (reject unknown keys to avoid junk data)
-    const site = await Site.exists({ siteId });
+    const site = await Site.findOne({ siteId }).select("trackerVersion");
     if (!site) return res.status(404).json({ error: "unknown siteId" });
+
+    // Record the tracker version so the dashboard can flag sites still running
+    // a script that predates the metrics it now shows. Only ever moves forward:
+    // a stale tab running the old script must not undo a completed upgrade.
+    const reported = num(body.v, 100);
+    if (reported > (site.trackerVersion ?? 1)) {
+      await Site.updateOne({ siteId }, { trackerVersion: reported });
+    }
 
     const ua = req.headers["user-agent"] ?? "";
     const ip = clientIp(req);

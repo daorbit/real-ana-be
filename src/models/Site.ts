@@ -9,6 +9,12 @@ const siteSchema = new Schema(
     domain: { type: String, required: true },
     framework: { type: String, default: "other" }, // react | vue | angular | svelte | other
     siteId: { type: String, required: true, unique: true, index: true }, // public tracking key
+    /**
+     * Latest tracker version this site has reported. Scripts predating the
+     * version field send nothing, so 1 is the floor rather than a real report —
+     * which is exactly the case we want to prompt about.
+     */
+    trackerVersion: { type: Number, default: 1 },
   },
   { timestamps: true }
 );

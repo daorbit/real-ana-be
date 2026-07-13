@@ -4,7 +4,7 @@ import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
-import { computeStats } from "../stats-core.js";
+import { computeStats, TRACKER_VERSION } from "../stats-core.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { generateKey } from "../apikey.js";
 
@@ -84,18 +84,26 @@ router.get("/:wid/sites/:siteId/status", async (req: AuthedRequest, res: Respons
 router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId name trackerVersion");
   const ids = sites.map((s) => s.siteId as string);
   if (ids.length === 0) {
     return res.json({
       range: String(req.query.range ?? "24h"),
       pageviews: 0, visitors: 0, live: 0,
       topPages: [], topReferrers: [], devices: [], countries: [], utmSources: [],
-      timeseries: [], siteCount: 0,
+      timeseries: [], siteCount: 0, outdatedSites: [],
     });
   }
+
+  // Sites still on a script that predates impressions and scroll depth. Those
+  // panels can only ever be empty for them, so the dashboard says so rather
+  // than letting it read as "no engagement".
+  const outdatedSites = sites
+    .filter((s) => (s.trackerVersion ?? 1) < TRACKER_VERSION)
+    .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
+
   const stats = await computeStats(ids, String(req.query.range ?? "24h"));
-  res.json({ ...stats, siteCount: ids.length });
+  res.json({ ...stats, siteCount: ids.length, outdatedSites });
 });
 
 // Rename workspace

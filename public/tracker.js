@@ -1,6 +1,11 @@
 (function () {
   "use strict";
 
+  // Sent with every event so the dashboard can tell which sites are still on an
+  // older script and are therefore missing the metrics it added. Bump this
+  // whenever the tracker starts collecting something new.
+  var VERSION = 2;
+
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
   // (next/script, React-rendered <script>, async loaders), so fall back to a query.
@@ -95,6 +100,7 @@
    * text/plain is CORS-safelisted, so no preflight is needed.
    * ------------------------------------------------------------------ */
   function post(payload) {
+    payload.v = VERSION;
     var body = JSON.stringify(payload);
     if (navigator.sendBeacon) {
       var ok = navigator.sendBeacon(
