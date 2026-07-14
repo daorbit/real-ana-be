@@ -18,6 +18,7 @@ app.use(express.text({ type: ["text/plain", "text/*"] }));
 const dashboardOrigins = [
   "http://localhost:5173",
   "https://real-ana-fe.vercel.app",
+  "https://studio-quantalog.daorbit.in",
 ];
 
 // Dashboard CORS: restricted to our own frontend
