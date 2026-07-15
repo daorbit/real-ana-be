@@ -277,6 +277,38 @@ async function landingPages(siteIds: string[], since: Date, limit = 10) {
   }[];
 }
 
+/**
+ * Custom events fired via `rta.track(name, props)`.
+ *
+ * Per named event: how many times it fired, how many distinct visitors fired it,
+ * and its conversion rate — the share of all visitors in the window who did it at
+ * least once. Conversion is against total visitors rather than event count, so a
+ * visitor who fires the same event ten times still counts once.
+ */
+async function customEvents(match: Match, limit = 12) {
+  const rows = await Event.aggregate([
+    { $match: { ...match, type: "custom", name: { $nin: [null, ""] } } },
+    {
+      $group: {
+        _id: "$name",
+        count: { $sum: 1 },
+        visitors: { $addToSet: "$visitorHash" },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+    {
+      $project: {
+        _id: 0,
+        key: "$_id",
+        count: 1,
+        visitors: { $size: "$visitors" },
+      },
+    },
+  ]);
+  return rows as { key: string; count: number; visitors: number }[];
+}
+
 /** Who is on the site right now, and what page are they looking at. */
 async function livePages(siteIds: string[]) {
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
@@ -328,6 +360,7 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     visitorSplit,
     heatmapRows,
     landingRows,
+    eventRows,
   ] = await Promise.all([
     totals(siteIds, since, new Date(now)),
     totals(siteIds, prevSince, since),
@@ -375,7 +408,16 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     newVsReturning(siteIds, since),
     heatmap(pageviewBase),
     landingPages(siteIds, since),
+    customEvents(base),
   ]);
+
+  // Conversion is against total visitors in the window, known only now that the
+  // headline totals have resolved.
+  const events = eventRows.map((r) => ({
+    ...r,
+    conversionRate:
+      current.visitors > 0 ? Math.round((r.visitors / current.visitors) * 100) : 0,
+  }));
 
   const clean = (rows: { key: string; count: number }[], fallback: string) =>
     rows.map((r) => ({ ...r, key: r.key || fallback }));
@@ -437,6 +479,9 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
 
     // which entry points actually hold people
     landingPages: landingRows,
+
+    // custom events fired via rta.track()
+    customEvents: events,
 
     // real-time
     livePages: liveNow,
