@@ -4,7 +4,10 @@ import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
-import { computeStats, parseFilters, TRACKER_VERSION } from "../stats-core.js";
+import {
+  computeStats, computeFunnel, computeRetention, parseFilters, TRACKER_VERSION,
+  type FunnelStep,
+} from "../stats-core.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { generateKey } from "../apikey.js";
 
@@ -105,6 +108,48 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const filters = parseFilters(req.query.filter);
   const stats = await computeStats(ids, String(req.query.range ?? "24h"), filters);
   res.json({ ...stats, siteCount: ids.length, outdatedSites, filters });
+});
+
+// Ad-hoc conversion funnel: the client sends an ordered list of steps (pages or
+// custom events) and gets per-step drop-off back. Kept as POST because the step
+// list is structured and unbounded, not a tidy query string.
+router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
+  const steps: FunnelStep[] = raw
+    .map((s: { type?: string; value?: string }) => ({
+      type: s?.type === "event" ? "event" : "page",
+      value: String(s?.value ?? "").slice(0, 300),
+    }))
+    .filter((s: FunnelStep) => s.value)
+    .slice(0, 8);
+
+  if (steps.length < 2) {
+    return res.status(400).json({ error: "at least 2 steps required" });
+  }
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = sites.map((s) => s.siteId as string);
+  if (ids.length === 0) return res.json({ steps: [] });
+
+  const result = await computeFunnel(ids, steps, String(req.body?.range ?? "24h"));
+  res.json({ steps: result });
+});
+
+// Weekly retention cohorts for the workspace.
+router.get("/:wid/retention", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = sites.map((s) => s.siteId as string);
+  if (ids.length === 0) return res.json({ weeks: 6, cohorts: [] });
+
+  const weeks = Math.min(12, Math.max(2, Number(req.query.weeks) || 6));
+  const cohorts = await computeRetention(ids, weeks);
+  res.json({ weeks, cohorts });
 });
 
 // Rename workspace

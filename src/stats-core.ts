@@ -390,6 +390,197 @@ async function customEvents(match: Match, limit = 12) {
   }[];
 }
 
+/**
+ * Weekly retention cohorts.
+ *
+ * Visitors are grouped by the week they were first seen (their cohort). For each
+ * cohort we then measure how many were active again in each following week. The
+ * daily privacy hash caps how far this can look back — a visitor is only
+ * recognisable within the hash's lifetime — so read short offsets, not lifetime
+ * loyalty. Returns one row per cohort with a retention percentage per week.
+ */
+export async function computeRetention(siteIds: string[], weeks = 6) {
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const since = new Date(now - weeks * WEEK_MS);
+  // Anchor weeks to a fixed epoch Monday so cohorts line up across visitors.
+  const anchor = new Date(now - weeks * WEEK_MS).getTime();
+
+  const rows = await Event.aggregate([
+    { $match: { siteId: { $in: siteIds }, ts: { $gte: since } } },
+    // Which week bucket (0-based from the anchor) each event falls in.
+    {
+      $group: {
+        _id: "$visitorHash",
+        weeksActive: {
+          $addToSet: {
+            $floor: { $divide: [{ $subtract: ["$ts", new Date(anchor)] }, WEEK_MS] },
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        cohort: { $min: "$weeksActive" },
+        weeksActive: 1,
+      },
+    },
+    {
+      $group: {
+        _id: "$cohort",
+        size: { $sum: 1 },
+        // Flatten every (cohort, activeWeek) into offsets for counting below.
+        offsets: {
+          $push: {
+            $map: {
+              input: "$weeksActive",
+              as: "w",
+              in: { $subtract: ["$$w", "$cohort"] },
+            },
+          },
+        },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+
+  return (rows as { _id: number; size: number; offsets: number[][] }[]).map((c) => {
+    // Count, for this cohort, how many visitors were active at each week offset.
+    const perOffset: number[] = Array(weeks).fill(0);
+    for (const list of c.offsets) {
+      for (const off of list) {
+        if (off >= 0 && off < weeks) perOffset[off] += 1;
+      }
+    }
+    const base = perOffset[0] || c.size || 1;
+    return {
+      // Week index from the start of the observed window.
+      cohort: c._id,
+      size: c.size,
+      // retention[0] is always 100% (the cohort itself)
+      retention: perOffset.map((n) => Math.round((n / base) * 100)),
+    };
+  });
+}
+
+export type FunnelStep = { type: "page" | "event"; value: string };
+
+/**
+ * Ordered-step conversion funnel.
+ *
+ * For each session we find the earliest timestamp it matched each step, then
+ * count a session as reaching step N only if it reached every earlier step and
+ * did so in order (each step no earlier than the one before). Returns one row
+ * per step with how many sessions got that far and the drop-off from the prior.
+ */
+export async function computeFunnel(
+  siteIds: string[],
+  steps: FunnelStep[],
+  rangeKey: string
+) {
+  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
+  const since = new Date(Date.now() - windowMs);
+  const n = steps.length;
+
+  // A per-step condition matching the right event kind and value.
+  const stepCond = (s: FunnelStep) =>
+    s.type === "event"
+      ? { $and: [{ $eq: ["$type", "custom"] }, { $eq: ["$name", s.value] }] }
+      : { $and: [{ $eq: ["$type", "pageview"] }, { $eq: ["$path", s.value] }] };
+
+  // The earliest ts each session hit each step, as an array [t0, t1, ...],
+  // with null where a step was never reached.
+  const stepTimes = steps.map((s, i) => ({
+    [`t${i}`]: {
+      $min: { $cond: [stepCond(s), "$ts", null] },
+    },
+  }));
+
+  const rows = await Event.aggregate([
+    { $match: { siteId: { $in: siteIds }, ts: { $gte: since } } },
+    { $group: { _id: "$sessionId", ...Object.assign({}, ...stepTimes) } },
+    {
+      // reached[i] is true when every step up to i was hit in non-decreasing
+      // time order. Built iteratively in a $let so later steps depend on earlier.
+      $project: {
+        reached: {
+          $let: {
+            vars: {
+              times: steps.map((_s, i) => `$t${i}`),
+            },
+            in: {
+              $reduce: {
+                input: { $range: [0, n] },
+                initialValue: { ok: true, prev: null, flags: [] as boolean[] },
+                in: {
+                  $let: {
+                    vars: {
+                      t: { $arrayElemAt: ["$$times", "$$this"] },
+                    },
+                    in: {
+                      $let: {
+                        vars: {
+                          hit: {
+                            $and: [
+                              "$$value.ok",
+                              { $ne: ["$$t", null] },
+                              {
+                                $or: [
+                                  { $eq: ["$$value.prev", null] },
+                                  { $gte: ["$$t", "$$value.prev"] },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        in: {
+                          ok: "$$hit",
+                          prev: { $cond: ["$$hit", "$$t", "$$value.prev"] },
+                          flags: { $concatArrays: ["$$value.flags", ["$$hit"]] },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    { $project: { flags: "$reached.flags" } },
+    // Sum each step's reached-flag across all sessions.
+    {
+      $group: {
+        _id: null,
+        ...Object.assign(
+          {},
+          ...steps.map((_s, i) => ({
+            [`s${i}`]: { $sum: { $cond: [{ $arrayElemAt: ["$flags", i] }, 1, 0] } },
+          }))
+        ),
+      },
+    },
+  ]);
+
+  const agg = (rows[0] ?? {}) as Record<string, number>;
+  const counts = steps.map((_s, i) => agg[`s${i}`] ?? 0);
+  const entered = counts[0] || 0;
+
+  return steps.map((s, i) => ({
+    label: s.value,
+    type: s.type,
+    count: counts[i],
+    // conversion from the top of the funnel
+    rate: entered > 0 ? Math.round((counts[i] / entered) * 100) : 0,
+    // drop-off from the previous step
+    dropFromPrev:
+      i === 0 || counts[i - 1] === 0
+        ? 0
+        : Math.round(((counts[i - 1] - counts[i]) / counts[i - 1]) * 100),
+  }));
+}
+
 /** Who is on the site right now, and what page are they looking at. */
 async function livePages(siteIds: string[]) {
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
