@@ -17,6 +17,70 @@ const LIVE_WINDOW_MS = 5 * 60 * 1000;
 
 type Match = Record<string, unknown>;
 
+/**
+ * A dashboard-wide filter. Every key narrows the whole report to matching
+ * events, so the numbers describe "this segment" rather than all traffic.
+ * Only the fields below can be filtered; anything else is ignored.
+ */
+export type StatsFilter = Partial<{
+  country: string;
+  device: string;
+  browser: string;
+  os: string;
+  referrer: string;
+  path: string;
+  language: string;
+  utmSource: string;
+  utmCampaign: string;
+  eventName: string;
+}>;
+
+const FILTER_FIELDS: Record<keyof StatsFilter, string> = {
+  country: "country",
+  device: "device",
+  browser: "browser",
+  os: "os",
+  referrer: "referrer",
+  path: "path",
+  language: "language",
+  utmSource: "utm.source",
+  utmCampaign: "utm.campaign",
+  eventName: "name",
+};
+
+const FILTER_KEYS = new Set(Object.keys(FILTER_FIELDS));
+
+/**
+ * Parse the `?filter=` query value into a StatsFilter. Format is
+ * `key:value;key:value` — semicolon-separated so values may contain commas
+ * (referrers, campaign names). Unknown keys are dropped.
+ */
+export function parseFilters(raw: unknown): StatsFilter {
+  if (typeof raw !== "string" || !raw) return {};
+  const out: StatsFilter = {};
+  for (const pair of raw.split(";")) {
+    const i = pair.indexOf(":");
+    if (i < 0) continue;
+    const key = pair.slice(0, i).trim();
+    const value = pair.slice(i + 1).trim();
+    if (FILTER_KEYS.has(key) && value) {
+      (out as Record<string, string>)[key] = value.slice(0, 200);
+    }
+  }
+  return out;
+}
+
+/** Turn a StatsFilter into Mongo match fragments merged into every pipeline. */
+function filterMatch(filters?: StatsFilter): Match {
+  const match: Match = {};
+  if (!filters) return match;
+  for (const [key, field] of Object.entries(FILTER_FIELDS)) {
+    const value = filters[key as keyof StatsFilter];
+    if (value != null && value !== "") match[field] = value;
+  }
+  return match;
+}
+
 async function topBy(match: Match, field: string, limit = 8) {
   return Event.aggregate([
     { $match: match },
@@ -28,9 +92,9 @@ async function topBy(match: Match, field: string, limit = 8) {
 }
 
 /** Headline counters for one window — used for both the current and previous period. */
-async function totals(siteIds: string[], from: Date, to: Date) {
+async function totals(siteIds: string[], from: Date, to: Date, fMatch: Match = {}) {
   const inSites = { $in: siteIds };
-  const window = { siteId: inSites, ts: { $gte: from, $lt: to } };
+  const window = { siteId: inSites, ts: { $gte: from, $lt: to }, ...fMatch };
 
   const [pageviews, visitors, sessions, engagement] = await Promise.all([
     Event.countDocuments({ ...window, type: "pageview" }),
@@ -177,11 +241,11 @@ async function scrollDepth(match: Match, limit = 10) {
  * within the retention of the hash", not lifetime loyalty — worth knowing
  * before reading too much into it.
  */
-async function newVsReturning(siteIds: string[], since: Date) {
+async function newVsReturning(siteIds: string[], since: Date, fMatch: Match = {}) {
   const inSites = { $in: siteIds };
   const [current, earlier] = await Promise.all([
-    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: since } }),
-    Event.distinct("visitorHash", { siteId: inSites, ts: { $lt: since } }),
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: since }, ...fMatch }),
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $lt: since }, ...fMatch }),
   ]);
 
   const before = new Set(earlier as string[]);
@@ -223,9 +287,9 @@ async function heatmap(match: Match) {
  * Per landing page: how many sessions it started, and whether those sessions
  * went anywhere. A page can pull plenty of traffic and still leak all of it.
  */
-async function landingPages(siteIds: string[], since: Date, limit = 10) {
+async function landingPages(siteIds: string[], since: Date, fMatch: Match = {}, limit = 10) {
   const inSites = { $in: siteIds };
-  const window = { siteId: inSites, ts: { $gte: since } };
+  const window = { siteId: inSites, ts: { $gte: since }, ...fMatch };
 
   // The entry path lives on the pageview and the bounce outcome on the
   // engagement record, so neither alone can answer this — roll the session up
@@ -289,10 +353,21 @@ async function customEvents(match: Match, limit = 12) {
   const rows = await Event.aggregate([
     { $match: { ...match, type: "custom", name: { $nin: [null, ""] } } },
     {
+      // A revenue-bearing event carries a numeric `props.value`. Coerce it to a
+      // number defensively — clients may send it as a string, and a missing or
+      // unparseable value contributes 0 rather than failing the whole pipeline.
+      $addFields: {
+        _value: {
+          $convert: { input: "$props.value", to: "double", onError: 0, onNull: 0 },
+        },
+      },
+    },
+    {
       $group: {
         _id: "$name",
         count: { $sum: 1 },
         visitors: { $addToSet: "$visitorHash" },
+        revenue: { $sum: "$_value" },
       },
     },
     { $sort: { count: -1 } },
@@ -303,10 +378,16 @@ async function customEvents(match: Match, limit = 12) {
         key: "$_id",
         count: 1,
         visitors: { $size: "$visitors" },
+        revenue: { $round: ["$revenue", 2] },
       },
     },
   ]);
-  return rows as { key: string; count: number; visitors: number }[];
+  return rows as {
+    key: string;
+    count: number;
+    visitors: number;
+    revenue: number;
+  }[];
 }
 
 /** Who is on the site right now, and what page are they looking at. */
@@ -325,15 +406,20 @@ async function livePages(siteIds: string[]) {
   return rows;
 }
 
-export async function computeStats(siteIds: string[], rangeKey: string) {
+export async function computeStats(
+  siteIds: string[],
+  rangeKey: string,
+  filters?: StatsFilter
+) {
   const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
   const now = Date.now();
   const since = new Date(now - windowMs);
   const prevSince = new Date(now - windowMs * 2);
   const liveSince = new Date(now - LIVE_WINDOW_MS);
 
+  const fMatch = filterMatch(filters);
   const inSites = { $in: siteIds };
-  const base: Match = { siteId: inSites, ts: { $gte: since } };
+  const base: Match = { siteId: inSites, ts: { $gte: since }, ...fMatch };
   const pageviewBase: Match = { ...base, type: "pageview" };
 
   const [
@@ -362,9 +448,9 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     landingRows,
     eventRows,
   ] = await Promise.all([
-    totals(siteIds, since, new Date(now)),
-    totals(siteIds, prevSince, since),
-    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: liveSince } }),
+    totals(siteIds, since, new Date(now), fMatch),
+    totals(siteIds, prevSince, since, fMatch),
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: liveSince }, ...fMatch }),
     topBy(pageviewBase, "path"),
     topBy({ ...pageviewBase, isEntry: true }, "path"),
     topBy({ ...base, type: "engagement", isExit: true }, "path"),
@@ -405,9 +491,9 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     ]),
     livePages(siteIds),
     scrollDepth(base),
-    newVsReturning(siteIds, since),
+    newVsReturning(siteIds, since, fMatch),
     heatmap(pageviewBase),
-    landingPages(siteIds, since),
+    landingPages(siteIds, since, fMatch),
     customEvents(base),
   ]);
 
@@ -418,6 +504,8 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
     conversionRate:
       current.visitors > 0 ? Math.round((r.visitors / current.visitors) * 100) : 0,
   }));
+  const totalRevenue =
+    Math.round(events.reduce((sum, e) => sum + (e.revenue ?? 0), 0) * 100) / 100;
 
   const clean = (rows: { key: string; count: number }[], fallback: string) =>
     rows.map((r) => ({ ...r, key: r.key || fallback }));
@@ -482,6 +570,8 @@ export async function computeStats(siteIds: string[], rangeKey: string) {
 
     // custom events fired via rta.track()
     customEvents: events,
+    // summed props.value across all custom events (goal revenue)
+    totalRevenue,
 
     // real-time
     livePages: liveNow,

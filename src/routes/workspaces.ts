@@ -4,7 +4,7 @@ import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
-import { computeStats, TRACKER_VERSION } from "../stats-core.js";
+import { computeStats, parseFilters, TRACKER_VERSION } from "../stats-core.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { generateKey } from "../apikey.js";
 
@@ -102,8 +102,9 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     .filter((s) => (s.trackerVersion ?? 1) < TRACKER_VERSION)
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
-  const stats = await computeStats(ids, String(req.query.range ?? "24h"));
-  res.json({ ...stats, siteCount: ids.length, outdatedSites });
+  const filters = parseFilters(req.query.filter);
+  const stats = await computeStats(ids, String(req.query.range ?? "24h"), filters);
+  res.json({ ...stats, siteCount: ids.length, outdatedSites, filters });
 });
 
 // Rename workspace

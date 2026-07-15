@@ -4,7 +4,7 @@ import { Project } from "../models/Project.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireApiKey, ApiKeyRequest } from "../apikey.js";
-import { computeStats } from "../stats-core.js";
+import { computeStats, parseFilters } from "../stats-core.js";
 
 const router = Router();
 router.use(requireApiKey);
@@ -61,7 +61,8 @@ router.get("/sites/:siteId/stats", async (req: ApiKeyRequest, res: Response) => 
   const siteId = String(req.params.siteId);
   const site = await ownedSite(req.workspaceId!, siteId);
   if (!site) return res.status(404).json({ error: "site not found" });
-  const stats = await computeStats([siteId], String(req.query.range ?? "24h"));
+  const filters = parseFilters(req.query.filter);
+  const stats = await computeStats([siteId], String(req.query.range ?? "24h"), filters);
   res.json(stats);
 });
 
