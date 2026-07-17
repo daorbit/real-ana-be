@@ -9,11 +9,15 @@ import {
   computeFunnel,
   computeRetention,
   computeGoals,
+  exportEvents,
+  resolveWindow,
   parseFilters,
+  EXPORT_COLUMNS,
   TRACKER_VERSION,
   type FunnelStep,
   type GoalDef,
 } from "../stats-core.js";
+import ExcelJS from "exceljs";
 import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { generateKey } from "../apikey.js";
@@ -165,12 +169,10 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     )
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
+  const rangeKey = String(req.query.range ?? "24h");
+  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const filters = parseFilters(req.query.filter);
-  const stats = await computeStats(
-    ids,
-    String(req.query.range ?? "24h"),
-    filters,
-  );
+  const stats = await computeStats(ids, rangeKey, filters, win);
 
   // Score the workspace's goals over the same window/scope. Goals live on the
   // workspace, so they're resolved here rather than inside computeStats (which
@@ -184,11 +186,66 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
       kind: g.get("kind"),
       match: g.get("match"),
     })),
-    String(req.query.range ?? "24h"),
+    rangeKey,
     stats.visitors,
+    {},
+    win,
   );
 
-  res.json({ ...stats, goals, siteCount: ids.length, outdatedSites, filters });
+  res.json({
+    ...stats,
+    goals,
+    siteCount: ids.length,
+    outdatedSites,
+    filters,
+    // Echo the resolved window so a custom range round-trips to the client.
+    window: { since: win.since, until: win.until },
+  });
+});
+
+// Export raw events as CSV or XLSX for the current window/scope.
+router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+
+  const rangeKey = String(req.query.range ?? "24h");
+  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
+  const filters = parseFilters(req.query.filter);
+  const format = req.query.format === "csv" ? "csv" : "xlsx";
+
+  const rows = ids.length ? await exportEvents(ids, win, filters) : [];
+
+  const stamp = win.since.toISOString().slice(0, 10);
+  const base = `quantalog-events-${stamp}`;
+
+  if (format === "csv") {
+    const esc = (v: unknown) => {
+      const s = String(v ?? "");
+      // Quote when the value contains a comma, quote, or newline; double inner quotes.
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = EXPORT_COLUMNS.join(",");
+    const body = rows.map((r) => EXPORT_COLUMNS.map((c) => esc(r[c])).join(",")).join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${base}.csv"`);
+    return res.send(`${header}\n${body}`);
+  }
+
+  const wb = new ExcelJS.Workbook();
+  const sheet = wb.addWorksheet("Events");
+  sheet.columns = EXPORT_COLUMNS.map((c) => ({ header: c, key: c, width: 18 }));
+  sheet.getRow(1).font = { bold: true };
+  rows.forEach((r) => sheet.addRow(r));
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="${base}.xlsx"`);
+  await wb.xlsx.write(res);
+  res.end();
 });
 
 // --- goal definitions (conversions) -------------------------------------
@@ -252,11 +309,9 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   const ids = selectSiteIds(sites, req.body?.sites);
   if (ids.length === 0) return res.json({ steps: [] });
 
-  const result = await computeFunnel(
-    ids,
-    steps,
-    String(req.body?.range ?? "24h"),
-  );
+  const rangeKey = String(req.body?.range ?? "24h");
+  const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
+  const result = await computeFunnel(ids, steps, rangeKey, win);
   res.json({ steps: result });
 });
 

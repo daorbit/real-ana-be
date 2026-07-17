@@ -17,6 +17,61 @@ const LIVE_WINDOW_MS = 5 * 60 * 1000;
 
 type Match = Record<string, unknown>;
 
+/** A resolved time window plus the equal-length window immediately before it. */
+export type Window = {
+  /** The range key the request used, or "custom". */
+  rangeKey: string;
+  since: Date;
+  until: Date;
+  windowMs: number;
+  /** Start of the previous equal-length period, for deltas. */
+  prevSince: Date;
+};
+
+/**
+ * Resolve the time window a report covers.
+ *
+ * A preset key ("24h", "7d", …) is measured back from now. A custom window is
+ * an explicit from/to pair (ms epoch or ISO). Custom is clamped to sane bounds
+ * — from before to, at least a minute wide, at most a year — so a bad pair can
+ * neither invert nor scan the whole collection.
+ */
+export function resolveWindow(rangeKey: string, from?: unknown, to?: unknown): Window {
+  const now = Date.now();
+  const toMs = (v: unknown): number | null => {
+    if (v == null || v === "") return null;
+    const n = typeof v === "number" ? v : Date.parse(String(v));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const f = toMs(from);
+  const t = toMs(to);
+  if (rangeKey === "custom" && f != null && t != null) {
+    const YEAR = 365 * 24 * 60 * 60 * 1000;
+    let start = Math.min(f, t);
+    let end = Math.max(f, t);
+    if (end - start < 60_000) end = start + 60_000;
+    if (end - start > YEAR) start = end - YEAR;
+    const windowMs = end - start;
+    return {
+      rangeKey: "custom",
+      since: new Date(start),
+      until: new Date(end),
+      windowMs,
+      prevSince: new Date(start - windowMs),
+    };
+  }
+
+  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
+  return {
+    rangeKey: RANGES[rangeKey] ? rangeKey : "24h",
+    since: new Date(now - windowMs),
+    until: new Date(now),
+    windowMs,
+    prevSince: new Date(now - windowMs * 2),
+  };
+}
+
 /**
  * A dashboard-wide filter. Every key narrows the whole report to matching
  * events, so the numbers describe "this segment" rather than all traffic.
@@ -241,10 +296,10 @@ async function scrollDepth(match: Match, limit = 10) {
  * within the retention of the hash", not lifetime loyalty — worth knowing
  * before reading too much into it.
  */
-async function newVsReturning(siteIds: string[], since: Date, fMatch: Match = {}) {
+async function newVsReturning(siteIds: string[], since: Date, until: Date, fMatch: Match = {}) {
   const inSites = { $in: siteIds };
   const [current, earlier] = await Promise.all([
-    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: since }, ...fMatch }),
+    Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: since, $lt: until }, ...fMatch }),
     Event.distinct("visitorHash", { siteId: inSites, ts: { $lt: since }, ...fMatch }),
   ]);
 
@@ -287,9 +342,9 @@ async function heatmap(match: Match) {
  * Per landing page: how many sessions it started, and whether those sessions
  * went anywhere. A page can pull plenty of traffic and still leak all of it.
  */
-async function landingPages(siteIds: string[], since: Date, fMatch: Match = {}, limit = 10) {
+async function landingPages(siteIds: string[], since: Date, until: Date, fMatch: Match = {}, limit = 10) {
   const inSites = { $in: siteIds };
-  const window = { siteId: inSites, ts: { $gte: since }, ...fMatch };
+  const window = { siteId: inSites, ts: { $gte: since, $lt: until }, ...fMatch };
 
   // The entry path lives on the pageview and the bounce outcome on the
   // engagement record, so neither alone can answer this — roll the session up
@@ -476,10 +531,10 @@ export type FunnelStep = { type: "page" | "event"; value: string };
 export async function computeFunnel(
   siteIds: string[],
   steps: FunnelStep[],
-  rangeKey: string
+  rangeKey: string,
+  win?: Window
 ) {
-  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
-  const since = new Date(Date.now() - windowMs);
+  const { since, until } = win ?? resolveWindow(rangeKey);
   const n = steps.length;
 
   // A per-step condition matching the right event kind and value.
@@ -497,7 +552,7 @@ export async function computeFunnel(
   }));
 
   const rows = await Event.aggregate([
-    { $match: { siteId: { $in: siteIds }, ts: { $gte: since } } },
+    { $match: { siteId: { $in: siteIds }, ts: { $gte: since, $lt: until } } },
     { $group: { _id: "$sessionId", ...Object.assign({}, ...stepTimes) } },
     {
       // reached[i] is true when every step up to i was hit in non-decreasing
@@ -745,12 +800,12 @@ export async function computeGoals(
   goals: GoalDef[],
   rangeKey: string,
   totalVisitors: number,
-  fMatch: Match = {}
+  fMatch: Match = {},
+  win?: Window
 ) {
   if (goals.length === 0) return [];
-  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
-  const since = new Date(Date.now() - windowMs);
-  const base = { siteId: { $in: siteIds }, ts: { $gte: since }, ...fMatch };
+  const { since, until } = win ?? resolveWindow(rangeKey);
+  const base = { siteId: { $in: siteIds }, ts: { $gte: since, $lt: until }, ...fMatch };
 
   return Promise.all(
     goals.map(async (g) => {
@@ -773,20 +828,88 @@ export async function computeGoals(
   );
 }
 
+/** A raw event row for CSV/XLSX export, flattened and privacy-trimmed. */
+export type ExportRow = {
+  timestamp: string;
+  type: string;
+  name: string;
+  path: string;
+  referrer: string;
+  device: string;
+  os: string;
+  browser: string;
+  country: string;
+  language: string;
+  utmSource: string;
+  utmMedium: string;
+  utmCampaign: string;
+  durationMs: number;
+  scrollDepth: number;
+};
+
+/** Columns, in order, for the export — the CSV header and XLSX column set. */
+export const EXPORT_COLUMNS: (keyof ExportRow)[] = [
+  "timestamp", "type", "name", "path", "referrer", "device", "os", "browser",
+  "country", "language", "utmSource", "utmMedium", "utmCampaign",
+  "durationMs", "scrollDepth",
+];
+
+/**
+ * Raw events in the window, newest first, for download.
+ *
+ * Capped so an export can't stream the whole collection into memory. Only the
+ * behavioural fields ship — never the visitor hash, IP, or session id — so an
+ * export can't be used to re-identify anyone.
+ */
+export async function exportEvents(
+  siteIds: string[],
+  win: Window,
+  filters?: StatsFilter,
+  limit = 50_000
+): Promise<ExportRow[]> {
+  const fMatch = filterMatch(filters);
+  const rows = await Event.find({
+    siteId: { $in: siteIds },
+    ts: { $gte: win.since, $lt: win.until },
+    ...fMatch,
+  })
+    .sort({ ts: -1 })
+    .limit(limit)
+    .lean();
+
+  return rows.map((e: Record<string, any>) => ({
+    timestamp: new Date(e.ts).toISOString(),
+    type: e.type ?? "",
+    name: e.name ?? "",
+    path: e.path ?? "",
+    referrer: e.referrer ?? "",
+    device: e.device ?? "",
+    os: e.os ?? "",
+    browser: e.browser ?? "",
+    country: e.country ?? "",
+    language: e.language ?? "",
+    utmSource: e.utm?.source ?? "",
+    utmMedium: e.utm?.medium ?? "",
+    utmCampaign: e.utm?.campaign ?? "",
+    durationMs: e.durationMs ?? 0,
+    scrollDepth: e.scrollDepth ?? 0,
+  }));
+}
+
 export async function computeStats(
   siteIds: string[],
   rangeKey: string,
-  filters?: StatsFilter
+  filters?: StatsFilter,
+  win?: Window
 ) {
-  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
-  const now = Date.now();
-  const since = new Date(now - windowMs);
-  const prevSince = new Date(now - windowMs * 2);
-  const liveSince = new Date(now - LIVE_WINDOW_MS);
+  const w = win ?? resolveWindow(rangeKey);
+  const { since, until, prevSince, windowMs } = w;
+  const liveSince = new Date(Date.now() - LIVE_WINDOW_MS);
 
   const fMatch = filterMatch(filters);
   const inSites = { $in: siteIds };
-  const base: Match = { siteId: inSites, ts: { $gte: since }, ...fMatch };
+  // Bounded on both ends so a custom window doesn't spill past its end date.
+  const base: Match = { siteId: inSites, ts: { $gte: since, $lt: until }, ...fMatch };
   const pageviewBase: Match = { ...base, type: "pageview" };
 
   const [
@@ -818,7 +941,7 @@ export async function computeStats(
     outboundRows,
     errorRows,
   ] = await Promise.all([
-    totals(siteIds, since, new Date(now), fMatch),
+    totals(siteIds, since, until, fMatch),
     totals(siteIds, prevSince, since, fMatch),
     Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: liveSince }, ...fMatch }),
     topBy(pageviewBase, "path"),
@@ -861,9 +984,9 @@ export async function computeStats(
     ]),
     livePages(siteIds),
     scrollDepth(base),
-    newVsReturning(siteIds, since, fMatch),
+    newVsReturning(siteIds, since, until, fMatch),
     heatmap(pageviewBase),
-    landingPages(siteIds, since, fMatch),
+    landingPages(siteIds, since, until, fMatch),
     customEvents(base),
     // Channels grouped per session, so count entry pageviews rather than every view.
     channels({ ...pageviewBase, isEntry: true }),
