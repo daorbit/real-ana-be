@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 2;
+  var VERSION = 3;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -321,12 +321,33 @@
     return null;
   }
 
+  // File extensions that count as a download rather than a page navigation.
+  var DOWNLOAD_RE = /\.(pdf|zip|rar|7z|gz|tar|dmg|exe|msi|pkg|deb|csv|xlsx?|docx?|pptx?|mp3|mp4|mov|avi|wav|json|xml|txt|apk)($|\?)/i;
+
+  // Classify a link: "download" for a file, "outbound" for another host, or
+  // null for an ordinary in-site link. Falls back to null on a bad/relative URL.
+  function linkKind(href) {
+    if (!href) return null;
+    try {
+      var url = new URL(href, location.href);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+      if (DOWNLOAD_RE.test(url.pathname)) return "download";
+      if (url.host !== location.host) return "outbound";
+    } catch (e) {}
+    return null;
+  }
+
   if (trackClicks) {
     document.addEventListener(
       "click",
       function (e) {
         var hit = trackable(e.target);
         if (!hit) return;
+
+        var href = hit.el.getAttribute("href") || "";
+        // Outbound links and downloads are the same click event, retagged so the
+        // dashboard can report "where people go when they leave" separately.
+        var kind = hit.tag === "a" ? linkKind(href) : null;
 
         var s = session();
         post({
@@ -335,14 +356,54 @@
           path: location.pathname, // the page the CTA was clicked on
           sessionId: s.id,
           clickText: label(hit.el),
-          clickTag: hit.tag,
+          clickTag: kind || hit.tag,
           clickId: hit.el.getAttribute("data-va-cta") || hit.el.id || "",
-          clickHref: hit.el.getAttribute("href") || "",
+          clickHref: href,
           utm: utm(),
         });
       },
       true // capture, so a handler that stops propagation can't hide the click
     );
+  }
+
+  /* ------------------------------------------------------------------
+   * Error tracking
+   * Forward uncaught JS errors and unhandled promise rejections so broken
+   * pages surface in the dashboard. Opt out with data-errors="off" on the
+   * script tag. Messages are truncated and never carry stack contents.
+   * ------------------------------------------------------------------ */
+  var trackErrors = script.getAttribute("data-errors") !== "off";
+
+  if (trackErrors) {
+    // Don't drown a genuinely broken page in identical reports.
+    var errorsSent = 0;
+    var ERROR_CAP = 10;
+
+    function reportError(message) {
+      if (errorsSent >= ERROR_CAP) return;
+      errorsSent++;
+      var msg = String(message || "Error").replace(/\s+/g, " ").trim().slice(0, 200);
+      var s = session();
+      post({
+        siteId: siteId,
+        type: "error",
+        name: msg,
+        path: location.pathname,
+        sessionId: s.id,
+      });
+    }
+
+    window.addEventListener("error", function (e) {
+      // Resource load failures (img/script 404) surface here with no message —
+      // report those as a broken-resource error rather than a script error.
+      if (e && e.message) reportError(e.message);
+      else if (e && e.target && e.target.src) reportError("Failed to load " + e.target.src);
+    }, true);
+
+    window.addEventListener("unhandledrejection", function (e) {
+      var r = e && e.reason;
+      reportError((r && (r.message || r)) || "Unhandled promise rejection");
+    });
   }
 
   /* ------------------------------------------------------------------

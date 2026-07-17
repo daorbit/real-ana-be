@@ -4,6 +4,7 @@ import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { ApiKey } from "../models/ApiKey.js";
+import { Goal } from "../models/Goal.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -119,6 +120,7 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   await Event.deleteMany({ siteId: { $in: siteIds } });
   await Site.deleteMany({ workspaceId: { $in: wsIds } });
   await ApiKey.deleteMany({ userId: target.id });
+  await Goal.deleteMany({ workspaceId: { $in: wsIds } });
   await Workspace.deleteMany({ userId: target.id });
   await target.deleteOne();
 

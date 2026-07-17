@@ -4,7 +4,7 @@ import { Event } from "./models/Event.js";
  * Current tracker.js version. Sites reporting less than this are missing the
  * data the newer metrics need — keep in step with `VERSION` in public/tracker.js.
  */
-export const TRACKER_VERSION = 2;
+export const TRACKER_VERSION = 3;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,
@@ -597,6 +597,182 @@ async function livePages(siteIds: string[]) {
   return rows;
 }
 
+/**
+ * Group traffic into marketing channels, the way people actually think about
+ * where visitors come from — not raw referrer URLs.
+ *
+ * The rules mirror the common GA-style grouping and are applied in Mongo so the
+ * whole window is bucketed in one pass:
+ *   - Paid    — a paid utm.medium (cpc/ppc/paid…) or a gclid/fbclid-style tag
+ *   - Email   — utm.medium of email/newsletter
+ *   - Social  — referrer host is a known social network
+ *   - Organic Search — referrer host is a known search engine
+ *   - Referral — any other non-empty referrer
+ *   - Direct  — no referrer and no campaign
+ * The classification is a `$switch`, first match wins, top to bottom.
+ */
+async function channels(match: Match) {
+  const host = {
+    // hostname of the referrer, lowercased; "" when there is no referrer
+    $let: {
+      vars: {
+        noProto: {
+          $replaceAll: {
+            input: {
+              $replaceAll: { input: { $toLower: "$referrer" }, find: "https://", replacement: "" },
+            },
+            find: "http://",
+            replacement: "",
+          },
+        },
+      },
+      in: { $arrayElemAt: [{ $split: ["$$noProto", "/"] }, 0] },
+    },
+  };
+  const has = (needle: string, on: unknown) =>
+    ({ $gte: [{ $indexOfCP: [on, needle] }, 0] });
+
+  const rows = await Event.aggregate([
+    { $match: match },
+    {
+      $addFields: {
+        _medium: { $toLower: { $ifNull: ["$utm.medium", ""] } },
+        _host: host,
+      },
+    },
+    {
+      $addFields: {
+        channel: {
+          $switch: {
+            branches: [
+              {
+                case: {
+                  $or: [
+                    has("cpc", "$_medium"), has("ppc", "$_medium"), has("paid", "$_medium"),
+                    { $eq: ["$_medium", "display"] },
+                  ],
+                },
+                then: "Paid",
+              },
+              {
+                case: { $or: [{ $eq: ["$_medium", "email"] }, { $eq: ["$_medium", "newsletter"] }] },
+                then: "Email",
+              },
+              {
+                case: {
+                  $or: [
+                    has("facebook.", "$_host"), has("twitter.", "$_host"), has("t.co", "$_host"),
+                    has("x.com", "$_host"), has("linkedin.", "$_host"), has("instagram.", "$_host"),
+                    has("youtube.", "$_host"), has("reddit.", "$_host"), has("pinterest.", "$_host"),
+                    has("tiktok.", "$_host"),
+                  ],
+                },
+                then: "Social",
+              },
+              {
+                case: {
+                  $or: [
+                    has("google.", "$_host"), has("bing.", "$_host"), has("duckduckgo.", "$_host"),
+                    has("yahoo.", "$_host"), has("ecosia.", "$_host"), has("baidu.", "$_host"),
+                    has("yandex.", "$_host"),
+                  ],
+                },
+                then: "Organic Search",
+              },
+              { case: { $ne: ["$_host", ""] }, then: "Referral" },
+            ],
+            default: "Direct",
+          },
+        },
+      },
+    },
+    { $group: { _id: "$channel", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $project: { _id: 0, key: "$_id", count: 1 } },
+  ]);
+  return rows as { key: string; count: number }[];
+}
+
+/**
+ * Where visitors go when they leave: outbound link clicks and file downloads.
+ * The tracker tags these with clickTag "outbound" or "download", so they group
+ * by destination rather than the on-page label.
+ */
+async function outboundClicks(match: Match, limit = 10) {
+  return Event.aggregate([
+    { $match: { ...match, type: "click", clickTag: { $in: ["outbound", "download"] } } },
+    {
+      $group: {
+        _id: { href: "$clickHref", kind: "$clickTag" },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+    { $project: { _id: 0, key: "$_id.href", kind: "$_id.kind", count: 1 } },
+  ]) as Promise<{ key: string; kind: string; count: number }[]>;
+}
+
+
+async function topErrors(match: Match, limit = 10) {
+  return Event.aggregate([
+    { $match: { ...match, type: "error" } },
+    {
+      $group: {
+        _id: { message: "$name", path: "$path" },
+        count: { $sum: 1 },
+        lastSeen: { $max: "$ts" },
+      },
+    },
+    { $sort: { count: -1 } },
+    { $limit: limit },
+    { $project: { _id: 0, key: "$_id.message", path: "$_id.path", count: 1, lastSeen: 1 } },
+  ]) as Promise<{ key: string; path: string; count: number; lastSeen: Date }[]>;
+}
+
+export type GoalDef = { id: string; name: string; kind: "page" | "event"; match: string };
+
+/**
+ * Conversion rate for each goal over the window.
+ *
+ * A goal converts once per visitor: the count is distinct visitors who matched
+ * it (a pageview of the path, or a custom event of the name), and the rate is
+ * that over all visitors in the window. Distinct-visitor keeps a page someone
+ * refreshed ten times from inflating the number.
+ */
+export async function computeGoals(
+  siteIds: string[],
+  goals: GoalDef[],
+  rangeKey: string,
+  totalVisitors: number,
+  fMatch: Match = {}
+) {
+  if (goals.length === 0) return [];
+  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
+  const since = new Date(Date.now() - windowMs);
+  const base = { siteId: { $in: siteIds }, ts: { $gte: since }, ...fMatch };
+
+  return Promise.all(
+    goals.map(async (g) => {
+      const cond =
+        g.kind === "event"
+          ? { ...base, type: "custom", name: g.match }
+          : { ...base, type: "pageview", path: g.match };
+      const visitors = await Event.distinct("visitorHash", cond);
+      const conversions = visitors.length;
+      return {
+        id: g.id,
+        name: g.name,
+        kind: g.kind,
+        match: g.match,
+        conversions,
+        conversionRate:
+          totalVisitors > 0 ? Math.round((conversions / totalVisitors) * 1000) / 10 : 0,
+      };
+    })
+  );
+}
+
 export async function computeStats(
   siteIds: string[],
   rangeKey: string,
@@ -638,6 +814,9 @@ export async function computeStats(
     heatmapRows,
     landingRows,
     eventRows,
+    channelRows,
+    outboundRows,
+    errorRows,
   ] = await Promise.all([
     totals(siteIds, since, new Date(now), fMatch),
     totals(siteIds, prevSince, since, fMatch),
@@ -686,6 +865,10 @@ export async function computeStats(
     heatmap(pageviewBase),
     landingPages(siteIds, since, fMatch),
     customEvents(base),
+    // Channels grouped per session, so count entry pageviews rather than every view.
+    channels({ ...pageviewBase, isEntry: true }),
+    outboundClicks(base),
+    topErrors(base),
   ]);
 
   // Conversion is against total visitors in the window, known only now that the
@@ -763,6 +946,15 @@ export async function computeStats(
     customEvents: events,
     // summed props.value across all custom events (goal revenue)
     totalRevenue,
+
+    // marketing channels: how sessions arrived (Direct/Organic/Paid/Social/…)
+    channels: channelRows,
+
+    // where visitors leave to: outbound links and file downloads
+    outboundClicks: outboundRows,
+
+    // client-side errors the tracker forwarded
+    errors: errorRows,
 
     // real-time
     livePages: liveNow,

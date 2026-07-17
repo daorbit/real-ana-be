@@ -8,11 +8,14 @@ import {
   computeStats,
   computeFunnel,
   computeRetention,
+  computeGoals,
   parseFilters,
   TRACKER_VERSION,
   type FunnelStep,
+  type GoalDef,
 } from "../stats-core.js";
 import { ApiKey } from "../models/ApiKey.js";
+import { Goal } from "../models/Goal.js";
 import { generateKey } from "../apikey.js";
 
 const router = Router();
@@ -168,7 +171,61 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     String(req.query.range ?? "24h"),
     filters,
   );
-  res.json({ ...stats, siteCount: ids.length, outdatedSites, filters });
+
+  // Score the workspace's goals over the same window/scope. Goals live on the
+  // workspace, so they're resolved here rather than inside computeStats (which
+  // only knows about siteIds).
+  const goalDefs = await Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
+  const goals = await computeGoals(
+    ids,
+    goalDefs.map<GoalDef>((g) => ({
+      id: g.id,
+      name: g.get("name"),
+      kind: g.get("kind"),
+      match: g.get("match"),
+    })),
+    String(req.query.range ?? "24h"),
+    stats.visitors,
+  );
+
+  res.json({ ...stats, goals, siteCount: ids.length, outdatedSites, filters });
+});
+
+// --- goal definitions (conversions) -------------------------------------
+router.get("/:wid/goals", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const goals = await Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
+  res.json(
+    goals.map((g) => ({
+      id: g.id,
+      name: g.get("name"),
+      kind: g.get("kind"),
+      match: g.get("match"),
+    })),
+  );
+});
+
+router.post("/:wid/goals", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const name = String(req.body?.name ?? "").trim().slice(0, 80);
+  const kind = req.body?.kind === "event" ? "event" : "page";
+  const match = String(req.body?.match ?? "").trim().slice(0, 300);
+  if (!name || !match) return res.status(400).json({ error: "name and match required" });
+
+  const goal = await Goal.create({ workspaceId: ws.id, name, kind, match });
+  res.status(201).json({ id: goal.id, name, kind, match });
+});
+
+router.delete("/:wid/goals/:gid", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const goal = await Goal.findOne({ _id: req.params.gid, workspaceId: ws.id });
+  if (!goal) return res.status(404).json({ error: "goal not found" });
+  await goal.deleteOne();
+  res.status(204).end();
 });
 
 router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
@@ -244,6 +301,7 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   const ids = sites.map((s) => s.siteId as string);
   await Event.deleteMany({ siteId: { $in: ids } });
   await Site.deleteMany({ workspaceId: ws.id });
+  await Goal.deleteMany({ workspaceId: ws.id });
   await ws.deleteOne();
   res.status(204).end();
 });
