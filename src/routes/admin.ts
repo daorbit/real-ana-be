@@ -1,6 +1,9 @@
 import { Router, Response } from "express";
 import { User } from "../models/User.js";
 import { Workspace } from "../models/Workspace.js";
+import { Site } from "../models/Site.js";
+import { Event } from "../models/Event.js";
+import { ApiKey } from "../models/ApiKey.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -85,6 +88,43 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
     token,
     user: { id: target.id, email: target.email, name: target.name, role: target.role },
   });
+});
+
+/**
+ * Delete an account and everything it owns.
+ *
+ * The cascade mirrors workspace deletion, one tenant at a time: a user's
+ * workspaces take their sites, and each site takes its events. Api keys hang
+ * off the user directly, so they go in one sweep. The user row is last, so a
+ * mid-cascade failure leaves the account still present and retryable rather
+ * than an orphaned pile of data pointing at nothing.
+ */
+router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
+  const target = await User.findById(req.params.userId).select("email role");
+  if (!target) return res.status(404).json({ error: "user not found" });
+
+  // Deleting an admin — or yourself — is an own-goal with no undo, so block
+  // both at the door. The role guard also stops one admin from wiping another.
+  if (target.role === "admin")
+    return res.status(400).json({ error: "cannot delete an admin account" });
+  if (target.id === req.userId)
+    return res.status(400).json({ error: "cannot delete your own account" });
+
+  const workspaces = await Workspace.find({ userId: target.id }).select("_id");
+  const wsIds = workspaces.map((w) => w._id);
+
+  const sites = await Site.find({ workspaceId: { $in: wsIds } }).select("siteId");
+  const siteIds = sites.map((s) => s.siteId);
+
+  await Event.deleteMany({ siteId: { $in: siteIds } });
+  await Site.deleteMany({ workspaceId: { $in: wsIds } });
+  await ApiKey.deleteMany({ userId: target.id });
+  await Workspace.deleteMany({ userId: target.id });
+  await target.deleteOne();
+
+  console.log(`[admin] ${req.userId} deleted user ${target.id} (${target.email})`);
+
+  res.json({ ok: true });
 });
 
 /** Characters that would otherwise be read as regex syntax in a search box. */
