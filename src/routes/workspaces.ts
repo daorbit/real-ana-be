@@ -5,7 +5,11 @@ import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import {
-  computeStats, computeFunnel, computeRetention, parseFilters, TRACKER_VERSION,
+  computeStats,
+  computeFunnel,
+  computeRetention,
+  parseFilters,
+  TRACKER_VERSION,
   type FunnelStep,
 } from "../stats-core.js";
 import { ApiKey } from "../models/ApiKey.js";
@@ -15,7 +19,27 @@ const router = Router();
 router.use(requireAuth);
 
 function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function selectSiteIds(
+  sites: Array<{ siteId?: unknown }>,
+  requested: unknown,
+): string[] {
+  const owned = sites.map((s) => String(s.siteId));
+
+  const raw = Array.isArray(requested)
+    ? requested
+    : typeof requested === "string" && requested
+      ? requested.split(",")
+      : [];
+  const wanted = new Set(raw.map((s) => String(s).trim()).filter(Boolean));
+
+  if (wanted.size === 0) return owned;
+  return owned.filter((id) => wanted.has(id));
 }
 
 // Create workspace
@@ -32,13 +56,18 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
 
 // List my workspaces
 router.get("/", async (req: AuthedRequest, res: Response) => {
-  const list = await Workspace.find({ userId: req.userId }).sort({ createdAt: -1 });
+  const list = await Workspace.find({ userId: req.userId }).sort({
+    createdAt: -1,
+  });
   res.json(list);
 });
 
 // Create site under workspace
 router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   const { name, domain, framework } = req.body ?? {};
   if (!name || !domain)
@@ -56,65 +85,97 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
 
 // List sites in workspace
 router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   const sites = await Site.find({ workspaceId: ws.id }).sort({ createdAt: -1 });
   res.json(sites);
 });
 
 // Install status for a site — has the tracking script ever reported?
-router.get("/:wid/sites/:siteId/status", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
-  if (!site) return res.status(404).json({ error: "site not found" });
+router.get(
+  "/:wid/sites/:siteId/status",
+  async (req: AuthedRequest, res: Response) => {
+    const ws = await Workspace.findOne({
+      _id: req.params.wid,
+      userId: req.userId,
+    });
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const site = await Site.findOne({
+      siteId: req.params.siteId,
+      workspaceId: ws.id,
+    });
+    if (!site) return res.status(404).json({ error: "site not found" });
 
-  const siteId = site.siteId as string;
-  const [eventCount, last] = await Promise.all([
-    Event.countDocuments({ siteId }),
-    Event.findOne({ siteId }).sort({ ts: -1 }).select("ts"),
-  ]);
+    const siteId = site.siteId as string;
+    const [eventCount, last] = await Promise.all([
+      Event.countDocuments({ siteId }),
+      Event.findOne({ siteId }).sort({ ts: -1 }).select("ts"),
+    ]);
 
-  res.json({
-    siteId,
-    installed: eventCount > 0,
-    eventCount,
-    lastEventAt: last?.ts ?? null,
-  });
-});
+    res.json({
+      siteId,
+      installed: eventCount > 0,
+      eventCount,
+      lastEventAt: last?.ts ?? null,
+    });
+  },
+);
 
 // Aggregate analytics across all sites in a workspace
 router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const sites = await Site.find({ workspaceId: ws.id }).select("siteId name trackerVersion");
-  const ids = sites.map((s) => s.siteId as string);
+  const sites = await Site.find({ workspaceId: ws.id }).select(
+    "siteId name trackerVersion",
+  );
+
+  const ids = selectSiteIds(sites, req.query.sites);
   if (ids.length === 0) {
     return res.json({
       range: String(req.query.range ?? "24h"),
-      pageviews: 0, visitors: 0, live: 0,
-      topPages: [], topReferrers: [], devices: [], countries: [], utmSources: [],
-      timeseries: [], siteCount: 0, outdatedSites: [],
+      pageviews: 0,
+      visitors: 0,
+      live: 0,
+      topPages: [],
+      topReferrers: [],
+      devices: [],
+      countries: [],
+      utmSources: [],
+      timeseries: [],
+      siteCount: 0,
+      outdatedSites: [],
     });
   }
 
-  // Sites still on a script that predates impressions and scroll depth. Those
-  // panels can only ever be empty for them, so the dashboard says so rather
-  // than letting it read as "no engagement".
+  const inScope = new Set(ids);
   const outdatedSites = sites
-    .filter((s) => (s.trackerVersion ?? 1) < TRACKER_VERSION)
+    .filter(
+      (s) =>
+        inScope.has(s.siteId as string) &&
+        (s.trackerVersion ?? 1) < TRACKER_VERSION,
+    )
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
   const filters = parseFilters(req.query.filter);
-  const stats = await computeStats(ids, String(req.query.range ?? "24h"), filters);
+  const stats = await computeStats(
+    ids,
+    String(req.query.range ?? "24h"),
+    filters,
+  );
   res.json({ ...stats, siteCount: ids.length, outdatedSites, filters });
 });
 
-// Ad-hoc conversion funnel: the client sends an ordered list of steps (pages or
-// custom events) and gets per-step drop-off back. Kept as POST because the step
-// list is structured and unbounded, not a tidy query string.
 router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
 
   const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
@@ -131,20 +192,27 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   }
 
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
-  const ids = sites.map((s) => s.siteId as string);
+  const ids = selectSiteIds(sites, req.body?.sites);
   if (ids.length === 0) return res.json({ steps: [] });
 
-  const result = await computeFunnel(ids, steps, String(req.body?.range ?? "24h"));
+  const result = await computeFunnel(
+    ids,
+    steps,
+    String(req.body?.range ?? "24h"),
+  );
   res.json({ steps: result });
 });
 
 // Weekly retention cohorts for the workspace.
 router.get("/:wid/retention", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
 
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
-  const ids = sites.map((s) => s.siteId as string);
+  const ids = selectSiteIds(sites, req.query.sites);
   if (ids.length === 0) return res.json({ weeks: 6, cohorts: [] });
 
   const weeks = Math.min(12, Math.max(2, Number(req.query.weeks) || 6));
@@ -159,7 +227,7 @@ router.patch("/:wid", async (req: AuthedRequest, res: Response) => {
   const ws = await Workspace.findOneAndUpdate(
     { _id: req.params.wid, userId: req.userId },
     { name, slug: slugify(name) || nanoid(6) },
-    { new: true }
+    { new: true },
   );
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   res.json(ws);
@@ -167,7 +235,10 @@ router.patch("/:wid", async (req: AuthedRequest, res: Response) => {
 
 // Delete workspace + its sites + their events
 router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = sites.map((s) => s.siteId as string);
@@ -178,27 +249,27 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
 });
 
 // Delete a single site + its events
-router.delete("/:wid/sites/:siteId", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
-  if (!site) return res.status(404).json({ error: "site not found" });
-  await Event.deleteMany({ siteId: site.siteId });
-  await site.deleteOne();
-  res.status(204).end();
-});
-
-// ---- Home layout ----
-// Which widgets the home grid shows, in what order, and how wide each is.
-// Stored per workspace so each dashboard keeps its own arrangement.
+router.delete(
+  "/:wid/sites/:siteId",
+  async (req: AuthedRequest, res: Response) => {
+    const ws = await Workspace.findOne({
+      _id: req.params.wid,
+      userId: req.userId,
+    });
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const site = await Site.findOne({
+      siteId: req.params.siteId,
+      workspaceId: ws.id,
+    });
+    if (!site) return res.status(404).json({ error: "site not found" });
+    await Event.deleteMany({ siteId: site.siteId });
+    await site.deleteOne();
+    res.status(204).end();
+  },
+);
 
 type Placed = { id: string; span: number };
 
-/**
- * Widget ids are defined in the frontend, so validating them here would mean a
- * second list that silently drifts. Check only the shape — the client already
- * drops ids it doesn't recognise when it reads the layout back.
- */
 function parseLayout(body: unknown): Placed[] | null {
   if (!Array.isArray(body) || body.length > 50) return null;
   const out: Placed[] = [];
@@ -213,7 +284,10 @@ function parseLayout(body: unknown): Placed[] | null {
 }
 
 router.get("/:wid/layout", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   // null, not [], so the client can tell "never customised" from "emptied".
   res.json({ layout: ws.homeLayout ?? null });
@@ -222,11 +296,13 @@ router.get("/:wid/layout", async (req: AuthedRequest, res: Response) => {
 router.put("/:wid/layout", async (req: AuthedRequest, res: Response) => {
   const layout = parseLayout(req.body);
   if (!layout)
-    return res.status(400).json({ error: "layout must be an array of { id, span: 1|2|3|4 }" });
+    return res
+      .status(400)
+      .json({ error: "layout must be an array of { id, span: 1|2|3|4 }" });
   const ws = await Workspace.findOneAndUpdate(
     { _id: req.params.wid, userId: req.userId },
     { homeLayout: layout },
-    { new: true }
+    { new: true },
   );
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   res.json({ layout: ws.homeLayout ?? [] });
@@ -235,7 +311,10 @@ router.put("/:wid/layout", async (req: AuthedRequest, res: Response) => {
 // ---- API keys (platform integration) ----
 // Create a key — returns the raw secret ONCE.
 router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   const { name } = req.body ?? {};
   const { raw, keyHash, prefix } = generateKey();
@@ -246,22 +325,42 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
     keyHash,
     prefix,
   });
-  res.status(201).json({ id: key.id, name: key.name, prefix: key.prefix, key: raw, createdAt: key.createdAt });
+  res.status(201).json({
+    id: key.id,
+    name: key.name,
+    prefix: key.prefix,
+    key: raw,
+    createdAt: key.createdAt,
+  });
 });
 
 // List keys (masked — never returns the raw secret again)
 router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false }).sort({ createdAt: -1 });
-  res.json(keys.map((k) => ({
-    id: k.id, name: k.name, prefix: k.prefix, lastUsedAt: k.lastUsedAt, createdAt: k.get("createdAt"),
-  })));
+  const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false }).sort({
+    createdAt: -1,
+  });
+  res.json(
+    keys.map((k) => ({
+      id: k.id,
+      name: k.name,
+      prefix: k.prefix,
+      lastUsedAt: k.lastUsedAt,
+      createdAt: k.get("createdAt"),
+    })),
+  );
 });
 
 // Revoke a key
 router.delete("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  const ws = await Workspace.findOne({
+    _id: req.params.wid,
+    userId: req.userId,
+  });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
   const key = await ApiKey.findOne({ _id: req.params.kid, workspaceId: ws.id });
   if (!key) return res.status(404).json({ error: "key not found" });
