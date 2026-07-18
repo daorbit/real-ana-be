@@ -6,6 +6,12 @@ const eventSchema = new Schema({
   type: { type: String, default: "pageview" },
   name: { type: String }, // custom event name
   path: { type: String, default: "/" },
+  /**
+   * Reported hostname, set only when the site overrides it via `data-domain`
+   * (staging deploys folding into production's numbers). Empty means "the
+   * host the script was served from", which is the normal case.
+   */
+  hostname: { type: String, default: "" },
   referrer: { type: String, default: "" },
 
   // click tracking (only on type: "click")

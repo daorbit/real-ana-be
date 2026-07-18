@@ -53,6 +53,7 @@ router.post("/", async (req, res) => {
       type: type ?? "pageview",
       name: str(name, 80),
       path: str(body.path, 300) || "/",
+      hostname: str(body.hostname, 253),
       referrer: str(body.referrer, 300),
 
       clickText: str(body.clickText, 120),

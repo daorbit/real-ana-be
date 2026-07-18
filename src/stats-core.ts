@@ -1,8 +1,12 @@
 import { Event } from "./models/Event.js";
 
 /**
- * Current tracker.js version. Sites reporting less than this are missing the
- * data the newer metrics need — keep in step with `VERSION` in public/tracker.js.
+ * Lowest tracker.js version that reports every metric the dashboard shows.
+ * Sites below this are missing data and get flagged for an upgrade.
+ *
+ * This deliberately trails `VERSION` in public/tracker.js: v4 added only
+ * opt-in script options (DNT, ignore rules, hash mode) and no new metrics, so
+ * a site on v3 is complete and should not be nagged.
  */
 export const TRACKER_VERSION = 3;
 

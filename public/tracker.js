@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 3;
+  var VERSION = 4;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -27,6 +27,85 @@
   var endpoint = origin + "/api/collect";
 
   /* ------------------------------------------------------------------
+   * Script options, all set as data-* attributes on the <script> tag.
+   * Every one is opt-in or opt-out against the current behaviour, so an
+   * existing snippet keeps working unchanged.
+   * ------------------------------------------------------------------ */
+  function opt(name) {
+    return script.getAttribute("data-" + name);
+  }
+
+  /** Comma-separated attribute -> trimmed, non-empty list. */
+  function optList(name) {
+    var raw = opt(name);
+    if (!raw) return [];
+    return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  // Honour the browser's Do Not Track signal. Off by default: DNT is advisory,
+  // and this tracker stores no personal data either way — but sites with a
+  // stricter policy need the switch.
+  if (opt("dnt") === "on") {
+    var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+    if (dnt === "1" || dnt === "yes") return;
+  }
+
+  // Hash routing: sites that navigate with `#/path` report the same pathname on
+  // every view, so their whole site collapses into one row without this.
+  var hashMode = opt("hash") === "on";
+
+  // Report a different hostname than the one being browsed — for staging or
+  // preview deploys that should land in the production site's numbers.
+  var domainOverwrite = opt("domain") || "";
+
+  /**
+   * Pages to leave out entirely, as comma-separated globs: "/admin/*,/preview".
+   * A `*` matches any run of characters; everything else is literal.
+   */
+  var ignoreRules = optList("ignore-pages").map(function (pattern) {
+    var escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp("^" + escaped + "$");
+  });
+
+  function ignored(path) {
+    for (var n = 0; n < ignoreRules.length; n++) {
+      if (ignoreRules[n].test(path)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Query parameters worth keeping on the reported path.
+   *
+   * Full query strings are a personal-data risk (emails and tokens end up in
+   * them) and they shatter one page into thousands of rows, so the default is
+   * to drop them. Naming params here opts them back in.
+   */
+  var allowedParams = optList("allow-params");
+
+  /** The path we report: ignore rules and param policy applied. */
+  function currentPath() {
+    var path = location.pathname;
+
+    if (hashMode && location.hash) {
+      // "#/pricing" -> "/pricing"; "#pricing" -> "/pricing"
+      path = "/" + location.hash.replace(/^#\/?/, "");
+    }
+
+    if (allowedParams.length) {
+      var q = new URLSearchParams(location.search);
+      var kept = new URLSearchParams();
+      allowedParams.forEach(function (k) {
+        if (q.has(k)) kept.set(k, q.get(k));
+      });
+      var qs = kept.toString();
+      if (qs) path += "?" + qs;
+    }
+
+    return path;
+  }
+
+  /* ------------------------------------------------------------------
    * Session: a 30-minute sliding window, kept in sessionStorage so it
    * survives SPA navigation and reloads within the same tab.
    * ------------------------------------------------------------------ */
@@ -46,7 +125,7 @@
       raw = null;
     }
     if (!raw || now - raw.last > SESSION_TTL) {
-      raw = { id: uid(), start: now, last: now, views: 0, entry: location.pathname };
+      raw = { id: uid(), start: now, last: now, views: 0, entry: currentPath() };
     }
     raw.last = now;
     try {
@@ -214,8 +293,16 @@
    * Pageview
    * ------------------------------------------------------------------ */
   function pageview() {
+    var path = currentPath();
+
     // SPA routers can fire several history events for a single navigation.
-    if (location.pathname === lastPath) return;
+    // Compare the resolved path, not location.pathname — under hash routing
+    // every route shares one pathname and only the hash tells them apart.
+    if (path === lastPath) return;
+
+    // An ignored page is not reported, and does not end the previous page's
+    // engagement either — as far as the numbers go, it was never visited.
+    if (ignored(path)) return;
 
     // Leaving the previous in-SPA page: report its engagement first.
     if (currentView) {
@@ -234,7 +321,7 @@
       });
     }
 
-    lastPath = location.pathname;
+    lastPath = path;
     visibleMs = 0;
     visibleSince = document.visibilityState === "visible" ? Date.now() : 0;
     flushed = false;
@@ -245,13 +332,14 @@
     setTimeout(measureScroll, 0);
 
     var s = bumpViews();
-    currentView = { path: location.pathname, startedAt: Date.now() };
+    currentView = { path: path, startedAt: Date.now() };
 
     var ctx = context();
     post({
       siteId: siteId,
       type: "pageview",
-      path: location.pathname,
+      path: path,
+      hostname: domainOverwrite,
       referrer: document.referrer,
       sessionId: s.id,
       isEntry: s.views === 1,
@@ -282,6 +370,12 @@
   window.addEventListener("popstate", function () {
     setTimeout(pageview, 0);
   });
+  // Hash routers never touch the history API, so nothing above fires for them.
+  if (hashMode) {
+    window.addEventListener("hashchange", function () {
+      setTimeout(pageview, 0);
+    });
+  }
 
   /* ------------------------------------------------------------------
    * Click tracking
