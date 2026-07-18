@@ -157,6 +157,67 @@ router.patch(
   },
 );
 
+/* ---------------------------- public sharing ---------------------------- */
+
+/** The panels a public dashboard can show, and their defaults. */
+const SHARE_PANELS = ["totals", "trend", "pages", "sources", "countries", "devices"] as const;
+
+function readPanels(raw: unknown): Record<string, boolean> {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const out: Record<string, boolean> = {};
+  // Unknown keys are dropped rather than stored — the public route reads this
+  // to decide what to publish, so it must only ever contain fields we know.
+  for (const key of SHARE_PANELS) {
+    out[key] = o[key] === undefined ? true : Boolean(o[key]);
+  }
+  return out;
+}
+
+/** Current share state for a workspace. */
+router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  res.json({
+    enabled: Boolean(ws.get("shareEnabled")),
+    token: ws.get("shareToken") ?? null,
+    panels: readPanels(ws.get("sharePanels")),
+  });
+});
+
+/**
+ * Turn sharing on or off, optionally minting a fresh token.
+ *
+ * `rotate` is the only way to invalidate a link that has already been sent
+ * somewhere — disabling alone keeps the token so the same URL can be brought
+ * back, which is what someone toggling visibility usually wants.
+ */
+router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const enabled = Boolean(req.body?.enabled);
+  const rotate = Boolean(req.body?.rotate);
+
+  // 32 nanoid chars: the token is the whole credential for an unauthenticated
+  // view, so it has to be long enough that guessing is hopeless.
+  if (rotate || (enabled && !ws.get("shareToken"))) {
+    ws.set("shareToken", `pk_${nanoid(32)}`);
+  }
+  ws.set("shareEnabled", enabled);
+  // Only touch panels when the client sends them, so toggling sharing on and
+  // off does not silently reset a customised selection.
+  if (req.body?.panels !== undefined) {
+    ws.set("sharePanels", readPanels(req.body.panels));
+  }
+  await ws.save();
+
+  res.json({
+    enabled: Boolean(ws.get("shareEnabled")),
+    token: ws.get("shareToken") ?? null,
+    panels: readPanels(ws.get("sharePanels")),
+  });
+});
+
 // Install status for a site — has the tracking script ever reported?
 router.get(
   "/:wid/sites/:siteId/status",

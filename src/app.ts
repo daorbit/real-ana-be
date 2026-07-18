@@ -8,6 +8,7 @@ import collectRoutes from "./routes/collect.js";
 import statsRoutes from "./routes/stats.js";
 import v1Routes from "./routes/v1.js";
 import adminRoutes from "./routes/admin.js";
+import shareRoutes from "./routes/share.js";
 
 const app = express();
 app.use(express.json());
@@ -49,6 +50,11 @@ app.get("/tracker.js", openCors, (_req, res) => {
 
 // Platform API (server-to-server, API-key auth, any origin)
 app.use("/v1", openCors, v1Routes);
+
+// Public shared dashboards. Unauthenticated by design — the share token in the
+// path is the credential — so it sits outside the dashboard CORS allowlist:
+// the whole point is that anyone with the link can open it from anywhere.
+app.use("/api/share", openCors, shareRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
