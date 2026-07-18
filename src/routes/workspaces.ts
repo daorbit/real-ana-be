@@ -181,6 +181,8 @@ router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
     enabled: Boolean(ws.get("shareEnabled")),
     token: ws.get("shareToken") ?? null,
     panels: readPanels(ws.get("sharePanels")),
+    views: ws.get("shareViews") ?? 0,
+    lastViewedAt: ws.get("shareLastViewedAt") ?? null,
   });
 });
 
@@ -202,6 +204,12 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   // view, so it has to be long enough that guessing is hopeless.
   if (rotate || (enabled && !ws.get("shareToken"))) {
     ws.set("shareToken", `pk_${nanoid(32)}`);
+    // A new link is a new audience — carrying the old count over would make
+    // the number meaningless.
+    if (rotate) {
+      ws.set("shareViews", 0);
+      ws.set("shareLastViewedAt", null);
+    }
   }
   ws.set("shareEnabled", enabled);
   // Only touch panels when the client sends them, so toggling sharing on and
@@ -215,6 +223,8 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
     enabled: Boolean(ws.get("shareEnabled")),
     token: ws.get("shareToken") ?? null,
     panels: readPanels(ws.get("sharePanels")),
+    views: ws.get("shareViews") ?? 0,
+    lastViewedAt: ws.get("shareLastViewedAt") ?? null,
   });
 });
 

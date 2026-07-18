@@ -34,6 +34,17 @@ router.get("/:token", async (req: Request, res: Response) => {
   // confirm that a token exists, which is information a guesser can use.
   if (!ws) return res.status(404).json({ error: "not found" });
 
+  // Count the open. Fire-and-forget: a failed counter must never stop the
+  // dashboard rendering, and the owner cares about the trend, not exactness.
+  // Only the first page load counts — range switches re-fetch, and counting
+  // those would turn one visitor idly clicking tabs into four "views".
+  if (req.query.count === "1") {
+    Workspace.updateOne(
+      { _id: ws.id },
+      { $inc: { shareViews: 1 }, $set: { shareLastViewedAt: new Date() } },
+    ).catch(() => {});
+  }
+
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const siteIds = sites.map((s) => s.siteId as string);
 

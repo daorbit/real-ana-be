@@ -49,6 +49,14 @@ const workspaceSchema = new Schema(
      */
     shareEnabled: { type: Boolean, default: false },
     /**
+     * How many times the public link has been opened, and when it was last
+     * seen. Counted server-side on the share route rather than by the tracker
+     * — the people opening a shared dashboard are not the customer's visitors,
+     * and mixing them into site analytics would corrupt the real numbers.
+     */
+    shareViews: { type: Number, default: 0 },
+    shareLastViewedAt: { type: Date, default: null },
+    /**
      * Which panels the public dashboard shows.
      *
      * Owner-controlled rather than fixed, because the panels differ in how
