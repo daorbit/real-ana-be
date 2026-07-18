@@ -33,6 +33,33 @@ function slugify(s: string): string {
     .replace(/^-|-$/g, "");
 }
 
+/**
+ * Normalise the tracker options a client sends.
+ *
+ * Stored for snippet rebuilding only, but still bounded — these end up in an
+ * HTML attribute, and an unbounded list would produce a script tag no one can
+ * paste. `clicks`/`errors` default to on, matching the tracker.
+ */
+function parseTrackerOptions(raw: unknown) {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v : [])
+      .map((s) => String(s).trim())
+      .filter(Boolean)
+      .slice(0, 50)
+      .map((s) => s.slice(0, 200));
+
+  return {
+    dnt: !!o.dnt,
+    hash: !!o.hash,
+    clicks: o.clicks === undefined ? true : !!o.clicks,
+    errors: o.errors === undefined ? true : !!o.errors,
+    ignorePages: list(o.ignorePages),
+    allowParams: list(o.allowParams),
+    domain: String(o.domain ?? "").trim().slice(0, 253),
+  };
+}
+
 function selectSiteIds(
   sites: Array<{ siteId?: unknown }>,
   requested: unknown,
@@ -77,7 +104,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     userId: req.userId,
   });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
-  const { name, domain, framework } = req.body ?? {};
+  const { name, domain, framework, trackerOptions } = req.body ?? {};
   if (!name || !domain)
     return res.status(400).json({ error: "name, domain required" });
   const site = await Site.create({
@@ -87,6 +114,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     domain,
     framework: framework ?? "other",
     siteId: nanoid(16),
+    trackerOptions: parseTrackerOptions(trackerOptions),
   });
   res.status(201).json(site);
 });
@@ -101,6 +129,33 @@ router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   const sites = await Site.find({ workspaceId: ws.id }).sort({ createdAt: -1 });
   res.json(sites);
 });
+
+/**
+ * Update a site's stored tracker options.
+ *
+ * Changing these does not change what the site reports — the pasted script tag
+ * is what the tracker actually reads. This only updates what the dashboard
+ * rebuilds the snippet from, so the user is told to re-copy.
+ */
+router.patch(
+  "/:wid/sites/:siteId/options",
+  async (req: AuthedRequest, res: Response) => {
+    const ws = await Workspace.findOne({
+      _id: req.params.wid,
+      userId: req.userId,
+    });
+    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const site = await Site.findOne({
+      siteId: req.params.siteId,
+      workspaceId: ws.id,
+    });
+    if (!site) return res.status(404).json({ error: "site not found" });
+
+    site.set("trackerOptions", parseTrackerOptions(req.body));
+    await site.save();
+    res.json(site);
+  },
+);
 
 // Install status for a site — has the tracking script ever reported?
 router.get(

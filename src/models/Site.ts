@@ -15,6 +15,23 @@ const siteSchema = new Schema(
      * which is exactly the case we want to prompt about.
      */
     trackerVersion: { type: Number, default: 1 },
+    /**
+     * The tracker options chosen when the snippet was built.
+     *
+     * These are NOT enforced here — the tracker reads them as `data-*`
+     * attributes from its own script tag on the customer's site. They are
+     * stored so the dashboard can rebuild the exact snippet later instead of
+     * asking the user to remember what they picked.
+     */
+    trackerOptions: {
+      dnt: { type: Boolean, default: false },
+      hash: { type: Boolean, default: false },
+      clicks: { type: Boolean, default: true },
+      errors: { type: Boolean, default: true },
+      ignorePages: { type: [String], default: [] },
+      allowParams: { type: [String], default: [] },
+      domain: { type: String, default: "" },
+    },
   },
   { timestamps: true }
 );
