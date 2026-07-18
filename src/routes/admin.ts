@@ -5,6 +5,7 @@ import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
+import { Project } from "../models/Project.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -42,13 +43,48 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     User.countDocuments(filter),
   ]);
 
-  // One grouped count for the whole page beats a query per user.
+  // One grouped query per collection for the whole page beats a query per user.
   const ids = users.map((u) => u._id);
-  const counts = await Workspace.aggregate<{ _id: unknown; n: number }>([
-    { $match: { userId: { $in: ids } } },
-    { $group: { _id: "$userId", n: { $sum: 1 } } },
+  const workspaces = await Workspace.find({ userId: { $in: ids } }).select("userId");
+  const ownerByWorkspace = new Map(
+    workspaces.map((w) => [String(w._id), String(w.userId)]),
+  );
+
+  const wsByUser = new Map<string, number>();
+  for (const owner of ownerByWorkspace.values())
+    wsByUser.set(owner, (wsByUser.get(owner) ?? 0) + 1);
+
+  // Sites resolve through the workspace, not `Site.userId` — platform-created
+  // sites have no dashboard user, so keying off the workspace is what makes
+  // their traffic show up under the account that actually owns them.
+  const pageSites = await Site.find({
+    workspaceId: { $in: [...ownerByWorkspace.keys()] },
+  }).select("siteId workspaceId");
+
+  const sitesByUser = new Map<string, number>();
+  const ownerBySiteId = new Map<string, string>();
+  for (const s of pageSites) {
+    const owner = ownerByWorkspace.get(String(s.workspaceId));
+    if (!owner) continue;
+    ownerBySiteId.set(String(s.siteId), owner);
+    sitesByUser.set(owner, (sitesByUser.get(owner) ?? 0) + 1);
+  }
+
+  // Events key off `siteId` (the public nanoid), not the owner, so the sites
+  // above are the bridge back to a user.
+  const eventCounts = await Event.aggregate<{ _id: string; n: number; last: Date }>([
+    { $match: { siteId: { $in: [...ownerBySiteId.keys()] } } },
+    { $group: { _id: "$siteId", n: { $sum: 1 }, last: { $max: "$ts" } } },
   ]);
-  const byUser = new Map(counts.map((c) => [String(c._id), c.n]));
+  const eventsByUser = new Map<string, { n: number; last: Date | null }>();
+  for (const row of eventCounts) {
+    const owner = ownerBySiteId.get(row._id);
+    if (!owner) continue;
+    const acc = eventsByUser.get(owner) ?? { n: 0, last: null };
+    acc.n += row.n;
+    if (row.last && (!acc.last || row.last > acc.last)) acc.last = row.last;
+    eventsByUser.set(owner, acc);
+  }
 
   res.json({
     users: users.map((u) => ({
@@ -57,7 +93,10 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
       name: u.name,
       role: u.role,
       createdAt: u.get("createdAt"),
-      workspaceCount: byUser.get(u.id) ?? 0,
+      workspaceCount: wsByUser.get(u.id) ?? 0,
+      siteCount: sitesByUser.get(u.id) ?? 0,
+      eventCount: eventsByUser.get(u.id)?.n ?? 0,
+      lastEventAt: eventsByUser.get(u.id)?.last ?? null,
     })),
     total,
     page,
@@ -119,8 +158,13 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
 
   await Event.deleteMany({ siteId: { $in: siteIds } });
   await Site.deleteMany({ workspaceId: { $in: wsIds } });
-  await ApiKey.deleteMany({ userId: target.id });
+  // Keys are scoped to the workspace as well as the user — platform keys
+  // created under a workspace would otherwise survive the account.
+  await ApiKey.deleteMany({
+    $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }],
+  });
   await Goal.deleteMany({ workspaceId: { $in: wsIds } });
+  await Project.deleteMany({ workspaceId: { $in: wsIds } });
   await Workspace.deleteMany({ userId: target.id });
   await target.deleteOne();
 

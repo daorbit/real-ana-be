@@ -20,6 +20,7 @@ import {
 import ExcelJS from "exceljs";
 import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
+import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
 
 const router = Router();
@@ -357,6 +358,10 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   await Event.deleteMany({ siteId: { $in: ids } });
   await Site.deleteMany({ workspaceId: ws.id });
   await Goal.deleteMany({ workspaceId: ws.id });
+  // Keys are scoped to the workspace, so they'd otherwise outlive it and keep
+  // authenticating against /v1 for a tenant that no longer exists.
+  await ApiKey.deleteMany({ workspaceId: ws.id });
+  await Project.deleteMany({ workspaceId: ws.id });
   await ws.deleteOne();
   res.status(204).end();
 });
