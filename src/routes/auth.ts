@@ -23,11 +23,52 @@ function publicUser(user: InstanceType<typeof User>) {
   };
 }
 
+/**
+ * Signup validation.
+ *
+ * The client validates the same rules for fast feedback, but this is the copy
+ * that counts — the API is reachable directly, so anything enforced only in
+ * the browser is not enforced at all.
+ */
+function signupError(body: {
+  email?: unknown;
+  password?: unknown;
+  name?: unknown;
+}): string | null {
+  const email = String(body.email ?? "").trim();
+  const password = String(body.password ?? "");
+  const name = String(body.name ?? "").trim();
+
+  if (!email || !password || !name)
+    return "email, password, name required";
+
+  // Deliberately permissive: the only authority on a valid address is a
+  // delivered email. This rejects the obviously malformed, nothing more.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 254)
+    return "enter a valid email address";
+
+  if (name.length < 2) return "name must be at least 2 characters";
+  if (name.length > 60) return "name must be 60 characters or fewer";
+
+  if (password.length < 8)
+    return "password must be at least 8 characters";
+  // bcrypt silently truncates at 72 bytes, so a longer password would give a
+  // false sense of strength.
+  if (password.length > 72)
+    return "password must be 72 characters or fewer";
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password))
+    return "password must contain at least one letter and one number";
+
+  return null;
+}
+
 router.post("/signup", async (req, res) => {
   try {
     const { email, password, name } = req.body ?? {};
-    if (!email || !password || !name)
-      return res.status(400).json({ error: "email, password, name required" });
+
+    const invalid = signupError(req.body ?? {});
+    if (invalid) return res.status(400).json({ error: invalid });
+
     const exists = await User.findOne({ email: email.toLowerCase() });
     if (exists) return res.status(409).json({ error: "email already registered" });
     const passwordHash = await bcrypt.hash(password, 10);
@@ -35,11 +76,12 @@ router.post("/signup", async (req, res) => {
     // an admin. The schema default makes every new account a plain user.
     // Signup collects one name field; split it so the settings form opens with
     // the parts already filled rather than making everyone retype them.
-    const parts = String(name).trim().split(/\s+/);
+    const cleanName = String(name).trim();
+    const parts = cleanName.split(/\s+/);
     const user = await User.create({
-      email,
+      email: String(email).trim(),
       passwordHash,
-      name,
+      name: cleanName,
       firstName: parts[0] ?? "",
       lastName: parts.slice(1).join(" "),
     });
