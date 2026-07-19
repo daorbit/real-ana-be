@@ -81,12 +81,17 @@ function selectSiteIds(
 router.post("/", async (req: AuthedRequest, res: Response) => {
   const { name } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
-  const ws = await Workspace.create({
-    userId: req.userId,
-    name,
-    slug: slugify(name) || nanoid(6),
-  });
-  res.status(201).json(ws);
+  try {
+    const ws = await Workspace.create({
+      userId: req.userId,
+      name,
+      slug: slugify(name) || nanoid(6),
+    });
+    res.status(201).json(ws);
+  } catch (err) {
+    console.error("createWorkspace failed:", err);
+    res.status(500).json({ error: "could not create workspace" });
+  }
 });
 
 // List my workspaces

@@ -35,9 +35,14 @@ const workspaceSchema = new Schema(
      * Sparse, because most workspaces never share: a non-sparse unique index
      * would collide on the second null.
      */
+    /**
+     * No `default`. A sparse unique index only skips documents where the field
+     * is *absent* — an explicit `null` is an indexed value, so defaulting to
+     * null made every unshared workspace collide with the first one on insert.
+     * Unshared workspaces simply carry no `shareToken` field at all.
+     */
     shareToken: {
       type: String,
-      default: null,
       unique: true,
       sparse: true,
       index: true,
