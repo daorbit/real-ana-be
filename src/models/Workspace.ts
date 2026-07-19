@@ -71,6 +71,18 @@ const workspaceSchema = new Schema(
       sources: { type: Boolean, default: true },
       countries: { type: Boolean, default: true },
       devices: { type: Boolean, default: true },
+
+      // Added after launch. These default to false: a workspace that was
+      // already sharing must not start publishing new data because we shipped
+      // a release. The owner opts in.
+      browsers: { type: Boolean, default: false },
+      operatingSystems: { type: Boolean, default: false },
+      entryPages: { type: Boolean, default: false },
+      exitPages: { type: Boolean, default: false },
+      languages: { type: Boolean, default: false },
+      channels: { type: Boolean, default: false },
+      engagement: { type: Boolean, default: false },
+      visitorSplit: { type: Boolean, default: false },
     },
   },
   { timestamps: true }

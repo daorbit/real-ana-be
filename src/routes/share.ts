@@ -56,15 +56,28 @@ router.get("/:token", async (req: Request, res: Response) => {
   // than hidden by the client — data that never leaves the server cannot be
   // read out of the network tab.
   const raw = (ws.get("sharePanels") ?? {}) as Record<string, unknown>;
-  const on = (key: string) => raw[key] === undefined || Boolean(raw[key]);
+  // Panels added after launch default to off, so an existing shared link never
+  // starts publishing a new breakdown just because we deployed. Only the
+  // original six fall back to on.
+  const on = (key: string, fallback: boolean) =>
+    raw[key] === undefined ? fallback : Boolean(raw[key]);
 
   const panels = {
-    totals: on("totals"),
-    trend: on("trend"),
-    pages: on("pages"),
-    sources: on("sources"),
-    countries: on("countries"),
-    devices: on("devices"),
+    totals: on("totals", true),
+    trend: on("trend", true),
+    pages: on("pages", true),
+    sources: on("sources", true),
+    countries: on("countries", true),
+    devices: on("devices", true),
+
+    browsers: on("browsers", false),
+    operatingSystems: on("operatingSystems", false),
+    entryPages: on("entryPages", false),
+    exitPages: on("exitPages", false),
+    languages: on("languages", false),
+    channels: on("channels", false),
+    engagement: on("engagement", false),
+    visitorSplit: on("visitorSplit", false),
   };
 
   if (siteIds.length === 0) {
@@ -79,6 +92,16 @@ router.get("/:token", async (req: Request, res: Response) => {
       topReferrers: [],
       countries: [],
       devices: [],
+      browsers: [],
+      operatingSystems: [],
+      entryPages: [],
+      exitPages: [],
+      languages: [],
+      channels: [],
+      visitorSplit: null,
+      bounceRate: 0,
+      avgSessionMs: 0,
+      pagesPerSession: 0,
       timeseries: [],
     });
   }
@@ -99,6 +122,20 @@ router.get("/:token", async (req: Request, res: Response) => {
     topReferrers: panels.sources ? stats.topReferrers : [],
     countries: panels.countries ? stats.countries : [],
     devices: panels.devices ? stats.devices : [],
+    browsers: panels.browsers ? stats.browsers : [],
+    operatingSystems: panels.operatingSystems ? stats.operatingSystems : [],
+    entryPages: panels.entryPages ? stats.entryPages : [],
+    exitPages: panels.exitPages ? stats.exitPages : [],
+    languages: panels.languages ? stats.languages : [],
+    channels: panels.channels ? stats.channels : [],
+    visitorSplit: panels.visitorSplit ? stats.visitorSplit : null,
+
+    // Engagement travels as one panel — three numbers that only make sense
+    // read together, and splitting them into three toggles is noise.
+    bounceRate: panels.engagement ? stats.bounceRate : 0,
+    avgSessionMs: panels.engagement ? stats.avgSessionMs : 0,
+    pagesPerSession: panels.engagement ? stats.pagesPerSession : 0,
+
     timeseries: panels.trend ? stats.timeseries : [],
   });
 });

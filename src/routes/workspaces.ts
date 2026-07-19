@@ -159,16 +159,39 @@ router.patch(
 
 /* ---------------------------- public sharing ---------------------------- */
 
-/** The panels a public dashboard can show, and their defaults. */
-const SHARE_PANELS = ["totals", "trend", "pages", "sources", "countries", "devices"] as const;
+/**
+ * The panels a public dashboard can show, and their defaults.
+ *
+ * The originals default to true — that is what every existing shared link
+ * already publishes. Everything added later defaults to false: a workspace
+ * that was already sharing must not start exposing new breakdowns because we
+ * shipped a release. Turning one on is the owner's decision.
+ */
+const SHARE_PANEL_DEFAULTS: Record<string, boolean> = {
+  totals: true,
+  trend: true,
+  pages: true,
+  sources: true,
+  countries: true,
+  devices: true,
+
+  browsers: false,
+  operatingSystems: false,
+  entryPages: false,
+  exitPages: false,
+  languages: false,
+  channels: false,
+  engagement: false,
+  visitorSplit: false,
+};
 
 function readPanels(raw: unknown): Record<string, boolean> {
   const o = (raw ?? {}) as Record<string, unknown>;
   const out: Record<string, boolean> = {};
   // Unknown keys are dropped rather than stored — the public route reads this
   // to decide what to publish, so it must only ever contain fields we know.
-  for (const key of SHARE_PANELS) {
-    out[key] = o[key] === undefined ? true : Boolean(o[key]);
+  for (const [key, fallback] of Object.entries(SHARE_PANEL_DEFAULTS)) {
+    out[key] = o[key] === undefined ? fallback : Boolean(o[key]);
   }
   return out;
 }
