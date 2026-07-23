@@ -4,6 +4,7 @@ import { Site } from "../models/Site.js";
 import { SeoReport } from "../models/SeoReport.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../seo-core.js";
+import { rateLimit, BlockedUrlError } from "../lib/safe-fetch.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -65,6 +66,15 @@ router.post(
       }
     }
 
+    // Every audit makes the server fetch a URL on the caller's behalf, so the
+    // workspace pays for it against a budget rather than being able to drive
+    // unbounded outbound traffic.
+    const budget = rateLimit(`seo:${ws.id}`, { capacity: 20, refillPerMinute: 10 });
+    if (!budget.allowed)
+      return res.status(429).json({
+        error: `too many audits — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      });
+
     const lockKey = `${site.siteId}:${url}`;
     if (running.has(lockKey))
       return res.status(429).json({ error: "an analysis for this URL is already running" });
@@ -87,6 +97,10 @@ router.post(
     } catch (e) {
       const message = (e as Error)?.message ?? "analysis failed";
       console.error("SEO analysis failed:", site.siteId, url, message);
+      // A refused address is a bad request, not an upstream failure: the URL
+      // resolved somewhere we will not fetch, and no retry will change that.
+      if (e instanceof BlockedUrlError)
+        return res.status(400).json({ error: `cannot audit ${url}: ${message}` });
       // The URL being unreachable is the caller's problem to fix, not a server
       // fault — say what happened rather than returning a bare 500.
       res.status(502).json({ error: `could not analyse ${url}: ${message}` });

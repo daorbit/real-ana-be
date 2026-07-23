@@ -1,6 +1,17 @@
+// axios is kept only for the PageSpeed call, which targets a fixed Google
+// endpoint rather than a user-supplied host. Everything the user can influence
+// goes through safeFetch.
 import axios from "axios";
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
+import { safeFetch } from "./lib/safe-fetch.js";
+import { validateStructuredData, type SchemaValidation } from "./lib/schema-validate.js";
+import {
+  checkRobots,
+  checkSitemap,
+  type RobotsReport,
+  type SitemapReport,
+} from "./lib/robots-validate.js";
 
 /**
  * On-page SEO auditing for a single URL.
@@ -15,11 +26,7 @@ import type { CheerioAPI } from "cheerio";
  * than an error page.
  */
 
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 Quantalog-SEO/1.0";
-
 const PAGE_TIMEOUT = 15_000;
-const FILE_TIMEOUT = 6_000;
 /** PageSpeed runs a real Lighthouse audit server-side; it is genuinely slow. */
 const PSI_TIMEOUT = 70_000;
 
@@ -142,6 +149,9 @@ export type SeoPerformance = {
 export type SeoSiteFiles = {
   robotsTxt: { present: boolean; url: string };
   sitemap: { present: boolean; urls: string[] };
+  /** Full parse and rule analysis. Absent on reports predating the validator. */
+  robotsReport?: RobotsReport;
+  sitemapReport?: SitemapReport;
 };
 
 export type SeoIssue = {
@@ -159,6 +169,8 @@ export type SeoReportData = {
   technical: SeoTechnical;
   performance: SeoPerformance;
   siteFiles: SeoSiteFiles;
+  /** JSON-LD validation. Absent on reports predating the validator. */
+  schema?: SchemaValidation;
   issues: SeoIssue[];
   score: number;
 };
@@ -424,18 +436,25 @@ function contentQuality($: CheerioAPI, wordCount: number): number {
 
 /* ------------------------------- page fetch ------------------------------- */
 
+/**
+ * Fetch the page under audit.
+ *
+ * Goes through `safeFetch` rather than a plain HTTP client: the URL comes from
+ * a request body, and the domain check upstream only proves it belongs to a
+ * site the caller registered — it says nothing about where that domain's DNS
+ * actually points. Without the address guard, pointing a tracked domain at
+ * 169.254.169.254 would have this server fetch its own cloud credentials.
+ *
+ * A 4xx response is kept rather than thrown: the page still carries SEO
+ * signals, and the status code is itself a finding.
+ */
 async function fetchPage(url: string) {
-  const started = Date.now();
-  const res = await axios.get<string>(url, {
-    timeout: PAGE_TIMEOUT,
+  const res = await safeFetch(url, {
+    timeoutMs: PAGE_TIMEOUT,
     maxRedirects: 5,
-    responseType: "text",
-    // A 4xx page still has SEO signals worth reporting on, and the status code
-    // is itself a finding. Only network-level failures should throw.
-    validateStatus: (s) => s < 500,
-    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+    headers: { Accept: "text/html,application/xhtml+xml" },
   });
-  return { res, responseTimeMs: Date.now() - started };
+  return { res, responseTimeMs: res.elapsedMs };
 }
 
 /* ---------------------------- pagespeed insights --------------------------- */
@@ -643,58 +662,25 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
 
 /* -------------------------------- site files ------------------------------- */
 
+/**
+ * Fetch and fully validate robots.txt and the sitemap.
+ *
+ * The flat `robotsTxt`/`sitemap` fields are kept alongside the detailed reports
+ * so stored audits from before the validator still render.
+ */
 async function checkSiteFiles(url: string): Promise<SeoSiteFiles> {
-  const origin = new URL(url).origin;
-  const robotsUrl = `${origin}/robots.txt`;
-  const sitemapUrl = `${origin}/sitemap.xml`;
+  const parsed = new URL(url);
+  const origin = parsed.origin;
 
-  const out: SeoSiteFiles = {
-    robotsTxt: { present: false, url: robotsUrl },
-    sitemap: { present: false, urls: [] },
+  const robots = await checkRobots(origin, parsed.pathname || "/");
+  const sitemap = await checkSitemap(origin, robots.sitemaps);
+
+  return {
+    robotsTxt: { present: robots.present, url: robots.url },
+    sitemap: { present: sitemap.present, urls: sitemap.urls },
+    robotsReport: robots,
+    sitemapReport: sitemap,
   };
-
-  try {
-    const res = await axios.get<string>(robotsUrl, {
-      timeout: FILE_TIMEOUT,
-      responseType: "text",
-      headers: { "User-Agent": UA },
-    });
-    // Plenty of sites answer 200 with an HTML 404 page. A real robots.txt is
-    // served as text and does not open with a tag.
-    const body = typeof res.data === "string" ? res.data : "";
-    out.robotsTxt.present = res.status === 200 && !body.trimStart().startsWith("<");
-
-    if (out.robotsTxt.present) {
-      const found = body.match(/^\s*sitemap:\s*(\S+)/gim) ?? [];
-      out.sitemap.urls = found
-        .map((line) => line.replace(/^\s*sitemap:\s*/i, "").trim())
-        .slice(0, 10);
-      out.sitemap.present = out.sitemap.urls.length > 0;
-    }
-  } catch {
-    /* absent robots.txt is a finding, not an error */
-  }
-
-  if (!out.sitemap.present) {
-    try {
-      const res = await axios.get<string>(sitemapUrl, {
-        timeout: FILE_TIMEOUT,
-        responseType: "text",
-        headers: { "User-Agent": UA },
-      });
-      const body = typeof res.data === "string" ? res.data : "";
-      if (res.status === 200 && body.includes("<urlset") === false && body.includes("<sitemapindex") === false) {
-        // 200 but not XML — almost certainly a soft 404.
-      } else if (res.status === 200) {
-        out.sitemap.present = true;
-        out.sitemap.urls = [sitemapUrl];
-      }
-    } catch {
-      /* no sitemap at the conventional path */
-    }
-  }
-
-  return out;
 }
 
 /* --------------------------------- issues --------------------------------- */
@@ -708,7 +694,8 @@ function deriveIssues(
   meta: SeoMeta,
   content: SeoContent,
   technical: SeoTechnical,
-  files: SeoSiteFiles
+  files: SeoSiteFiles,
+  schema?: SchemaValidation
 ): SeoIssue[] {
   const issues: SeoIssue[] = [];
   const add = (
@@ -747,8 +734,46 @@ function deriveIssues(
   if (technical.statusCode >= 400) add("critical", "technical", `Page returned ${technical.statusCode}`, "The URL does not serve a successful response, so it will not be indexed.");
   if (technical.responseTimeMs > 1000) add("warning", "technical", "Slow server response", `The server took ${technical.responseTimeMs} ms to respond. Under 600 ms is a reasonable target.`);
 
-  if (!files.robotsTxt.present) add("warning", "files", "No robots.txt", "Add a robots.txt so crawlers get explicit rules and a sitemap pointer.");
-  if (!files.sitemap.present) add("warning", "files", "No sitemap found", "Publish a sitemap.xml and reference it from robots.txt so every page is discoverable.");
+  // The validators produce their own findings with far more detail than a
+  // presence check, so when they ran, their output replaces the flat checks.
+  if (files.robotsReport || files.sitemapReport) {
+    const fileFindings = [
+      ...(files.robotsReport?.findings ?? []).map((f) => ({ ...f, source: "robots.txt" })),
+      ...(files.sitemapReport?.findings ?? []).map((f) => ({ ...f, source: "sitemap" })),
+    ];
+    for (const f of fileFindings) {
+      // "info" findings are notes about the file, not problems to fix, so they
+      // stay in the detailed report rather than padding the issue list.
+      if (f.severity === "info") continue;
+      add(
+        f.severity === "critical" ? "critical" : "warning",
+        "files",
+        f.severity === "critical" ? `${f.source}: blocking issue` : `${f.source} warning`,
+        f.message
+      );
+    }
+  } else {
+    if (!files.robotsTxt.present) add("warning", "files", "No robots.txt", "Add a robots.txt so crawlers get explicit rules and a sitemap pointer.");
+    if (!files.sitemap.present) add("warning", "files", "No sitemap found", "Publish a sitemap.xml and reference it from robots.txt so every page is discoverable.");
+  }
+
+  // Broken schema is worse than no schema: it looks done and produces nothing.
+  if (schema) {
+    for (const f of schema.findings.filter((x) => x.severity === "error")) {
+      add("critical", "content", `Invalid structured data: ${f.type}`, f.message);
+    }
+    const schemaWarnings = schema.findings.filter((x) => x.severity === "warning");
+    if (schemaWarnings.length) {
+      add(
+        "info",
+        "content",
+        "Structured data could be richer",
+        `${schemaWarnings.length} recommended propert${
+          schemaWarnings.length === 1 ? "y is" : "ies are"
+        } missing. See the Schema tab.`
+      );
+    }
+  }
 
   const rank = { critical: 0, warning: 1, info: 2 };
   return issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
@@ -782,12 +807,12 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
   if (!url) throw new Error("invalid URL");
 
   const { res, responseTimeMs } = await fetchPage(url);
-  const html = typeof res.data === "string" ? res.data : String(res.data ?? "");
+  const html = res.body;
   const $ = cheerio.load(html);
 
   // Redirects are followed, so anchor relative URLs and file lookups to where
   // we actually landed rather than where we started.
-  const finalUrl = (res.request?.res?.responseUrl as string) ?? url;
+  const finalUrl = res.finalUrl;
 
   const meta = extractMeta($);
   const bodyText = $("body").text().replace(/\s+/g, " ").trim();
@@ -839,7 +864,15 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     checkSiteFiles(finalUrl),
   ]);
 
-  const issues = deriveIssues(meta, content, technical, siteFiles);
+  // Validated from the raw script text rather than the parsed schemas, so a
+  // block that fails to parse is itself reportable.
+  const rawSchemas = $('script[type="application/ld+json"]')
+    .map((_i, el) => $(el).text())
+    .get()
+    .filter((t) => t.trim().length > 0);
+  const schema = validateStructuredData(rawSchemas);
+
+  const issues = deriveIssues(meta, content, technical, siteFiles, schema);
 
   return {
     url,
@@ -849,6 +882,7 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     technical,
     performance,
     siteFiles,
+    schema,
     issues,
     score: overallScore(performance, issues),
   };
