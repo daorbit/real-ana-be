@@ -5,6 +5,9 @@ import { SeoReport } from "../models/SeoReport.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../seo-core.js";
 import { rateLimit, BlockedUrlError } from "../lib/safe-fetch.js";
+import { Competitor } from "../models/Competitor.js";
+import { snapshotPage } from "../lib/compare.js";
+import { computeSearchTraffic } from "../lib/search-traffic.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -174,6 +177,160 @@ router.delete(
       siteId: found.site.siteId,
     });
     if (!deleted) return res.status(404).json({ error: "report not found" });
+    res.status(204).end();
+  }
+);
+
+/**
+ * Organic search arrivals for this site.
+ *
+ * Reads the analytics already collected rather than calling any external API,
+ * so it costs one database query and needs no OAuth.
+ */
+router.get(
+  "/:wid/sites/:siteId/seo/search-traffic",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const traffic = await computeSearchTraffic([found.site.siteId], since);
+    res.json({ ...traffic, days });
+  }
+);
+
+/* ------------------------------- competitors ------------------------------ */
+
+/**
+ * Competitor comparison.
+ *
+ * This is the one place the server fetches a host the user simply typed, with
+ * no prior relationship to the workspace. Two things make that acceptable:
+ * `safeFetch` refuses anything that is not publicly routable, and the rate
+ * limit stops the endpoint being used to scan or flood.
+ */
+const MAX_COMPETITORS = 3;
+
+router.get(
+  "/:wid/sites/:siteId/seo/competitors",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const list = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
+    res.json(list);
+  }
+);
+
+router.post(
+  "/:wid/sites/:siteId/seo/competitors",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+    const { ws, site } = found;
+
+    const url = normalizeUrl(String(req.body?.url ?? ""));
+    if (!url) return res.status(400).json({ error: "invalid URL" });
+
+    // Comparing a site against itself is a mistake, not a feature.
+    if (urlMatchesDomain(url, site.domain))
+      return res.status(400).json({ error: "that URL is on your own site" });
+
+    const count = await Competitor.countDocuments({ siteId: site.siteId });
+    if (count >= MAX_COMPETITORS)
+      return res
+        .status(400)
+        .json({ error: `at most ${MAX_COMPETITORS} competitors per site` });
+
+    const budget = rateLimit(`compare:${ws.id}`, { capacity: 10, refillPerMinute: 5 });
+    if (!budget.allowed)
+      return res.status(429).json({
+        error: `too many comparisons — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      });
+
+    let hostname = url;
+    try {
+      hostname = new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      /* normalizeUrl already validated this; fall back to the raw string */
+    }
+
+    try {
+      const snapshot = await snapshotPage(url);
+      const doc = await Competitor.findOneAndUpdate(
+        { siteId: site.siteId, url },
+        {
+          workspaceId: ws.id,
+          siteId: site.siteId,
+          url,
+          label: String(req.body?.label ?? "").trim() || hostname,
+          snapshot,
+          lastCheckedAt: new Date(),
+          lastError: "",
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      res.status(201).json(doc);
+    } catch (e) {
+      const message = (e as Error)?.message ?? "could not fetch that URL";
+      if (e instanceof BlockedUrlError)
+        return res.status(400).json({ error: `cannot audit ${url}: ${message}` });
+      res.status(502).json({ error: `could not fetch ${url}: ${message}` });
+    }
+  }
+);
+
+/** Re-fetch one competitor. */
+router.post(
+  "/:wid/sites/:siteId/seo/competitors/:id/refresh",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const competitor = await Competitor.findOne({
+      _id: req.params.id,
+      siteId: found.site.siteId,
+    });
+    if (!competitor) return res.status(404).json({ error: "competitor not found" });
+
+    const budget = rateLimit(`compare:${found.ws.id}`, { capacity: 10, refillPerMinute: 5 });
+    if (!budget.allowed)
+      return res.status(429).json({
+        error: `too many comparisons — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      });
+
+    try {
+      competitor.set({
+        snapshot: await snapshotPage(competitor.url as string),
+        lastCheckedAt: new Date(),
+        lastError: "",
+      });
+      await competitor.save();
+      res.json(competitor);
+    } catch (e) {
+      // A failure is recorded rather than thrown away: "we tried and their site
+      // was down" is more useful than a snapshot that silently went stale.
+      const message = (e as Error)?.message ?? "could not fetch that URL";
+      competitor.set({ lastCheckedAt: new Date(), lastError: message });
+      await competitor.save();
+      res.status(502).json({ error: message });
+    }
+  }
+);
+
+router.delete(
+  "/:wid/sites/:siteId/seo/competitors/:id",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const deleted = await Competitor.findOneAndDelete({
+      _id: req.params.id,
+      siteId: found.site.siteId,
+    });
+    if (!deleted) return res.status(404).json({ error: "competitor not found" });
     res.status(204).end();
   }
 );
