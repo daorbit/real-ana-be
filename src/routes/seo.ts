@@ -8,6 +8,10 @@ import { rateLimit, BlockedUrlError } from "../lib/safe-fetch.js";
 import { Competitor } from "../models/Competitor.js";
 import { snapshotPage } from "../lib/compare.js";
 import { computeSearchTraffic } from "../lib/search-traffic.js";
+import { computeFieldVitals } from "../lib/field-vitals.js";
+import { crawlSite } from "../lib/crawl.js";
+import { CrawlReport } from "../models/CrawlReport.js";
+import { TRACKER_VERSION } from "../stats-core.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -198,6 +202,115 @@ router.get(
 
     const traffic = await computeSearchTraffic([found.site.siteId], since);
     res.json({ ...traffic, days });
+  }
+);
+
+/**
+ * Core Web Vitals measured by real visitors (tracker v5+).
+ *
+ * Empty until sites re-copy their snippet, which is expected — the dashboard
+ * says so rather than showing zeros.
+ */
+router.get(
+  "/:wid/sites/:siteId/seo/vitals",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const vitals = await computeFieldVitals([found.site.siteId], since);
+    res.json({
+      ...vitals,
+      // Lets the UI distinguish "no visitors yet" from "your tracker is too old
+      // to report this", which need different advice.
+      trackerVersion: found.site.trackerVersion ?? 1,
+      requiredVersion: TRACKER_VERSION,
+    });
+  }
+);
+
+/* ---------------------------------- crawl --------------------------------- */
+
+/** Only one crawl per site at a time — each one is dozens of outbound fetches. */
+const crawling = new Set<string>();
+
+router.post(
+  "/:wid/sites/:siteId/seo/crawl",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+    const { ws, site } = found;
+
+    const origin = (() => {
+      const normalized = normalizeUrl(site.domain as string);
+      try {
+        return normalized ? new URL(normalized).origin : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!origin) return res.status(400).json({ error: "site has an invalid domain" });
+
+    if (crawling.has(site.siteId))
+      return res.status(429).json({ error: "a crawl for this site is already running" });
+
+    // A crawl is up to 30 page fetches plus sitemap discovery, so it costs more
+    // of the workspace budget than a single audit.
+    const budget = rateLimit(`crawl:${ws.id}`, { capacity: 5, refillPerMinute: 2 });
+    if (!budget.allowed)
+      return res.status(429).json({
+        error: `too many crawls — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      });
+
+    crawling.add(site.siteId);
+    try {
+      const data = await crawlSite(origin);
+
+      if (data.crawled === 0)
+        return res.status(400).json({
+          error:
+            "No sitemap found, so there was nothing to crawl. Publish a sitemap.xml and reference it from robots.txt.",
+        });
+
+      const report = await CrawlReport.create({
+        workspaceId: ws.id,
+        siteId: site.siteId,
+        userId: req.userId,
+        origin,
+        score: data.score,
+        crawled: data.crawled,
+        discovered: data.discovered,
+        findingCount: data.findings.length,
+        criticalCount: data.findings.filter((f) => f.severity === "critical").length,
+        data,
+      });
+      res.json(report);
+    } catch (e) {
+      const message = (e as Error)?.message ?? "crawl failed";
+      console.error("Crawl failed:", site.siteId, message);
+      if (e instanceof BlockedUrlError)
+        return res.status(400).json({ error: `cannot crawl ${origin}: ${message}` });
+      res.status(502).json({ error: `could not crawl ${origin}: ${message}` });
+    } finally {
+      crawling.delete(site.siteId);
+    }
+  }
+);
+
+/** The newest crawl for a site. */
+router.get(
+  "/:wid/sites/:siteId/seo/crawl/latest",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+
+    const report = await CrawlReport.findOne({ siteId: found.site.siteId }).sort({
+      createdAt: -1,
+    });
+    if (!report) return res.status(404).json({ error: "no crawl yet" });
+    res.json(report);
   }
 );
 

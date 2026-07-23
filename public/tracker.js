@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 4;
+  var VERSION = 5;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -265,6 +265,95 @@
     }
   });
 
+  /* ------------------------------------------------------------------
+   * Core Web Vitals
+   *
+   * Lighthouse measures a simulated load on synthetic hardware. Google ranks
+   * on *field* data — what real visitors on real devices experienced — and the
+   * two routinely disagree. These are the field numbers.
+   *
+   * Everything here is feature-detected and wrapped: an unsupported entry type
+   * throws on observe() in some browsers, and a tracker must never break the
+   * page it is measuring. A browser missing an API simply reports the metrics
+   * it does have.
+   * ------------------------------------------------------------------ */
+  var vitals = {};
+
+  function observeVital(type, handler, opts) {
+    if (typeof PerformanceObserver !== "function") return;
+    try {
+      var po = new PerformanceObserver(function (list) {
+        try {
+          handler(list.getEntries());
+        } catch (e) {
+          /* a bad entry must not take the page down */
+        }
+      });
+      po.observe(opts || { type: type, buffered: true });
+    } catch (e) {
+      /* this browser does not support the entry type */
+    }
+  }
+
+  // LCP: the largest element painted. The last reported entry wins, because
+  // the candidate changes as bigger content arrives.
+  observeVital("largest-contentful-paint", function (entries) {
+    var last = entries[entries.length - 1];
+    if (last) vitals.lcp = Math.round(last.startTime);
+  });
+
+  // CLS: summed layout shift, excluding shifts within 500ms of an interaction
+  // (those are the user's own doing and do not count against the score).
+  var clsValue = 0;
+  observeVital("layout-shift", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].hadRecentInput) clsValue += entries[i].value;
+    }
+    vitals.cls = Math.round(clsValue * 1000) / 1000;
+  });
+
+  // INP: worst interaction latency. Approximated by the longest event duration,
+  // which is what the metric is built on.
+  var worstInp = 0;
+  observeVital("event", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var d = entries[i].duration;
+      if (d > worstInp) {
+        worstInp = d;
+        vitals.inp = Math.round(d);
+      }
+    }
+  }, { type: "event", buffered: true, durationThreshold: 40 });
+
+  observeVital("paint", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].name === "first-contentful-paint") {
+        vitals.fcp = Math.round(entries[i].startTime);
+      }
+    }
+  });
+
+  // TTFB comes from the navigation timing entry rather than an observer.
+  try {
+    var nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+    if (nav && nav.responseStart > 0) vitals.ttfb = Math.round(nav.responseStart);
+  } catch (e) {
+    /* navigation timing unavailable */
+  }
+
+  /** Snapshot of what has been measured, or null when nothing has. */
+  function vitalsPayload() {
+    var out = {};
+    var any = false;
+    for (var k in vitals) {
+      if (Object.prototype.hasOwnProperty.call(vitals, k) && vitals[k] != null) {
+        out[k] = vitals[k];
+        any = true;
+      }
+    }
+    return any ? out : null;
+  }
+
   // Send the engagement record for the page we are leaving.
   var flushed = false;
   function flush() {
@@ -281,6 +370,9 @@
       bounce: s.views <= 1,
       isExit: true,
       scrollDepth: maxScroll,
+      // Piggybacked on the engagement beacon rather than sent separately, so
+      // vitals cost no extra request.
+      vitals: vitalsPayload(),
       utm: utm(),
     });
     flushed = true;

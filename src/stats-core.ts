@@ -4,11 +4,14 @@ import { Event } from "./models/Event.js";
  * Lowest tracker.js version that reports every metric the dashboard shows.
  * Sites below this are missing data and get flagged for an upgrade.
  *
- * This deliberately trails `VERSION` in public/tracker.js: v4 added only
- * opt-in script options (DNT, ignore rules, hash mode) and no new metrics, so
- * a site on v3 is complete and should not be nagged.
+ * This tracked one behind `VERSION` in public/tracker.js until v5, because v4
+ * added only opt-in script options (DNT, ignore rules, hash mode) and no new
+ * metrics — a site on v3 was complete and should not have been nagged.
+ *
+ * v5 adds Core Web Vitals, which is real missing data, so the two are now in
+ * step and a site below v5 is correctly prompted to re-copy its snippet.
  */
-export const TRACKER_VERSION = 3;
+export const TRACKER_VERSION = 5;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,

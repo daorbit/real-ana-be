@@ -46,6 +46,28 @@ const eventSchema = new Schema({
   // engagement record because it is only final once the page is left.
   scrollDepth: { type: Number, default: 0 },
 
+  /**
+   * Core Web Vitals as the visitor's own browser measured them (tracker v5+).
+   *
+   * Field data, not lab data: Lighthouse simulates a load on synthetic
+   * hardware, while these are what real devices experienced — and Google ranks
+   * on the latter. Reported on the engagement record because several are only
+   * final once the page is left. Null where the browser does not support the
+   * metric; Safari, for instance, has no INP.
+   */
+  vitals: {
+    /** Largest Contentful Paint, ms. Good ≤ 2500. */
+    lcp: { type: Number, default: null },
+    /** Cumulative Layout Shift, unitless. Good ≤ 0.1. */
+    cls: { type: Number, default: null },
+    /** Interaction to Next Paint, ms. Good ≤ 200. */
+    inp: { type: Number, default: null },
+    /** First Contentful Paint, ms. Good ≤ 1800. */
+    fcp: { type: Number, default: null },
+    /** Time to First Byte, ms. Good ≤ 800. */
+    ttfb: { type: Number, default: null },
+  },
+
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },

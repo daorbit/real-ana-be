@@ -15,6 +15,36 @@ const num = (v: unknown, max = 100_000): number => {
 const str = (v: unknown, max = 200): string =>
   typeof v === "string" ? v.slice(0, max) : "";
 
+/**
+ * Core Web Vitals from tracker v5+.
+ *
+ * Each metric is clamped to a plausible ceiling and absent values stay null
+ * rather than becoming 0 — a browser that cannot measure INP must not be
+ * recorded as having a perfect INP, which would drag every percentile down.
+ */
+const vitals = (raw: unknown) => {
+  if (!raw || typeof raw !== "object") return undefined;
+  const v = raw as Record<string, unknown>;
+
+  // A metric is only stored when it arrived as a finite, non-negative number.
+  const metric = (value: unknown, max: number): number | null => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.min(n, max);
+  };
+
+  const out = {
+    lcp: metric(v.lcp, 120_000),
+    cls: metric(v.cls, 100),
+    inp: metric(v.inp, 120_000),
+    fcp: metric(v.fcp, 120_000),
+    ttfb: metric(v.ttfb, 120_000),
+  };
+
+  // Nothing usable in the payload — leave the subdocument off entirely.
+  return Object.values(out).some((x) => x !== null) ? out : undefined;
+};
+
 // Public ingest endpoint. Called by tracker.js embedded on customer sites.
 router.post("/", async (req, res) => {
   try {
@@ -82,6 +112,7 @@ router.post("/", async (req, res) => {
       durationMs: num(body.durationMs, MAX_DURATION_MS),
       bounce: !!body.bounce,
       scrollDepth: num(body.scrollDepth, 100),
+      vitals: vitals(body.vitals),
 
       utm: {
         source: str(body.utm?.source, 80),
