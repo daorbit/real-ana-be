@@ -12,6 +12,7 @@ import {
   type RobotsReport,
   type SitemapReport,
 } from "./lib/robots-validate.js";
+import { checkLinks, type LinkCheckReport, type PageLink } from "./lib/link-check.js";
 
 /**
  * On-page SEO auditing for a single URL.
@@ -171,6 +172,8 @@ export type SeoReportData = {
   siteFiles: SeoSiteFiles;
   /** JSON-LD validation. Absent on reports predating the validator. */
   schema?: SchemaValidation;
+  /** Link check results. Absent on reports predating the checker. */
+  links?: LinkCheckReport;
   issues: SeoIssue[];
   score: number;
 };
@@ -304,30 +307,46 @@ function extractImages($: CheerioAPI, baseUrl: string): SeoImage[] {
   return images.slice(0, 100);
 }
 
-function countLinks($: CheerioAPI, baseUrl: string) {
+/**
+ * Every followable link on the page, resolved to an absolute URL.
+ *
+ * One pass produces both the counts and the list the link checker requests, so
+ * the two can never disagree about what counts as a link. Fragments, mailto,
+ * tel and javascript hrefs are excluded — none of them are fetchable.
+ */
+function collectLinks($: CheerioAPI, baseUrl: string) {
+  const host = new URL(baseUrl).hostname.replace(/^www\./, "");
+  const links: PageLink[] = [];
   let internal = 0;
   let external = 0;
-  const host = new URL(baseUrl).hostname.replace(/^www\./, "");
 
   $("a[href]").each((_i, el) => {
     const href = ($(el).attr("href") ?? "").trim();
     if (!href || href.startsWith("#")) return;
-    if (/^(mailto:|tel:|javascript:)/i.test(href)) return;
+    if (/^(mailto:|tel:|javascript:|data:|sms:)/i.test(href)) return;
 
-    if (/^https?:\/\//i.test(href)) {
-      try {
-        const h = new URL(href).hostname.replace(/^www\./, "");
-        if (h === host || h.endsWith(`.${host}`)) internal++;
-        else external++;
-      } catch {
-        /* unparseable href counts as neither */
-      }
-    } else {
-      internal++;
+    let absolute: URL;
+    try {
+      absolute = new URL(href, baseUrl);
+    } catch {
+      return; // unparseable href is neither counted nor checked
     }
+
+    if (absolute.protocol !== "http:" && absolute.protocol !== "https:") return;
+
+    const h = absolute.hostname.replace(/^www\./, "");
+    const isInternal = h === host || h.endsWith(`.${host}`);
+    if (isInternal) internal++;
+    else external++;
+
+    links.push({
+      url: absolute.href,
+      text: $(el).text().trim().replace(/\s+/g, " ").slice(0, 80),
+      internal: isInternal,
+    });
   });
 
-  return { internal, external };
+  return { internal, external, links };
 }
 
 function headingStructure($: CheerioAPI): HeadingLevel[] {
@@ -695,7 +714,8 @@ function deriveIssues(
   content: SeoContent,
   technical: SeoTechnical,
   files: SeoSiteFiles,
-  schema?: SchemaValidation
+  schema?: SchemaValidation,
+  links?: LinkCheckReport
 ): SeoIssue[] {
   const issues: SeoIssue[] = [];
   const add = (
@@ -755,6 +775,38 @@ function deriveIssues(
   } else {
     if (!files.robotsTxt.present) add("warning", "files", "No robots.txt", "Add a robots.txt so crawlers get explicit rules and a sitemap pointer.");
     if (!files.sitemap.present) add("warning", "files", "No sitemap found", "Publish a sitemap.xml and reference it from robots.txt so every page is discoverable.");
+  }
+
+  if (links) {
+    // Internal breakage is the site owner's own problem to fix and reflects
+    // directly on the site, so it outranks a dead outbound link.
+    const brokenInternal = links.results.filter((r) => r.status === "broken" && r.internal);
+    const brokenExternal = links.results.filter((r) => r.status === "broken" && !r.internal);
+    const chains = links.results.filter((r) => r.status === "redirect" && r.chain.length > 2);
+
+    if (brokenInternal.length)
+      add(
+        "critical",
+        "content",
+        `${brokenInternal.length} broken internal link${brokenInternal.length === 1 ? "" : "s"}`,
+        `Links on your own site that lead nowhere, starting with ${brokenInternal[0].url}. They strand visitors and waste crawl budget.`
+      );
+
+    if (brokenExternal.length)
+      add(
+        "warning",
+        "content",
+        `${brokenExternal.length} broken outbound link${brokenExternal.length === 1 ? "" : "s"}`,
+        `Links to other sites that no longer resolve, starting with ${brokenExternal[0].url}.`
+      );
+
+    if (chains.length)
+      add(
+        "info",
+        "content",
+        `${chains.length} long redirect chain${chains.length === 1 ? "" : "s"}`,
+        "Each hop costs crawl budget. Link straight to the final URL."
+      );
   }
 
   // Broken schema is worse than no schema: it looks done and produces nothing.
@@ -817,7 +869,7 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
   const meta = extractMeta($);
   const bodyText = $("body").text().replace(/\s+/g, " ").trim();
   const wordCount = bodyText ? bodyText.split(" ").filter(Boolean).length : 0;
-  const links = countLinks($, finalUrl);
+  const links = collectLinks($, finalUrl);
   const images = extractImages($, finalUrl);
   const totalImages = $("img").length;
   const imageAltCount = $("img[alt]").length;
@@ -857,11 +909,12 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     responseTimeMs,
   };
 
-  // Independent of each other, and PageSpeed is the slow one — no reason to
-  // wait on robots.txt first.
-  const [performance, siteFiles] = await Promise.all([
+  // All three are independent and all three are slow, so they overlap rather
+  // than running end to end. PageSpeed dominates the wall clock either way.
+  const [performance, siteFiles, linkCheck] = await Promise.all([
     runPageSpeed(finalUrl),
     checkSiteFiles(finalUrl),
+    checkLinks(links.links),
   ]);
 
   // Validated from the raw script text rather than the parsed schemas, so a
@@ -872,7 +925,7 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     .filter((t) => t.trim().length > 0);
   const schema = validateStructuredData(rawSchemas);
 
-  const issues = deriveIssues(meta, content, technical, siteFiles, schema);
+  const issues = deriveIssues(meta, content, technical, siteFiles, schema, linkCheck);
 
   return {
     url,
@@ -883,6 +936,7 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     performance,
     siteFiles,
     schema,
+    links: linkCheck,
     issues,
     score: overallScore(performance, issues),
   };
