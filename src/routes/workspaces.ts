@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { Event } from "../models/Event.js";
+import { SeoReport } from "../models/SeoReport.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import {
   computeStats,
@@ -510,6 +511,7 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = sites.map((s) => s.siteId as string);
   await Event.deleteMany({ siteId: { $in: ids } });
+  await SeoReport.deleteMany({ workspaceId: ws.id });
   await Site.deleteMany({ workspaceId: ws.id });
   await Goal.deleteMany({ workspaceId: ws.id });
   // Keys are scoped to the workspace, so they'd otherwise outlive it and keep
@@ -535,6 +537,7 @@ router.delete(
     });
     if (!site) return res.status(404).json({ error: "site not found" });
     await Event.deleteMany({ siteId: site.siteId });
+    await SeoReport.deleteMany({ siteId: site.siteId });
     await site.deleteOne();
     res.status(204).end();
   },

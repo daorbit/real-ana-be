@@ -9,6 +9,7 @@ import statsRoutes from "./routes/stats.js";
 import v1Routes from "./routes/v1.js";
 import adminRoutes from "./routes/admin.js";
 import shareRoutes from "./routes/share.js";
+import seoRoutes from "./routes/seo.js";
 
 const app = express();
 app.use(express.json());
@@ -59,6 +60,9 @@ app.use("/api/share", openCors, shareRoutes);
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
 app.use("/api/workspaces", dashboardCors, workspaceRoutes);
+// SEO audits hang off the same prefix; kept in their own router so the
+// workspace module stays about workspaces.
+app.use("/api/workspaces", dashboardCors, seoRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
 
