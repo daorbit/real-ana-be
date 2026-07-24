@@ -59,21 +59,16 @@ export function requireAuth(
   }
 }
 
-/**
- * Refuse any state-changing request on a demo session.
- *
- * The demo is a read-only tour of a shared account, so a write from a demo
- * token is rejected outright — the client hides the controls too, but this is
- * the line that actually protects the shared data. GET/HEAD/OPTIONS pass; every
- * other method is a mutation and is blocked. Mount after `requireAuth`.
- */
+const DEMO_COMPUTE_ALLOW = [/\/funnel$/];
+
 export function blockDemoWrites(
   req: AuthedRequest,
   res: Response,
   next: NextFunction
 ) {
   const readOnly = req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS";
-  if (req.isDemo && !readOnly) {
+  const computeOnly = DEMO_COMPUTE_ALLOW.some((re) => re.test(req.path));
+  if (req.isDemo && !readOnly && !computeOnly) {
     return res.status(403).json({ error: "demo mode is read-only", demo: true });
   }
   next();
