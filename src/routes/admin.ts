@@ -6,6 +6,8 @@ import { Event } from "../models/Event.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
+import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
+import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -177,5 +179,34 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+/* ------------------------------- demo usage ------------------------------- */
+
+/**
+ * How the public demo is being used.
+ *
+ * The figures come from the in-process throttle rather than a table: nothing
+ * about a demo visitor is stored, so this is a live snapshot — counts reset
+ * when the server does, and each instance reports its own. Enough to see
+ * whether the demo is being used and whether the limit is biting; deliberately
+ * not an audit trail.
+ */
+router.get("/demo/usage", async (_req: AuthedRequest, res: Response) => {
+  const [limit, snapshot] = await Promise.all([
+    getDemoDailyLimit(),
+    Promise.resolve(demoUsageSnapshot()),
+  ]);
+  res.json({ limit, ...snapshot });
+});
+
+/** Change how many demo sessions one address may start per day. */
+router.put("/demo/limit", async (req: AuthedRequest, res: Response) => {
+  const requested = Number(req.body?.limit);
+  if (!Number.isFinite(requested) || requested < 1) {
+    return res.status(400).json({ error: "limit must be a positive number" });
+  }
+  const limit = await setDemoDailyLimit(requested);
+  res.json({ limit });
+});
 
 export default router;

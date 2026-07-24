@@ -13,6 +13,10 @@ import seoPublicRoutes from "./routes/seo-public.js";
 import seoRoutes from "./routes/seo.js";
 
 const app = express();
+// Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
+// the forwarding headers it sets, otherwise every caller looks like one IP and
+// per-address limits would be meaningless.
+app.set("trust proxy", true);
 app.use(express.json());
 // The tracker sends beacons as text/plain (an application/json beacon would
 // trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.

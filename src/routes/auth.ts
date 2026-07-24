@@ -1,6 +1,8 @@
-import { Router, Response } from "express";
+import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
+import { getDemoDailyLimit } from "../models/AppSetting.js";
+import { tryStartDemo } from "../lib/demo-limit.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -161,8 +163,38 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
  * demo session (and so the write guard can refuse it if a request ever is
  * made).
  */
-router.post("/demo", (_req, res) => {
-  res.json({ token: signDemoToken(DEMO_USER_ID), user: demoUser() });
+/**
+ * The caller's address.
+ *
+ * `trust proxy` is on, so Express has already resolved the forwarding chain;
+ * this only normalises the IPv4-mapped IPv6 form ("::ffff:1.2.3.4") so the same
+ * caller doesn't count as two different addresses. The value is used to look up
+ * a counter in memory and is never stored.
+ */
+function clientIp(req: Request): string {
+  const raw = req.ip ?? req.socket.remoteAddress ?? "";
+  return raw.replace(/^::ffff:/, "") || "unknown";
+}
+
+router.post("/demo", async (req: Request, res: Response) => {
+  try {
+    const limit = await getDemoDailyLimit();
+    const attempt = tryStartDemo(clientIp(req), limit);
+
+    if (!attempt.allowed) {
+      const seconds = Math.max(1, Math.ceil((attempt.retryAt.getTime() - Date.now()) / 1000));
+      res.set("Retry-After", String(seconds));
+      return res.status(429).json({
+        error: `You've started the demo ${limit} times today. Please try again later.`,
+        retryAt: attempt.retryAt.toISOString(),
+        limit,
+      });
+    }
+
+    res.json({ token: signDemoToken(DEMO_USER_ID), user: demoUser() });
+  } catch {
+    res.status(500).json({ error: "could not start demo" });
+  }
 });
 
 /**
