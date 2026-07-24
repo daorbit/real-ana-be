@@ -6,7 +6,7 @@ import { Event } from "../models/Event.js";
 import { SeoReport } from "../models/SeoReport.js";
 import { Competitor } from "../models/Competitor.js";
 import { CrawlReport } from "../models/CrawlReport.js";
-import { requireAuth, AuthedRequest } from "../auth.js";
+import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import {
   computeStats,
   computeFunnel,
@@ -28,6 +28,8 @@ import { generateKey } from "../apikey.js";
 
 const router = Router();
 router.use(requireAuth);
+// A demo session may read every workspace route but write none.
+router.use(blockDemoWrites);
 
 function slugify(s: string): string {
   return s

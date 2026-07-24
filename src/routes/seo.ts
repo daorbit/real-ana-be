@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { SeoReport } from "../models/SeoReport.js";
-import { requireAuth, AuthedRequest } from "../auth.js";
+import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../seo-core.js";
 import { rateLimit, BlockedUrlError } from "../lib/safe-fetch.js";
 import { Competitor } from "../models/Competitor.js";
@@ -26,6 +26,9 @@ import { TRACKER_VERSION } from "../stats-core.js";
  */
 const router = Router();
 router.use(requireAuth);
+// Demo sessions may run and read audits' cached results but not mutate — the
+// analyze/crawl/competitor writes are all refused.
+router.use(blockDemoWrites);
 
 /** How long a stored report is served instead of re-running the audit. */
 const FRESH_MS = 60 * 60 * 1000; // 1 hour

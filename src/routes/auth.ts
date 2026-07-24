@@ -1,7 +1,8 @@
 import { Router, Response } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
-import { signToken, requireAuth, AuthedRequest } from "../auth.js";
+import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
+import { ensureDemoUser } from "../lib/demo-seed.js";
 
 const router = Router();
 
@@ -115,7 +116,22 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
     ...publicUser(user),
     // Survives a refresh, so the "you are viewing as …" banner can come back.
     impersonating: Boolean(req.impersonatorId),
+    // Lets the client switch to its read-only demo behaviour after a reload.
+    demo: Boolean(req.isDemo),
   });
+});
+
+
+router.post("/demo", async (_req, res) => {
+  try {
+    const userId = await ensureDemoUser();
+    const user = await User.findById(userId);
+    if (!user) return res.status(500).json({ error: "demo unavailable" });
+    const token = signDemoToken(userId);
+    res.json({ token, user: { ...publicUser(user), demo: true } });
+  } catch {
+    res.status(500).json({ error: "could not start demo" });
+  }
 });
 
 /**
@@ -126,7 +142,7 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
  * requested. Everything else is optional — an omitted field is left alone,
  * which is what lets the form send only what changed.
  */
-router.patch("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
+router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
 

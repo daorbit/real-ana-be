@@ -8,12 +8,25 @@ export interface AuthedRequest extends Request {
   userId?: string;
   /** Set only on impersonation tokens: the admin acting as `userId`. */
   impersonatorId?: string;
+  /** Set on demo tokens: the session is a read-only public demo. */
+  isDemo?: boolean;
 }
 
-type Payload = { userId: string; impersonatorId?: string };
+type Payload = { userId: string; impersonatorId?: string; demo?: boolean };
 
 export function signToken(userId: string): string {
   return jwt.sign({ userId }, SECRET, { expiresIn: "7d" });
+}
+
+/**
+ * A read-only token for the public demo account.
+ *
+ * Carries a `demo` flag the write guard keys off. Short-lived: a demo session
+ * is a look around, not an account, so the token does not need to outlive a
+ * browsing session by much.
+ */
+export function signDemoToken(userId: string): string {
+  return jwt.sign({ userId, demo: true }, SECRET, { expiresIn: "12h" });
 }
 
 /**
@@ -39,10 +52,31 @@ export function requireAuth(
     const payload = jwt.verify(token, SECRET) as Payload;
     req.userId = payload.userId;
     req.impersonatorId = payload.impersonatorId;
+    req.isDemo = payload.demo === true;
     next();
   } catch {
     res.status(401).json({ error: "invalid token" });
   }
+}
+
+/**
+ * Refuse any state-changing request on a demo session.
+ *
+ * The demo is a read-only tour of a shared account, so a write from a demo
+ * token is rejected outright — the client hides the controls too, but this is
+ * the line that actually protects the shared data. GET/HEAD/OPTIONS pass; every
+ * other method is a mutation and is blocked. Mount after `requireAuth`.
+ */
+export function blockDemoWrites(
+  req: AuthedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  const readOnly = req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS";
+  if (req.isDemo && !readOnly) {
+    return res.status(403).json({ error: "demo mode is read-only", demo: true });
+  }
+  next();
 }
 
 /**
