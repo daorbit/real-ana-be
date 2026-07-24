@@ -29,6 +29,25 @@ const seoReportSchema = new Schema(
     issueCount: { type: Number, default: 0 },
     criticalCount: { type: Number, default: 0 },
     data: { type: Schema.Types.Mixed, required: true },
+
+    /**
+     * Public sharing for a single audit.
+     *
+     * A report is a snapshot a customer hands to a client, so the link is
+     * per-report rather than per-workspace: publishing one audit never exposes
+     * the site's other reports. `shareToken` is the whole credential for the
+     * unauthenticated view — long, unguessable, and the only thing the public
+     * route matches on. Absent until the owner turns sharing on.
+     *
+     * `sharePanels` records which sections the owner chose to publish; anything
+     * off is stripped server-side before the report leaves the API, so an
+     * unpublished section cannot be read out of the network tab.
+     */
+    shareToken: { type: String, default: null, index: true, sparse: true },
+    shareEnabled: { type: Boolean, default: false },
+    sharePanels: { type: Schema.Types.Mixed, default: undefined },
+    shareViews: { type: Number, default: 0 },
+    shareLastViewedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

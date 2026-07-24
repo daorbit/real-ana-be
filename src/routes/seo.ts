@@ -1,4 +1,5 @@
 import { Router, Response } from "express";
+import { nanoid } from "nanoid";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { SeoReport } from "../models/SeoReport.js";
@@ -445,6 +446,110 @@ router.delete(
     });
     if (!deleted) return res.status(404).json({ error: "competitor not found" });
     res.status(204).end();
+  }
+);
+
+/* ------------------------------ public sharing ----------------------------- */
+
+/**
+ * The sections of an audit an owner can publish, and whether each starts on.
+ *
+ * The score band, the issue list, the technical checks and the Lighthouse
+ * numbers are the client-facing summary, so they default on. Meta tags, content
+ * detail, the full link list and raw structured data can all carry things a
+ * customer never meant a client to see (internal URLs, staging paths), so they
+ * start off and must be turned on deliberately.
+ *
+ * Shared with the public route via export, so both ends agree on the shape and
+ * a panel added here can never accidentally publish itself with no default.
+ */
+export const SEO_SHARE_PANEL_DEFAULTS: Record<string, boolean> = {
+  summary: true,
+  issues: true,
+  technical: true,
+  performance: true,
+  meta: false,
+  content: false,
+  links: false,
+  schema: false,
+};
+
+/** Normalise a stored/incoming panel map to exactly the known keys. */
+export function readSeoPanels(raw: unknown): Record<string, boolean> {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const out: Record<string, boolean> = {};
+  for (const [key, fallback] of Object.entries(SEO_SHARE_PANEL_DEFAULTS)) {
+    out[key] = o[key] === undefined ? fallback : Boolean(o[key]);
+  }
+  return out;
+}
+
+/** Load a report the caller owns, or return a typed error. */
+async function resolveReport(req: AuthedRequest) {
+  const found = await resolveSite(req);
+  if ("error" in found) return { error: found.error };
+  const report = await SeoReport.findOne({
+    _id: req.params.id,
+    workspaceId: found.ws.id,
+    siteId: found.site.siteId,
+  });
+  if (!report) return { error: "report not found" as const };
+  return { report };
+}
+
+function shareState(report: NonNullable<Awaited<ReturnType<typeof SeoReport.findOne>>>) {
+  return {
+    enabled: Boolean(report.get("shareEnabled")),
+    token: report.get("shareToken") ?? null,
+    panels: readSeoPanels(report.get("sharePanels")),
+    views: report.get("shareViews") ?? 0,
+    lastViewedAt: report.get("shareLastViewedAt") ?? null,
+  };
+}
+
+/** Current share state for one report. */
+router.get(
+  "/:wid/sites/:siteId/seo/reports/:id/share",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveReport(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+    res.json(shareState(found.report));
+  }
+);
+
+/**
+ * Turn per-report sharing on or off, optionally minting a fresh token.
+ *
+ * `rotate` is the only way to break a link already sent somewhere — disabling
+ * alone keeps the token so the same URL can be brought back later.
+ */
+router.put(
+  "/:wid/sites/:siteId/seo/reports/:id/share",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveReport(req);
+    if ("error" in found) return res.status(404).json({ error: found.error });
+    const { report } = found;
+
+    const enabled = Boolean(req.body?.enabled);
+    const rotate = Boolean(req.body?.rotate);
+
+    // 32 nanoid chars: the token is the whole credential for the public view, so
+    // it must be long enough that guessing is hopeless. The `pk_seo_` prefix
+    // keeps SEO tokens distinguishable from the dashboard share tokens.
+    if (rotate || (enabled && !report.get("shareToken"))) {
+      report.set("shareToken", `pk_seo_${nanoid(32)}`);
+      if (rotate) {
+        report.set("shareViews", 0);
+        report.set("shareLastViewedAt", null);
+      }
+    }
+    report.set("shareEnabled", enabled);
+    if (req.body?.panels !== undefined) {
+      report.set("sharePanels", readSeoPanels(req.body.panels));
+    }
+    await report.save();
+
+    res.json(shareState(report));
   }
 );
 
