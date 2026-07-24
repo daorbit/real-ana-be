@@ -26,12 +26,6 @@ const userSchema = new Schema(
     timezone: { type: String, trim: true, default: "" },
     // Signups are never admins — that is granted deliberately, not requested.
     role: { type: String, enum: ROLES, required: true, default: "user" },
-    /**
-     * The shared public-demo account. One such user exists; demo sessions all
-     * sign in as it. Flagged so it can be found idempotently on seed and kept
-     * out of admin user lists.
-     */
-    isDemo: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );

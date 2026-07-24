@@ -2,9 +2,34 @@ import { Router, Response } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "../models/User.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
-import { ensureDemoUser } from "../lib/demo-seed.js";
 
 const router = Router();
+
+/**
+ * The demo session's stand-in user id.
+ *
+ * Deliberately not a real document: the demo never reads or writes the
+ * database. A fixed, obviously-synthetic id keeps the token well-formed while
+ * matching nothing in the users collection.
+ */
+const DEMO_USER_ID = "000000000000000000000000";
+
+/** The demo session's user, assembled without touching the database. */
+function demoUser() {
+  return {
+    id: DEMO_USER_ID,
+    email: "demo@quantalog.app",
+    name: "Demo User",
+    firstName: "Demo",
+    lastName: "User",
+    mobile: "",
+    avatarUrl: "",
+    dateLocale: "",
+    timezone: "",
+    role: "user" as const,
+    demo: true,
+  };
+}
 
 /** The shape every auth response returns — one place, so they can't drift. */
 function publicUser(user: InstanceType<typeof User>) {
@@ -110,6 +135,10 @@ router.post("/login", async (req, res) => {
 });
 
 router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
+  // The demo user has no database record, so a refresh restores it from the
+  // token alone rather than looking up an id that intentionally matches nothing.
+  if (req.isDemo) return res.json(demoUser());
+
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
   res.json({
@@ -122,16 +151,18 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
 });
 
 
-router.post("/demo", async (_req, res) => {
-  try {
-    const userId = await ensureDemoUser();
-    const user = await User.findById(userId);
-    if (!user) return res.status(500).json({ error: "demo unavailable" });
-    const token = signDemoToken(userId);
-    res.json({ token, user: { ...publicUser(user), demo: true } });
-  } catch {
-    res.status(500).json({ error: "could not start demo" });
-  }
+/**
+ * Enter the read-only public demo.
+ *
+ * This mints a token and nothing else: the demo has no database presence at
+ * all. Every figure the demo shows is generated in the browser from fixtures,
+ * so a visitor looking around costs no queries, writes no rows, and cannot
+ * touch anyone's data. The token exists purely so the client can recognise a
+ * demo session (and so the write guard can refuse it if a request ever is
+ * made).
+ */
+router.post("/demo", (_req, res) => {
+  res.json({ token: signDemoToken(DEMO_USER_ID), user: demoUser() });
 });
 
 /**
