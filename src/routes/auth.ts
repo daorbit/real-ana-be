@@ -7,6 +7,9 @@ import { mailConfigured, sendOne, sendOtpEmail } from "../lib/mail.js";
 import { getDemoDailyLimit } from "../models/AppSetting.js";
 import { tryStartDemo } from "../lib/demo-limit.js";
 import { googleConfigured, verifyGoogleCredential } from "../lib/google-auth.js";
+import {
+  checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
+} from "../lib/cloudinary.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -504,6 +507,14 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
     // javascript: or data: value is a scripting vector rather than a picture.
     if (url && !/^https?:\/\//i.test(url))
       return res.status(400).json({ error: "avatarUrl must be an http(s) URL" });
+
+    // Pointing the avatar somewhere else abandons any file we uploaded for it,
+    // so that file goes too. Best-effort: an orphan in Cloudinary is not worth
+    // failing a profile save over.
+    if (user.avatarPublicId && url !== user.avatarUrl) {
+      void deleteImage(user.avatarPublicId);
+      user.avatarPublicId = "";
+    }
     user.avatarUrl = url;
   }
   if (body.dateLocale !== undefined) user.dateLocale = str(body.dateLocale, 35);
@@ -517,6 +528,83 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
 
   await user.save();
   res.json(publicUser(user));
+});
+
+/** Avatars are 200x200 on delivery, so there is no reason to accept a poster. */
+const MAX_AVATAR_BYTES = 3 * 1024 * 1024;
+
+/**
+ * Upload a profile picture.
+ *
+ * The image arrives as a base64 data URL in the JSON body rather than as
+ * multipart form data. That keeps the endpoint dependency-free (no multer) and
+ * means nothing is ever written to disk — which matters on a serverless target
+ * where the filesystem is read-only. The cost is base64's ~33% overhead on a
+ * file that is already capped at a few megabytes.
+ *
+ * Saving is immediate: the new URL is written to the user here rather than
+ * returned for the settings form to submit later. An upload is an explicit act
+ * with a visible result, and leaving it unsaved would strand a file in
+ * Cloudinary that nothing references if the user then walked away.
+ */
+router.post("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    if (!cloudinaryConfigured())
+      return res.status(503).json({ error: "image uploads are not configured" });
+
+    const dataUrl = String(req.body?.file ?? "");
+    if (!dataUrl) return res.status(400).json({ error: "file required" });
+
+    const checked = checkImageDataUrl(dataUrl, MAX_AVATAR_BYTES);
+    if ("error" in checked) return res.status(400).json({ error: checked.error });
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    const previousId = user.avatarPublicId;
+
+    const { url, publicId } = await uploadImage({
+      file: dataUrl,
+      folder: "quantalog-avatars",
+      // The timestamp makes each upload a new asset rather than an overwrite, so
+      // a CDN or browser holding the old URL never serves the old picture.
+      publicId: `avatar-${user.id}-${Date.now()}`,
+      // Cropped square and quality-normalised at upload time: this is the only
+      // shape an avatar is ever shown in.
+      transformation: "c_fill,g_face,h_200,w_200/q_auto",
+    });
+
+    user.avatarUrl = url;
+    user.avatarPublicId = publicId;
+    await user.save();
+
+    // Only once the replacement is safely stored. Best-effort, as ever.
+    if (previousId) void deleteImage(previousId);
+
+    res.json(publicUser(user));
+  } catch (e) {
+    console.error("[auth] avatar upload failed:", e instanceof Error ? e.message : e);
+    res.status(500).json({ error: "could not upload that image" });
+  }
+});
+
+/** Remove the profile picture, deleting the uploaded file if there was one. */
+router.delete("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    const previousId = user.avatarPublicId;
+    user.avatarUrl = "";
+    user.avatarPublicId = "";
+    await user.save();
+
+    if (previousId) void deleteImage(previousId);
+
+    res.json(publicUser(user));
+  } catch {
+    res.status(500).json({ error: "could not remove the image" });
+  }
 });
 
 export default router;

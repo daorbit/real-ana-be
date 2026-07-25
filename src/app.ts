@@ -17,6 +17,11 @@ const app = express();
 // the forwarding headers it sets, otherwise every caller looks like one IP and
 // per-address limits would be meaningless.
 app.set("trust proxy", true);
+// Avatar uploads carry a base64 image in the JSON body, which is far past the
+// 100kb default. The larger limit is scoped to that one path rather than applied
+// globally — every other endpoint takes small JSON, and a generous body limit on
+// all of them is free memory for anyone who wants to spend ours.
+app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
 app.use(express.json());
 // The tracker sends beacons as text/plain (an application/json beacon would
 // trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.

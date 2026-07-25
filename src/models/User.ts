@@ -27,8 +27,14 @@ const userSchema = new Schema(
     firstName: { type: String, trim: true, default: "" },
     lastName: { type: String, trim: true, default: "" },
     mobile: { type: String, trim: true, default: "" },
-    /** Remote image URL. There is no upload path yet — this is set by hand. */
+    /** Remote image URL — either uploaded to Cloudinary, pasted by hand, or from Google. */
     avatarUrl: { type: String, trim: true, default: "" },
+    /**
+     * Cloudinary's handle for an uploaded avatar, so replacing one can delete
+     * the file it supersedes. Empty when the avatar came from a pasted URL or
+     * from Google, where there is nothing of ours to clean up.
+     */
+    avatarPublicId: { type: String, trim: true, default: "" },
     /** BCP 47 tag ("en-GB"). Empty means "follow the browser". */
     dateLocale: { type: String, trim: true, default: "" },
     /** IANA zone ("Asia/Kolkata"). Empty means "follow the browser". */
