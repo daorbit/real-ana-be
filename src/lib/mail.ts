@@ -290,8 +290,8 @@ const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="36" height="36" alt="Quantal
  */
 export function button(label: string, href: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0"><tr>
-    <td style="background:#10b981;border-radius:9px">
-      <a href="${href}" style="display:inline-block;padding:12px 26px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:-0.1px">${label}</a>
+    <td align="center" style="background:#047857;border-radius:9px;mso-padding-alt:14px 28px">
+      <a href="${href}" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;line-height:1;color:#ffffff !important;text-decoration:none !important;letter-spacing:-0.1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">${label}</a>
     </td>
   </tr></table>`;
 }
@@ -499,13 +499,16 @@ export function inviteHtml(
       ${INVITE_FEATURES.map(featureRow).join("")}
     </table>
 
-    ${action}
+    <!-- The caveats sit above the button, not below it. A paragraph after the
+         call to action competes with the one thing this message is asking for,
+         and the demo link in particular is an invitation to not sign up. -->
+    <p style="margin:6px 0 0;font-size:13px;line-height:1.65;color:#8b929e">
+      Free to start, and the tracker is one line — or try the
+      <a href="${escapeAttr(LINKS.site)}" style="color:#34d399;text-decoration:none;font-weight:500">live demo</a>
+      first, which needs no account at all.
+    </p>
 
-    <p style="margin:22px 0 0;font-size:13px;line-height:1.65;color:#8b929e">
-      Free to start, and the tracker is one line. If you'd rather see it working
-      first, the <a href="${escapeAttr(LINKS.site)}" style="color:#34d399;text-decoration:none;font-weight:500">live demo</a>
-      needs no account at all.
-    </p>`,
+    ${action}`,
     // These people do not have an account, so the default footer line would be
     // untrue — and untrue fine print on a cold email is how a domain gets
     // flagged.
