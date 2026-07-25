@@ -1,6 +1,9 @@
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
+import { randomInt } from "node:crypto";
 import { User } from "../models/User.js";
+import { PendingSignup } from "../models/PendingSignup.js";
+import { mailConfigured, sendOne, sendOtpEmail } from "../lib/mail.js";
 import { getDemoDailyLimit } from "../models/AppSetting.js";
 import { tryStartDemo } from "../lib/demo-limit.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
@@ -90,6 +93,40 @@ function signupError(body: {
   return null;
 }
 
+/* ---------------------------- signup with OTP ----------------------------- */
+
+/** How long a code stays valid. Long enough for a slow inbox, short enough to matter. */
+const OTP_TTL_MINUTES = 10;
+/** Wrong guesses allowed before the pending signup is destroyed outright. */
+const OTP_MAX_ATTEMPTS = 5;
+/** Codes per pending signup, counting the first. Bounds mail sent per address. */
+const OTP_MAX_SENDS = 5;
+/** Minimum gap between codes, so "resend" can't be leaned on. */
+const OTP_RESEND_GAP_MS = 60 * 1000;
+
+/**
+ * A six-digit code, from the cryptographic generator.
+ *
+ * `Math.random` is predictable enough to be guessable given a few samples,
+ * which for a credential — however short-lived — is the wrong trade. The
+ * modulo bias across 000000–999999 is negligible at this range.
+ */
+function generateOtp(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+/**
+ * Start a signup: stash it as pending and email a code.
+ *
+ * No user row is created here. That is the point of the flow — an address that
+ * is never verified leaves nothing behind, so it stays available to whoever
+ * actually owns it.
+ *
+ * The response is deliberately the same whether or not the email is already
+ * registered. Differing here would turn signup into an oracle for "does this
+ * person have an account", which is exactly the enumeration this endpoint
+ * should not offer.
+ */
 router.post("/signup", async (req, res) => {
   try {
     const { email, password, name } = req.body ?? {};
@@ -97,26 +134,190 @@ router.post("/signup", async (req, res) => {
     const invalid = signupError(req.body ?? {});
     if (invalid) return res.status(400).json({ error: invalid });
 
-    const exists = await User.findOne({ email: email.toLowerCase() });
-    if (exists) return res.status(409).json({ error: "email already registered" });
-    const passwordHash = await bcrypt.hash(password, 10);
-    // `role` is deliberately not read from the body — a signup cannot ask to be
-    // an admin. The schema default makes every new account a plain user.
-    // Signup collects one name field; split it so the settings form opens with
-    // the parts already filled rather than making everyone retype them.
+    if (!mailConfigured()) {
+      return res.status(503).json({
+        error: "email verification is unavailable right now — please try again later",
+      });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
     const cleanName = String(name).trim();
     const parts = cleanName.split(/\s+/);
+
+    const taken = await User.findOne({ email: cleanEmail });
+    if (taken) {
+      // Tell the real owner, and only the real owner, that the address is in
+      // use — over email, where an enumerating caller cannot read it. The HTTP
+      // response below is identical either way.
+      try {
+        await sendOne(
+          { email: cleanEmail, name: taken.name },
+          "Someone tried to sign up with your email",
+          `Hi ${taken.name},\n\nSomeone just tried to create a Quantalog account with this email address, but you already have one.\n\nIf that was you, log in instead — or reset your password if you've forgotten it.\n\nIf it wasn't, you can safely ignore this message. Nothing about your account has changed.`,
+        );
+      } catch {
+        // The caller must not learn that this branch was taken, so a mail
+        // failure here is logged and swallowed rather than surfaced.
+        console.warn(`[signup] could not send already-registered notice to ${cleanEmail}`);
+      }
+      return res.status(202).json({ pending: true, email: cleanEmail, expiresInMinutes: OTP_TTL_MINUTES });
+    }
+
+    const code = generateOtp();
+    const [passwordHash, codeHash] = await Promise.all([
+      bcrypt.hash(password, 10),
+      bcrypt.hash(code, 10),
+    ]);
+
+    // Restarting a signup replaces the previous pending attempt wholesale —
+    // new password, new name, new code, attempts back to zero. `upsert` keeps
+    // that a single write, and the unique index on email makes it safe.
+    await PendingSignup.findOneAndUpdate(
+      { email: cleanEmail },
+      {
+        email: cleanEmail,
+        passwordHash,
+        name: cleanName,
+        firstName: parts[0] ?? "",
+        lastName: parts.slice(1).join(" "),
+        codeHash,
+        expiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000),
+        attempts: 0,
+        sends: 1,
+        lastSentAt: new Date(),
+        createdAt: new Date(),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    try {
+      await sendOtpEmail({ email: cleanEmail, name: cleanName }, code, OTP_TTL_MINUTES);
+    } catch (e) {
+      // Nothing was created but the pending record, and it is useless without a
+      // delivered code — drop it so a retry starts clean.
+      await PendingSignup.deleteOne({ email: cleanEmail });
+      console.error("[signup] otp send failed:", e instanceof Error ? e.message : e);
+      return res.status(502).json({ error: "could not send the verification email — check the address and try again" });
+    }
+
+    res.status(202).json({ pending: true, email: cleanEmail, expiresInMinutes: OTP_TTL_MINUTES });
+  } catch {
+    res.status(500).json({ error: "signup failed" });
+  }
+});
+
+/**
+ * Finish a signup by proving the code, creating the real account.
+ *
+ * This is the only path that writes to `users` for a new signup, so a token
+ * only ever exists for an address someone demonstrably reads.
+ */
+router.post("/signup/verify", async (req, res) => {
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    const code = String(req.body?.code ?? "").trim();
+
+    if (!email || !code) return res.status(400).json({ error: "email and code required" });
+    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "enter the 6-digit code" });
+
+    const pending = await PendingSignup.findOne({ email });
+    // An expired record is treated as absent: the TTL sweep is periodic, so a
+    // stale document can outlive its own deadline by a few minutes.
+    if (!pending || pending.expiresAt.getTime() < Date.now()) {
+      if (pending) await pending.deleteOne();
+      return res.status(400).json({ error: "that code has expired — start again to get a new one", restart: true });
+    }
+
+    const ok = await bcrypt.compare(code, pending.codeHash);
+    if (!ok) {
+      pending.attempts += 1;
+      // Past the cap the record goes, rather than sitting there absorbing
+      // guesses — six digits is a small enough space that an unbounded attempt
+      // count is the whole vulnerability.
+      if (pending.attempts >= OTP_MAX_ATTEMPTS) {
+        await pending.deleteOne();
+        return res.status(429).json({ error: "too many incorrect codes — start again to get a new one", restart: true });
+      }
+      await pending.save();
+      return res.status(400).json({
+        error: "that code isn't right",
+        attemptsLeft: OTP_MAX_ATTEMPTS - pending.attempts,
+      });
+    }
+
+    // Between sending the code and verifying it, the address could have been
+    // claimed by another signup that finished first.
+    const taken = await User.findOne({ email });
+    if (taken) {
+      await pending.deleteOne();
+      return res.status(409).json({ error: "that email was just registered — try logging in" });
+    }
+
+    // `role` is deliberately not read from the pending record or the body — a
+    // signup cannot ask to be an admin. The schema default applies.
     const user = await User.create({
-      email: String(email).trim(),
-      passwordHash,
-      name: cleanName,
-      firstName: parts[0] ?? "",
-      lastName: parts.slice(1).join(" "),
+      email: pending.email,
+      passwordHash: pending.passwordHash,
+      name: pending.name,
+      firstName: pending.firstName,
+      lastName: pending.lastName,
     });
+    await pending.deleteOne();
+
     const token = signToken(user.id);
     res.status(201).json({ token, user: publicUser(user) });
   } catch {
-    res.status(500).json({ error: "signup failed" });
+    res.status(500).json({ error: "verification failed" });
+  }
+});
+
+/**
+ * Send a fresh code for a signup already in progress.
+ *
+ * A new code replaces the old one and resets the attempt counter — otherwise a
+ * resend would inherit a nearly-exhausted budget and fail for no reason the
+ * user can see.
+ */
+router.post("/signup/resend", async (req, res) => {
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "email required" });
+
+    const pending = await PendingSignup.findOne({ email });
+    if (!pending) {
+      return res.status(404).json({ error: "no signup in progress for that address", restart: true });
+    }
+
+    const since = Date.now() - new Date(pending.lastSentAt).getTime();
+    if (since < OTP_RESEND_GAP_MS) {
+      const seconds = Math.ceil((OTP_RESEND_GAP_MS - since) / 1000);
+      res.set("Retry-After", String(seconds));
+      return res.status(429).json({ error: `please wait ${seconds}s before asking for another code`, retryInSeconds: seconds });
+    }
+
+    if (pending.sends >= OTP_MAX_SENDS) {
+      await pending.deleteOne();
+      return res.status(429).json({ error: "too many codes requested — start again", restart: true });
+    }
+
+    const code = generateOtp();
+    pending.codeHash = await bcrypt.hash(code, 10);
+    pending.expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+    pending.attempts = 0;
+    pending.sends += 1;
+    pending.lastSentAt = new Date();
+    await pending.save();
+
+    try {
+      await sendOtpEmail({ email: pending.email, name: pending.name }, code, OTP_TTL_MINUTES);
+    } catch (e) {
+      console.error("[signup] otp resend failed:", e instanceof Error ? e.message : e);
+      return res.status(502).json({ error: "could not send the verification email — try again in a moment" });
+    }
+
+    res.json({ ok: true, expiresInMinutes: OTP_TTL_MINUTES });
+  } catch {
+    res.status(500).json({ error: "could not resend the code" });
   }
 });
 

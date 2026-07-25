@@ -157,3 +157,61 @@ function textToHtml(text: string): string {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Send one message and report whether it left.
+ *
+ * Separate from `sendBulk` because the caller here is a user waiting on a page:
+ * a failure needs to surface as a failure, not be buried in a results array.
+ */
+export async function sendOne(
+  to: Recipient,
+  subject: string,
+  text: string,
+  html?: string,
+): Promise<void> {
+  await getTransport().sendMail({
+    from: mailFrom(),
+    to: to.name ? `"${to.name}" <${to.email}>` : to.email,
+    subject,
+    text,
+    html: html ?? textToHtml(text),
+  });
+}
+
+/**
+ * The signup verification email.
+ *
+ * The code is repeated in the subject line so it is readable from a
+ * notification without opening anything, and set large and spaced in the body
+ * because the common case is reading it off a phone while typing on a laptop.
+ */
+export async function sendOtpEmail(
+  to: Recipient,
+  code: string,
+  minutes: number,
+): Promise<void> {
+  const name = to.name?.trim() || to.email.split("@")[0];
+
+  const text = `Hi ${name},
+
+Your Quantalog verification code is ${code}
+
+It expires in ${minutes} minutes. Enter it on the signup page to finish creating your account.
+
+If you didn't try to sign up, you can ignore this email — no account has been created.`;
+
+  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.6;color:#1f2933;max-width:480px">
+  <p style="margin:0 0 20px">Hi ${escapeHtml(name)},</p>
+  <p style="margin:0 0 12px">Your Quantalog verification code is:</p>
+  <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;color:#0b7a5a">${code}</div>
+  <p style="margin:0 0 20px;color:#616e7c">It expires in ${minutes} minutes.</p>
+  <p style="margin:0;color:#616e7c;font-size:13px">If you didn't try to sign up, you can ignore this email — no account has been created.</p>
+</div>`;
+
+  await sendOne(to, `${code} is your Quantalog verification code`, text, html);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
