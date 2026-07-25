@@ -8,7 +8,7 @@ import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
-import { mailConfigured, mailFrom, sendBulk, broadcastHtml, personalize, forBrowser } from "../lib/mail.js";
+import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
@@ -253,12 +253,70 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
     if (target) sample = { email: target.email, name: target.name };
   }
 
+  const cta = readCta(req.body?.cta);
+  const text = personalize(body, sample);
+  const html =
+    readLayout(req.body?.layout) === "invite" && cta
+      ? inviteHtml(text, cta)
+      : broadcastHtml(text, cta);
+
   res.json({
     subject: personalize(subject, sample),
-    html: forBrowser(broadcastHtml(personalize(body, sample), readCta(req.body?.cta))),
+    html: forBrowser(html),
     sampleName: sample.name,
   });
 });
+
+/** Only the layouts the renderer knows. Anything else falls back to plain text. */
+function readLayout(raw: unknown): "plain" | "invite" {
+  return raw === "invite" ? "invite" : "plain";
+}
+
+/**
+ * Parse hand-entered recipients.
+ *
+ * Accepts either a bare address or `Name <address>`, so an admin can paste from
+ * a contact list and still get `{{name}}` filled in. Without a name, the
+ * address's local part is used — `personalize` would do the same, but doing it
+ * here means the composer's preview shows what will actually be sent.
+ *
+ * Deliberately strict about the address and permissive about everything else:
+ * an unparseable address is a bounce and a small hit to sender reputation, which
+ * is worth one clear error before the send rather than a silent failure after.
+ */
+function parseAddresses(raw: unknown[]): {
+  valid: { email: string; name: string }[];
+  invalid: string[];
+} {
+  const valid: { email: string; name: string }[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of raw) {
+    const text = String(entry ?? "").trim();
+    if (!text) continue;
+
+    const angled = /^(.*?)<([^>]+)>$/.exec(text);
+    const name = angled ? angled[1].trim().replace(/^["']|["']$/g, "") : "";
+    const email = (angled ? angled[2] : text).trim().toLowerCase();
+
+    // Same deliberately-permissive shape the signup path uses: the only real
+    // authority on an address is a delivered message.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 254) {
+      invalid.push(text.slice(0, 80));
+      continue;
+    }
+
+    // Sending the same person two copies of an invitation is worse than sending
+    // none, so duplicates are collapsed rather than rejected.
+    if (seen.has(email)) continue;
+    seen.add(email);
+
+    valid.push({ email, name: name || email.split("@")[0] });
+  }
+
+  return { valid, invalid };
+}
 
 /** A caller-supplied button, accepted only when both halves are usable. */
 function readCta(raw: unknown): { label: string; href: string } | undefined {
@@ -329,9 +387,21 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
   if (!body) return res.status(400).json({ error: "body is required" });
 
   const userIds: unknown = req.body?.userIds;
-  let recipients: { id: string; email: string; name: string }[];
+  const emails: unknown = req.body?.emails;
+  let recipients: { id?: string; email: string; name: string }[];
 
-  if (Array.isArray(userIds) && userIds.length) {
+  if (Array.isArray(emails) && emails.length) {
+    // Hand-entered addresses, for inviting people who have no account. Parsed
+    // and validated here because nothing in the database vouches for them.
+    const parsed = parseAddresses(emails);
+    if (parsed.invalid.length) {
+      return res.status(400).json({
+        error: `not a valid email address: ${parsed.invalid.slice(0, 5).join(", ")}`,
+        invalid: parsed.invalid,
+      });
+    }
+    recipients = parsed.valid;
+  } else if (Array.isArray(userIds) && userIds.length) {
     const users = await User.find({ _id: { $in: userIds } }).select("email name");
     recipients = users.map((u) => ({ id: u.id, email: u.email, name: u.name }));
   } else {
@@ -349,7 +419,13 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
     });
   }
 
-  const results = await sendBulk(recipients, subject, body, readCta(req.body?.cta));
+  const results = await sendBulk(
+    recipients,
+    subject,
+    body,
+    readCta(req.body?.cta),
+    readLayout(req.body?.layout),
+  );
   const sent = results.filter((r) => r.ok).length;
 
   console.log(
@@ -392,6 +468,7 @@ router.post("/email/test", async (req: AuthedRequest, res: Response) => {
     `[test] ${subject}`,
     body,
     readCta(req.body?.cta),
+    readLayout(req.body?.layout),
   );
 
   if (!result.ok) return res.status(502).json({ error: result.error ?? "send failed" });

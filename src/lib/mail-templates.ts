@@ -16,10 +16,23 @@ export type MailTemplate = {
   label: string;
   /** One line on what it's for, so the right one is picked without opening it. */
   hint: string;
-  /** The segment this is written for; the composer preselects it. */
-  segment: "all" | "not-installed" | "no-sites" | "installed";
+  /**
+   * The segment this is written for; the composer preselects it.
+   *
+   * "custom" means the message is not addressed at existing accounts at all —
+   * the composer switches to hand-entered addresses instead of a user list.
+   */
+  segment: "all" | "not-installed" | "no-sites" | "installed" | "custom";
   subject: string;
   body: string;
+  /**
+   * Which body layout the renderer should use.
+   *
+   * Templates are plain text by default. "invite" renders the designed feature
+   * list under the author's opening — worth it for a cold introduction, wrong
+   * for a message to someone who already uses the product.
+   */
+  layout?: "plain" | "invite";
   /**
    * The action the message is asking for.
    *
@@ -93,6 +106,24 @@ Point it at any page and it checks technical issues, Core Web Vitals from real v
 
 It's under SEO in your dashboard, and it works on any site you've added.`,
     cta: { label: "Run an audit", href: `${APP_URL}/app/seo` },
+  },
+  {
+    id: "invite",
+    label: "Invitation",
+    hint: "Introduce Quantalog to someone who doesn't have an account",
+    // Not an existing-user segment: this is addressed at people who are not in
+    // the database, so the composer collects addresses by hand.
+    segment: "custom",
+    // The feature list and closing note come from the renderer; the body here is
+    // only the opening, which is what an admin should be personalising.
+    layout: "invite",
+    subject: "Analytics without the cookie banner",
+    body: `Hi {{name}},
+
+I thought Quantalog might be useful to you.
+
+It's real-time web analytics that needs one script tag and no consent banner — built because the alternatives were either heavyweight and slow, or priced for companies with a data team.`,
+    cta: { label: "Start free", href: `${APP_URL}/signup` },
   },
 ];
 

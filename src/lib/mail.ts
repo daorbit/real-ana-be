@@ -109,6 +109,13 @@ export async function sendBulk(
   subject: string,
   body: string,
   cta?: { label: string; href: string },
+  /**
+   * Which body layout to render.
+   *
+   * "invite" swaps the plain-text renderer for the designed feature list, for
+   * the one template that goes to people who have never heard of the product.
+   */
+  layout: "plain" | "invite" = "plain",
 ): Promise<SendResult[]> {
   const transport = getTransport();
   const from = mailFrom();
@@ -122,7 +129,13 @@ export async function sendBulk(
         to: person.name ? `"${person.name}" <${person.email}>` : person.email,
         subject: personalize(subject, person),
         text,
-        html: broadcastHtml(text, cta),
+        // The invite layout needs a button to be worth sending — its whole
+        // purpose is getting someone to the signup page — so it falls back to
+        // the plain renderer rather than shipping a feature list with no way in.
+        html:
+          layout === "invite" && cta
+            ? inviteHtml(text, cta)
+            : broadcastHtml(text, cta),
         attachments: [LOGO_ATTACHMENT],
       });
       results.push({ email: person.email, ok: true });
@@ -256,7 +269,17 @@ export function button(label: string, href: string): string {
   </tr></table>`;
 }
 
-export function shell(inner: string): string {
+/**
+ * Why this message arrived, in the footer's fine print.
+ *
+ * An invite goes to someone who does not have an account, so the default line
+ * would be a plain falsehood — and "you're receiving this because you have an
+ * account" on a cold email is exactly the kind of thing that gets a sender
+ * marked as spam. Callers sending to non-users pass their own reason.
+ */
+const DEFAULT_REASON = "You're receiving this because you have a Quantalog account.";
+
+export function shell(inner: string, reason: string = DEFAULT_REASON): string {
   return `<div style="background:#0b0c0f;padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:480px;margin:0 auto">
 
@@ -290,7 +313,7 @@ export function shell(inner: string): string {
 
     <tr><td style="padding:18px 8px 0;text-align:center">
       <p style="margin:0;font-size:11px;line-height:1.7;color:#5f6673">
-        You're receiving this because you have a Quantalog account.<br>
+        ${reason}<br>
         <a href="${LINKS.site}" style="color:#5f6673;text-decoration:underline">quantalog.daorbit.in</a>
       </p>
     </td></tr>
@@ -349,6 +372,118 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
       : "";
 
   return shell(paragraphs + action);
+}
+
+/**
+ * The features an invite leads with.
+ *
+ * Condensed from the landing page's feature grid so the two cannot drift into
+ * saying different things. Six rather than nine: an invite is a first
+ * impression, and the tail of a nine-item list is read by nobody.
+ */
+const INVITE_FEATURES: { title: string; body: string }[] = [
+  {
+    title: "Live in 3 seconds",
+    body: "Visitors, pageviews and active sessions stream in as they happen — no overnight batch, no sampling.",
+  },
+  {
+    title: "Cookieless by design",
+    body: "Visitors are a rotating daily hash. Nothing persists in the browser, so no consent banner is required.",
+  },
+  {
+    title: "Sub-kilobyte tracker",
+    body: "One async script tag. React and Next route changes report themselves with zero extra code.",
+  },
+  {
+    title: "SEO audits built in",
+    body: "Lighthouse-backed audits on any page you track: meta tags, structured data, broken links, Core Web Vitals.",
+  },
+  {
+    title: "Dashboards you can share",
+    body: "Publish a read-only view at a link anyone can open. You choose which panels are visible.",
+  },
+  {
+    title: "An API, not just a UI",
+    body: "Every number in the dashboard is reachable over REST with an API key. Build your own views, or resell them.",
+  },
+];
+
+/**
+ * A feature as a table row.
+ *
+ * An emerald dot rather than an icon font or an image per feature: six more
+ * CID attachments would bloat every invite, and icon fonts do not render in
+ * most mail clients.
+ */
+function featureRow({ title, body }: { title: string; body: string }): string {
+  return `<tr>
+    <td style="padding:0 0 18px;vertical-align:top;width:18px">
+      <div style="width:7px;height:7px;border-radius:50%;background:#10b981;margin-top:6px"></div>
+    </td>
+    <td style="padding:0 0 18px;vertical-align:top">
+      <p style="margin:0;font-size:14px;font-weight:600;color:#e8eaee;letter-spacing:-0.1px">${escapeHtml(title)}</p>
+      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:#8b929e">${escapeHtml(body)}</p>
+    </td>
+  </tr>`;
+}
+
+/**
+ * The invitation: what Quantalog is, what it does, and one button.
+ *
+ * This is the one message with a designed body rather than an admin's plain
+ * text. It goes to people who have never heard of the product, where a wall of
+ * prose is deleted unread and a feature list they can skim is not — so the
+ * layout is doing real work here, unlike in `broadcastHtml` where it would only
+ * be putting words in the author's mouth.
+ *
+ * `intro` is the admin's own opening, kept editable so an invite can be
+ * addressed to a specific person or context; everything below it is fixed.
+ */
+export function inviteHtml(
+  intro: string,
+  cta: { label: string; href: string }
+): string {
+  const paragraphs = escapeHtml(intro)
+    .split(/\n{2,}/)
+    .map((block, i) => {
+      const html = block.replace(/\n/g, "<br>");
+      const style =
+        i === 0
+          ? "margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px"
+          : "margin:0 0 14px;font-size:15px;line-height:1.7;color:#a8aeb8";
+      return `<p style="${style}">${html}</p>`;
+    })
+    .join("");
+
+  const action = /^https?:\/\//i.test(cta.href)
+    ? button(escapeHtml(cta.label), escapeAttr(cta.href))
+    : "";
+
+  return shell(
+    `${paragraphs}
+
+    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
+
+    <p style="margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#5f6673">
+      What you get
+    </p>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+      ${INVITE_FEATURES.map(featureRow).join("")}
+    </table>
+
+    ${action}
+
+    <p style="margin:22px 0 0;font-size:13px;line-height:1.65;color:#8b929e">
+      Free to start, and the tracker is one line. If you'd rather see it working
+      first, the <a href="${escapeAttr(LINKS.site)}" style="color:#34d399;text-decoration:none;font-weight:500">live demo</a>
+      needs no account at all.
+    </p>`,
+    // These people do not have an account, so the default footer line would be
+    // untrue — and untrue fine print on a cold email is how a domain gets
+    // flagged.
+    "You received this because someone thought Quantalog would be useful to you."
+  );
 }
 
 /** Escape a URL for use inside a double-quoted HTML attribute. */
