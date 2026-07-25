@@ -206,17 +206,22 @@ function readPanels(raw: unknown): Record<string, boolean> {
   return out;
 }
 
-/** Current share state for a workspace. */
-router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-  res.json({
+/** The owner-facing share state, assembled the same way from GET and PUT. */
+function shareState(ws: NonNullable<Awaited<ReturnType<typeof Workspace.findOne>>>) {
+  return {
     enabled: Boolean(ws.get("shareEnabled")),
     token: ws.get("shareToken") ?? null,
     panels: readPanels(ws.get("sharePanels")),
     views: ws.get("shareViews") ?? 0,
     lastViewedAt: ws.get("shareLastViewedAt") ?? null,
-  });
+  };
+}
+
+/** Current share state for a workspace. */
+router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  res.json(shareState(ws));
 });
 
 /**
@@ -252,13 +257,7 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   }
   await ws.save();
 
-  res.json({
-    enabled: Boolean(ws.get("shareEnabled")),
-    token: ws.get("shareToken") ?? null,
-    panels: readPanels(ws.get("sharePanels")),
-    views: ws.get("shareViews") ?? 0,
-    lastViewedAt: ws.get("shareLastViewedAt") ?? null,
-  });
+  res.json(shareState(ws));
 });
 
 // Install status for a site — has the tracking script ever reported?
