@@ -8,6 +8,7 @@ import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
+import { mailConfigured, mailFrom, sendBulk } from "../lib/mail.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -208,5 +209,225 @@ router.put("/demo/limit", async (req: AuthedRequest, res: Response) => {
   const limit = await setDemoDailyLimit(requested);
   res.json({ limit });
 });
+
+/* --------------------------------- email ---------------------------------- */
+
+/** Hard ceiling on one send, well under Gmail's daily cap for a free account. */
+const MAX_RECIPIENTS = 200;
+
+/**
+ * Whether email can be sent at all, and from where.
+ *
+ * The composer asks before it opens so it can explain a missing app password
+ * up front, rather than letting an admin write a message and only then
+ * discover it can't go anywhere.
+ */
+router.get("/email/status", async (_req: AuthedRequest, res: Response) => {
+  res.json({ configured: mailConfigured(), from: mailFrom() });
+});
+
+/**
+ * The audiences an admin can send to, with a count for each.
+ *
+ * "Not installed" is the one that motivated this: an account that signed up,
+ * has a site, and has never sent an event is someone who stopped at the
+ * snippet. Installation isn't a stored flag anywhere — it's inferred from
+ * whether any event has ever arrived for the account's sites — so the segments
+ * are computed here rather than read off a column.
+ */
+router.get("/email/segments", async (_req: AuthedRequest, res: Response) => {
+  const segments = await Promise.all(
+    (["all", "not-installed", "no-sites", "installed"] as const).map(async (id) => ({
+      id,
+      label: SEGMENT_LABELS[id],
+      description: SEGMENT_DESCRIPTIONS[id],
+      count: (await resolveSegment(id)).length,
+    })),
+  );
+  res.json({ segments });
+});
+
+/**
+ * Who a segment resolves to, so the composer can show the actual list before
+ * anything is sent. Sending to people is not undoable; seeing the names first
+ * is what makes a wrong pick recoverable.
+ */
+router.get("/email/recipients", async (req: AuthedRequest, res: Response) => {
+  const segment = String(req.query.segment ?? "all");
+  if (!isSegment(segment)) return res.status(400).json({ error: "unknown segment" });
+  res.json({ recipients: await resolveSegment(segment) });
+});
+
+/**
+ * Send a message to a segment, or to a hand-picked set of user ids.
+ *
+ * Explicit `userIds` win over the segment: the composer lets an admin start
+ * from a segment and then untick individuals, and the resulting list is what
+ * gets sent — not the segment re-resolved server-side, which could have
+ * shifted between preview and send.
+ *
+ * Sending is sequential and can take a while for a large list, so the response
+ * is a per-recipient tally rather than a bare ok — a partial failure is normal
+ * with SMTP and the admin needs to see which addresses bounced.
+ */
+router.post("/email/send", async (req: AuthedRequest, res: Response) => {
+  if (!mailConfigured()) {
+    return res.status(503).json({
+      error: "email is not configured — set SMTP_USER and SMTP_PASS",
+    });
+  }
+
+  const subject = String(req.body?.subject ?? "").trim();
+  const body = String(req.body?.body ?? "").trim();
+  if (!subject) return res.status(400).json({ error: "subject is required" });
+  if (!body) return res.status(400).json({ error: "body is required" });
+
+  const userIds: unknown = req.body?.userIds;
+  let recipients: { id: string; email: string; name: string }[];
+
+  if (Array.isArray(userIds) && userIds.length) {
+    const users = await User.find({ _id: { $in: userIds } }).select("email name");
+    recipients = users.map((u) => ({ id: u.id, email: u.email, name: u.name }));
+  } else {
+    const segment = String(req.body?.segment ?? "");
+    if (!isSegment(segment)) return res.status(400).json({ error: "unknown segment" });
+    recipients = await resolveSegment(segment);
+  }
+
+  if (!recipients.length) {
+    return res.status(400).json({ error: "no recipients matched" });
+  }
+  if (recipients.length > MAX_RECIPIENTS) {
+    return res.status(400).json({
+      error: `too many recipients (${recipients.length}) — the limit is ${MAX_RECIPIENTS} per send`,
+    });
+  }
+
+  const results = await sendBulk(recipients, subject, body);
+  const sent = results.filter((r) => r.ok).length;
+
+  console.log(
+    `[admin] ${req.userId} emailed ${sent}/${results.length} recipients — "${subject}"`,
+  );
+
+  res.json({
+    sent,
+    failed: results.length - sent,
+    // Only failures carry detail worth returning; a list of successful
+    // addresses is just the recipient list echoed back.
+    failures: results.filter((r) => !r.ok),
+  });
+});
+
+/**
+ * Send one message to the admin themselves, ignoring segments.
+ *
+ * A template with a broken `{{name}}` or a wrong tone is much cheaper to catch
+ * in your own inbox than in two hundred other people's.
+ */
+router.post("/email/test", async (req: AuthedRequest, res: Response) => {
+  if (!mailConfigured()) {
+    return res.status(503).json({
+      error: "email is not configured — set SMTP_USER and SMTP_PASS",
+    });
+  }
+
+  const subject = String(req.body?.subject ?? "").trim();
+  const body = String(req.body?.body ?? "").trim();
+  if (!subject || !body) {
+    return res.status(400).json({ error: "subject and body are required" });
+  }
+
+  const me = await User.findById(req.userId).select("email name");
+  if (!me) return res.status(404).json({ error: "user not found" });
+
+  const [result] = await sendBulk(
+    [{ email: me.email, name: me.name }],
+    `[test] ${subject}`,
+    body,
+  );
+
+  if (!result.ok) return res.status(502).json({ error: result.error ?? "send failed" });
+  res.json({ ok: true, email: me.email });
+});
+
+type SegmentId = "all" | "not-installed" | "no-sites" | "installed";
+
+const SEGMENT_LABELS: Record<SegmentId, string> = {
+  all: "Everyone",
+  "not-installed": "Signed up, script not installed",
+  "no-sites": "Signed up, no site added",
+  installed: "Actively tracking",
+};
+
+const SEGMENT_DESCRIPTIONS: Record<SegmentId, string> = {
+  all: "Every non-admin account.",
+  "not-installed": "Has added a site but no event has ever arrived for it.",
+  "no-sites": "Never got as far as adding a site.",
+  installed: "At least one site is reporting events.",
+};
+
+function isSegment(v: string): v is SegmentId {
+  return v === "all" || v === "not-installed" || v === "no-sites" || v === "installed";
+}
+
+/**
+ * Turn a segment into the accounts it covers.
+ *
+ * Admins are excluded from every segment — these are customer messages, and an
+ * admin receiving their own "you haven't installed the script yet" nudge is
+ * noise. The site and event lookups mirror the user-list route: sites resolve
+ * through the workspace, and events key off the public `siteId`.
+ */
+async function resolveSegment(
+  segment: SegmentId,
+): Promise<{ id: string; email: string; name: string }[]> {
+  const users = await User.find({ role: { $ne: "admin" } }).select("email name");
+  if (segment === "all") {
+    return users.map((u) => ({ id: u.id, email: u.email, name: u.name }));
+  }
+
+  const workspaces = await Workspace.find({
+    userId: { $in: users.map((u) => u._id) },
+  }).select("userId");
+  const ownerByWorkspace = new Map(
+    workspaces.map((w) => [String(w._id), String(w.userId)]),
+  );
+
+  const sites = await Site.find({
+    workspaceId: { $in: [...ownerByWorkspace.keys()] },
+  }).select("siteId workspaceId");
+
+  const ownerBySiteId = new Map<string, string>();
+  const usersWithSites = new Set<string>();
+  for (const s of sites) {
+    const owner = ownerByWorkspace.get(String(s.workspaceId));
+    if (!owner) continue;
+    ownerBySiteId.set(String(s.siteId), owner);
+    usersWithSites.add(owner);
+  }
+
+  // Only which sites have ever reported matters here, not how much — so this
+  // asks for the distinct siteIds present in the events collection rather than
+  // counting rows.
+  const reporting = await Event.distinct("siteId", {
+    siteId: { $in: [...ownerBySiteId.keys()] },
+  });
+  const usersWithEvents = new Set<string>();
+  for (const siteId of reporting) {
+    const owner = ownerBySiteId.get(String(siteId));
+    if (owner) usersWithEvents.add(owner);
+  }
+
+  const matches = (id: string) => {
+    if (segment === "no-sites") return !usersWithSites.has(id);
+    if (segment === "not-installed") return usersWithSites.has(id) && !usersWithEvents.has(id);
+    return usersWithEvents.has(id); // "installed"
+  };
+
+  return users
+    .filter((u) => matches(u.id))
+    .map((u) => ({ id: u.id, email: u.email, name: u.name }));
+}
 
 export default router;
