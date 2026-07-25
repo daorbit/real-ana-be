@@ -221,10 +221,22 @@ router.post("/signup/verify", async (req, res) => {
     if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "enter the 6-digit code" });
 
     const pending = await PendingSignup.findOne({ email });
-    // An expired record is treated as absent: the TTL sweep is periodic, so a
-    // stale document can outlive its own deadline by a few minutes.
-    if (!pending || pending.expiresAt.getTime() < Date.now()) {
-      if (pending) await pending.deleteOne();
+
+    // No pending record is a different situation from an expired one, and
+    // saying "expired" for it sends people to resend a code that was never
+    // sent. It happens when the address is already registered (signup answers
+    // identically either way, by design) or when the signup was never started.
+    if (!pending) {
+      return res.status(400).json({
+        error: "no signup is in progress for that address — it may already be registered, so try logging in",
+        restart: true,
+      });
+    }
+
+    // The TTL sweep is periodic, so a stale document can outlive its own
+    // deadline by a few minutes; the explicit check is what actually enforces it.
+    if (pending.expiresAt.getTime() < Date.now()) {
+      await pending.deleteOne();
       return res.status(400).json({ error: "that code has expired — start again to get a new one", restart: true });
     }
 

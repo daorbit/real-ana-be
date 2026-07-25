@@ -191,27 +191,57 @@ export async function sendOtpEmail(
   code: string,
   minutes: number,
 ): Promise<void> {
-  const name = to.name?.trim() || to.email.split("@")[0];
-
-  const text = `Hi ${name},
-
-Your Quantalog verification code is ${code}
+  const text = `Your Quantalog verification code is ${code}
 
 It expires in ${minutes} minutes. Enter it on the signup page to finish creating your account.
 
 If you didn't try to sign up, you can ignore this email — no account has been created.`;
 
-  const html = `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.6;color:#1f2933;max-width:480px">
-  <p style="margin:0 0 20px">Hi ${escapeHtml(name)},</p>
-  <p style="margin:0 0 12px">Your Quantalog verification code is:</p>
-  <div style="font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 0;color:#0b7a5a">${code}</div>
-  <p style="margin:0 0 20px;color:#616e7c">It expires in ${minutes} minutes.</p>
-  <p style="margin:0;color:#616e7c;font-size:13px">If you didn't try to sign up, you can ignore this email — no account has been created.</p>
-</div>`;
-
-  await sendOne(to, `${code} is your Quantalog verification code`, text, html);
+  await sendOne(to, `${code} is your Quantalog verification code`, text, otpHtml(code, minutes));
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+ 
+function otpHtml(code: string, minutes: number): string {
+  // The wordmark from the app sidebar. Sized in the SVG itself because several
+  // clients ignore width/height attributes on inline SVG.
+  const logo = `<svg width="30" height="30" viewBox="0 0 36 36" fill="none" style="display:block">
+    <defs><linearGradient id="q" x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
+    </linearGradient></defs>
+    <rect x="1" y="1" width="34" height="34" rx="11" fill="url(#q)"/>
+    <path d="M8 19h4.2l2.3-7.5 4 15 2.6-11 1.7 3.5H28" stroke="#fff" stroke-width="2.4"
+      stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </svg>`;
+
+  return `<div style="background:#f6f7f9;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:440px;margin:0 auto">
+    <tr><td style="background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:32px">
+
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="padding-right:9px;vertical-align:middle">${logo}</td>
+        <td style="vertical-align:middle;font-size:19px;font-weight:700;color:#111827;letter-spacing:-0.2px">Quantalog<span style="color:#10b981">.</span></td>
+      </tr></table>
+
+      <p style="margin:28px 0 0;font-size:16px;font-weight:600;color:#111827">Verify your email address</p>
+      <p style="margin:8px 0 0;font-size:14px;line-height:1.6;color:#6b7280">
+        Enter this code on the signup page to finish creating your account.
+      </p>
+
+      <div style="margin:24px 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;text-align:center">
+        <div style="font-size:32px;font-weight:700;letter-spacing:9px;color:#111827;font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
+      </div>
+
+      <p style="margin:0;font-size:13px;color:#6b7280">
+        This code expires in ${minutes} minutes.
+      </p>
+
+      <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #f3f4f6">
+        <p style="margin:0;font-size:12px;line-height:1.6;color:#9ca3af">
+          Didn't try to sign up? You can ignore this email — no account has been created.
+        </p>
+      </div>
+
+    </td></tr>
+  </table>
+</div>`;
 }
