@@ -246,7 +246,16 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
 
   // Preview against a real recipient when one is named, so the personalisation
   // is checked against the name that will actually be substituted.
-  let sample = { email: "someone@example.com", name: "Alex Morgan" };
+  //
+  // `anonymous` previews the other case: a bare address with no name, which is
+  // what most invitations go to. Without it an admin would only ever see the
+  // flattering version and never notice that their opening line reads badly
+  // when there is no name to drop into it.
+  let sample: { email: string; name: string } =
+    req.body?.anonymous === true
+      ? { email: "someone@example.com", name: "" }
+      : { email: "someone@example.com", name: "Alex Morgan" };
+
   const userId = req.body?.userId;
   if (typeof userId === "string" && userId) {
     const target = await User.findById(userId).select("email name");
@@ -263,6 +272,8 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
   res.json({
     subject: personalize(subject, sample),
     html: forBrowser(html),
+    // Empty when previewing the no-name case; the composer says "someone with no
+    // name on file" rather than leaving a gap in its caption.
     sampleName: sample.name,
   });
 });
