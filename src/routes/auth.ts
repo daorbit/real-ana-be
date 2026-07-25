@@ -569,9 +569,11 @@ router.post("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedReques
       // The timestamp makes each upload a new asset rather than an overwrite, so
       // a CDN or browser holding the old URL never serves the old picture.
       publicId: `avatar-${user.id}-${Date.now()}`,
-      // Cropped square and quality-normalised at upload time: this is the only
-      // shape an avatar is ever shown in.
-      transformation: "c_fill,g_face,h_200,w_200/q_auto",
+      // The client crops to an exact 200×200 square before uploading, so this
+      // only normalises quality. A `c_fill,g_face` here would re-crop what the
+      // user deliberately framed, and a `w_200` would be a no-op. The bound
+      // stays as a backstop for anything posting to this endpoint directly.
+      transformation: "c_limit,h_200,w_200/q_auto",
     });
 
     user.avatarUrl = url;
