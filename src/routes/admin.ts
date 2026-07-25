@@ -8,7 +8,8 @@ import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
-import { mailConfigured, mailFrom, sendBulk } from "../lib/mail.js";
+import { mailConfigured, mailFrom, sendBulk, broadcastHtml, personalize, forBrowser } from "../lib/mail.js";
+import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -226,6 +227,51 @@ router.get("/email/status", async (_req: AuthedRequest, res: Response) => {
   res.json({ configured: mailConfigured(), from: mailFrom() });
 });
 
+/** The canned messages, served from one place so wording can't drift. */
+router.get("/email/templates", async (_req: AuthedRequest, res: Response) => {
+  res.json({ templates: MAIL_TEMPLATES });
+});
+
+/**
+ * Render a draft exactly as it will arrive.
+ *
+ * The same `broadcastHtml` and `personalize` the send path uses, so the preview
+ * cannot drift from the real thing — an admin writing `{{name}}` sees a name,
+ * not a placeholder, which is the difference between proofreading a message and
+ * guessing at one.
+ */
+router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
+  const subject = String(req.body?.subject ?? "");
+  const body = String(req.body?.body ?? "");
+
+  // Preview against a real recipient when one is named, so the personalisation
+  // is checked against the name that will actually be substituted.
+  let sample = { email: "someone@example.com", name: "Alex Morgan" };
+  const userId = req.body?.userId;
+  if (typeof userId === "string" && userId) {
+    const target = await User.findById(userId).select("email name");
+    if (target) sample = { email: target.email, name: target.name };
+  }
+
+  res.json({
+    subject: personalize(subject, sample),
+    html: forBrowser(broadcastHtml(personalize(body, sample), readCta(req.body?.cta))),
+    sampleName: sample.name,
+  });
+});
+
+/** A caller-supplied button, accepted only when both halves are usable. */
+function readCta(raw: unknown): { label: string; href: string } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const { label, href } = raw as { label?: unknown; href?: unknown };
+  const l = String(label ?? "").trim().slice(0, 40);
+  const h = String(href ?? "").trim();
+  // The renderer refuses non-http(s) too; rejecting here keeps a bad value from
+  // silently becoming a message with no button and no explanation.
+  if (!l || !/^https?:\/\//i.test(h)) return undefined;
+  return { label: l, href: h };
+}
+
 /**
  * The audiences an admin can send to, with a count for each.
  *
@@ -303,7 +349,7 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
     });
   }
 
-  const results = await sendBulk(recipients, subject, body);
+  const results = await sendBulk(recipients, subject, body, readCta(req.body?.cta));
   const sent = results.filter((r) => r.ok).length;
 
   console.log(
@@ -345,6 +391,7 @@ router.post("/email/test", async (req: AuthedRequest, res: Response) => {
     [{ email: me.email, name: me.name }],
     `[test] ${subject}`,
     body,
+    readCta(req.body?.cta),
   );
 
   if (!result.ok) return res.status(502).json({ error: result.error ?? "send failed" });

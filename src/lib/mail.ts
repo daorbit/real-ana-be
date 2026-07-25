@@ -14,9 +14,29 @@
  */
 
 import nodemailer, { type Transporter } from "nodemailer";
+import { LOGO_DATA_URI } from "./logo.js";
 
 /** Gap between messages. Slow enough that Gmail doesn't read a batch as a burst. */
 const SEND_GAP_MS = 400;
+
+/**
+ * Where the links in an email point.
+ *
+ * Overridable by environment so a staging deploy doesn't send mail linking at
+ * production, with the real hosts as defaults — a broken link in an email
+ * cannot be fixed after it is sent, so the fallback has to be the right one.
+ */
+const LINKS = {
+  get site() {
+    return process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in";
+  },
+  get app() {
+    return process.env.PUBLIC_APP_URL || "https://studio-quantalog.daorbit.in";
+  },
+  get docs() {
+    return `${process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in"}/docs`;
+  },
+};
 
 let transporter: Transporter | null = null;
 
@@ -88,6 +108,7 @@ export async function sendBulk(
   recipients: Recipient[],
   subject: string,
   body: string,
+  cta?: { label: string; href: string },
 ): Promise<SendResult[]> {
   const transport = getTransport();
   const from = mailFrom();
@@ -101,7 +122,8 @@ export async function sendBulk(
         to: person.name ? `"${person.name}" <${person.email}>` : person.email,
         subject: personalize(subject, person),
         text,
-        html: textToHtml(text),
+        html: broadcastHtml(text, cta),
+        attachments: [LOGO_ATTACHMENT],
       });
       results.push({ email: person.email, ok: true });
     } catch (e) {
@@ -132,28 +154,6 @@ export function personalize(template: string, person: Recipient): string {
     .replace(/\{\{\s*email\s*\}\}/g, person.email);
 }
 
-/**
- * Wrap a plain-text body in minimal HTML.
- *
- * Admins compose in plain text, but a mail with no HTML part looks like
- * machine output in most clients. This keeps the text as written — escaped,
- * with blank lines becoming paragraphs — rather than inventing a layout the
- * author didn't ask for.
- */
-function textToHtml(text: string): string {
-  const escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  const paragraphs = escaped
-    .split(/\n{2,}/)
-    .map((block) => `<p style="margin:0 0 16px">${block.replace(/\n/g, "<br>")}</p>`)
-    .join("");
-
-  return `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.6;color:#1f2933">${paragraphs}</div>`;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -175,7 +175,11 @@ export async function sendOne(
     to: to.name ? `"${to.name}" <${to.email}>` : to.email,
     subject,
     text,
-    html: html ?? textToHtml(text),
+    // Everything goes out branded — an unstyled fallback would be the one
+    // message that looks like it came from somewhere else.
+    html: html ?? broadcastHtml(text),
+    // The shell references the logo by cid, so the part must ride along.
+    attachments: [LOGO_ATTACHMENT],
   });
 }
 
@@ -200,48 +204,170 @@ If you didn't try to sign up, you can ignore this email — no account has been 
   await sendOne(to, `${code} is your Quantalog verification code`, text, otpHtml(code, minutes));
 }
 
- 
-function otpHtml(code: string, minutes: number): string {
-  // The wordmark from the app sidebar. Sized in the SVG itself because several
-  // clients ignore width/height attributes on inline SVG.
-  const logo = `<svg width="30" height="30" viewBox="0 0 36 36" fill="none" style="display:block">
-    <defs><linearGradient id="q" x1="4" y1="4" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#34d399"/><stop offset="1" stop-color="#059669"/>
-    </linearGradient></defs>
-    <rect x="1" y="1" width="34" height="34" rx="11" fill="url(#q)"/>
-    <path d="M8 19h4.2l2.3-7.5 4 15 2.6-11 1.7 3.5H28" stroke="#fff" stroke-width="2.4"
-      stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  </svg>`;
+/**
+ * The content-id the logo is referenced by.
+ *
+ * Gmail strips `data:` URIs out of `<img src>` and drops inline `<svg>`
+ * entirely, so neither survives the trip. What does work everywhere is a CID
+ * attachment: the image travels as its own MIME part and the HTML points at it
+ * by id. Every send therefore has to include `LOGO_ATTACHMENT` — the markup
+ * alone is not enough.
+ */
+const LOGO_CID = "quantalog-logo";
 
-  return `<div style="background:#f6f7f9;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:440px;margin:0 auto">
-    <tr><td style="background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:32px">
+/**
+ * The logo as a MIME part.
+ *
+ * `cid` links it to the `<img>` below, and because it is referenced from the
+ * body rather than listed on its own, clients show it inline instead of as a
+ * downloadable attachment.
+ */
+export const LOGO_ATTACHMENT = {
+  filename: "quantalog.png",
+  content: Buffer.from(LOGO_DATA_URI.split(",")[1], "base64"),
+  cid: LOGO_CID,
+  contentType: "image/png",
+};
 
+const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="36" height="36" alt="Quantalog"
+  style="display:block;border:0;outline:none;text-decoration:none;width:36px;height:36px">`;
+
+/**
+ * The shell every outgoing message shares: logo, card, footer.
+ *
+ * Built for mail clients rather than browsers, which is why it looks dated —
+ * tables instead of flexbox, inline styles instead of a stylesheet, no external
+ * assets. Deliberately restrained: one accent colour on the mark, neutral grey
+ * for everything else, so whatever `inner` puts in the card is what draws the
+ * eye.
+ */
+/**
+ * A call-to-action button.
+ *
+ * A table with a background colour rather than a styled `<a>`: Outlook renders
+ * the anchor's padding inconsistently, and a link that looks like plain text is
+ * the difference between a message that converts and one that doesn't.
+ */
+export function button(label: string, href: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0"><tr>
+    <td style="background:#10b981;border-radius:9px">
+      <a href="${href}" style="display:inline-block;padding:12px 26px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;letter-spacing:-0.1px">${label}</a>
+    </td>
+  </tr></table>`;
+}
+
+export function shell(inner: string): string {
+  return `<div style="background:#0b0c0f;padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:480px;margin:0 auto">
+
+    <!-- Header. Kept dark rather than an emerald band: the logo tile is itself
+         an emerald gradient, and on a green background the tile vanishes and
+         only the white glyph reads — which is not the app's mark. -->
+    <tr><td style="background:#131519;border:1px solid #22252c;border-bottom:none;border-radius:16px 16px 0 0;padding:24px 32px">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="padding-right:9px;vertical-align:middle">${logo}</td>
-        <td style="vertical-align:middle;font-size:19px;font-weight:700;color:#111827;letter-spacing:-0.2px">Quantalog<span style="color:#10b981">.</span></td>
+        <td style="padding-right:10px;vertical-align:middle">${LOGO_IMG}</td>
+        <td style="vertical-align:middle;font-size:19px;font-weight:700;color:#f3f4f6;letter-spacing:-0.3px">Quantalog<span style="color:#10b981">.</span></td>
       </tr></table>
+    </td></tr>
 
-      <p style="margin:28px 0 0;font-size:16px;font-weight:600;color:#111827">Verify your email address</p>
-      <p style="margin:8px 0 0;font-size:14px;line-height:1.6;color:#6b7280">
-        Enter this code on the signup page to finish creating your account.
+    <tr><td style="background:#16181d;border-left:1px solid #22252c;border-right:1px solid #22252c;padding:30px 32px 32px">
+      ${inner}
+    </td></tr>
+
+    <!-- Footer: product links, then the legal line. -->
+    <tr><td style="background:#131519;border:1px solid #22252c;border-top:none;border-radius:0 0 16px 16px;padding:20px 32px">
+      <p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:#8b929e">
+        Real-time analytics, SEO audits and a multi-tenant API — from one script tag.
       </p>
-
-      <div style="margin:24px 0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;text-align:center">
-        <div style="font-size:32px;font-weight:700;letter-spacing:9px;color:#111827;font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
-      </div>
-
-      <p style="margin:0;font-size:13px;color:#6b7280">
-        This code expires in ${minutes} minutes.
+      <p style="margin:0;font-size:13px">
+        <a href="${LINKS.app}" style="color:#34d399;text-decoration:none;font-weight:500">Dashboard</a>
+        <span style="color:#3a3f4a"> &nbsp;·&nbsp; </span>
+        <a href="${LINKS.docs}" style="color:#34d399;text-decoration:none;font-weight:500">Docs</a>
+        <span style="color:#3a3f4a"> &nbsp;·&nbsp; </span>
+        <a href="${LINKS.site}" style="color:#34d399;text-decoration:none;font-weight:500">Website</a>
       </p>
+    </td></tr>
 
-      <div style="margin:24px 0 0;padding-top:20px;border-top:1px solid #f3f4f6">
-        <p style="margin:0;font-size:12px;line-height:1.6;color:#9ca3af">
-          Didn't try to sign up? You can ignore this email — no account has been created.
-        </p>
-      </div>
-
+    <tr><td style="padding:18px 8px 0;text-align:center">
+      <p style="margin:0;font-size:11px;line-height:1.7;color:#5f6673">
+        You're receiving this because you have a Quantalog account.<br>
+        <a href="${LINKS.site}" style="color:#5f6673;text-decoration:underline">quantalog.daorbit.in</a>
+      </p>
     </td></tr>
   </table>
 </div>`;
+}
+
+function otpHtml(code: string, minutes: number): string {
+  return shell(`
+      <p style="margin:0;font-size:17px;font-weight:600;color:#f3f4f6;letter-spacing:-0.2px">Verify your email address</p>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:#8b929e">
+        Enter this code on the signup page to finish creating your account.
+      </p>
+
+      <div style="margin:26px 0;background:#0f1114;border:1px solid #2b2f38;border-radius:12px;padding:22px;text-align:center">
+        <div style="font-size:34px;font-weight:700;letter-spacing:10px;color:#34d399;font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
+        <div style="margin-top:10px;font-size:12px;color:#5f6673">Expires in ${minutes} minutes</div>
+      </div>
+
+      <div style="padding-top:20px;border-top:1px solid #22252c">
+        <p style="margin:0;font-size:12px;line-height:1.65;color:#5f6673">
+          Didn't try to sign up? You can ignore this email — no account has been created.
+        </p>
+      </div>`);
+}
+
+/**
+ * An admin-composed message, in the same shell as everything else.
+ *
+ * The author writes plain text; this only escapes it and turns blank lines into
+ * paragraphs. Inventing headings or buttons the author didn't write would put
+ * words in their mouth, so the layout stays out of the way — the branding is
+ * the shell, not the message.
+ */
+export function broadcastHtml(text: string, cta?: { label: string; href: string }): string {
+  const blocks = escapeHtml(text).split(/\n{2,}/);
+
+  const paragraphs = blocks
+    .map((block, i) => {
+      const html = block.replace(/\n/g, "<br>");
+      // The opening line carries the greeting, so it gets the emphasis a
+      // heading would — without inventing a heading the author didn't write.
+      const style =
+        i === 0
+          ? "margin:0 0 16px;font-size:16px;font-weight:600;color:#f3f4f6;line-height:1.6"
+          : "margin:0 0 16px;font-size:15px;line-height:1.7;color:#a8aeb8";
+      return `<p style="${style}">${html}</p>`;
+    })
+    .join("");
+
+  // Only render a button for an http(s) target — an admin-supplied `javascript:`
+  // or `data:` href would be a scripting vector in whatever client opens it.
+  const action =
+    cta && /^https?:\/\//i.test(cta.href)
+      ? button(escapeHtml(cta.label), escapeAttr(cta.href))
+      : "";
+
+  return shell(paragraphs + action);
+}
+
+/** Escape a URL for use inside a double-quoted HTML attribute. */
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+/**
+ * The same markup, but viewable in a browser.
+ *
+ * A `cid:` reference only resolves against the MIME parts of a delivered
+ * message, so the admin preview would show a broken image for the one element
+ * that is guaranteed to be fine in the real thing. Swapping in the data URI
+ * keeps the preview honest about everything else.
+ */
+export function forBrowser(html: string): string {
+  return html.replace(`cid:${LOGO_CID}`, LOGO_DATA_URI);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
