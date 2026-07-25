@@ -6,6 +6,7 @@ import { PendingSignup } from "../models/PendingSignup.js";
 import { mailConfigured, sendOne, sendOtpEmail } from "../lib/mail.js";
 import { getDemoDailyLimit } from "../models/AppSetting.js";
 import { tryStartDemo } from "../lib/demo-limit.js";
+import { googleConfigured, verifyGoogleCredential } from "../lib/google-auth.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 
 const router = Router();
@@ -51,6 +52,10 @@ function publicUser(user: InstanceType<typeof User>) {
     dateLocale: user.dateLocale ?? "",
     timezone: user.timezone ?? "",
     role: user.role,
+    /** Lets the client show "connected with Google" instead of guessing. */
+    googleLinked: Boolean(user.googleId),
+    /** False for Google-only accounts, which have never set one. */
+    hasPassword: Boolean(user.passwordHash),
   };
 }
 
@@ -340,12 +345,77 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "email, password required" });
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ error: "invalid credentials" });
+    // A Google-only account has no password to compare against. Say so plainly:
+    // "invalid credentials" would send someone hunting for a password that was
+    // never set.
+    if (!user.passwordHash)
+      return res.status(401).json({
+        error: "this account uses Google sign-in — continue with Google",
+        google: true,
+      });
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "invalid credentials" });
     const token = signToken(user.id);
     res.json({ token, user: publicUser(user) });
   } catch {
     res.status(500).json({ error: "login failed" });
+  }
+});
+
+/**
+ * Sign in (or sign up) with Google.
+ *
+ * One endpoint for both, because Google has already proved the address: there
+ * is nothing left for an OTP round-trip to establish, so a first-time Google
+ * user gets an account here and now.
+ *
+ * Matching on verified email is what links a Google sign-in to an account that
+ * originally signed up with a password. That is only safe because
+ * `verifyGoogleCredential` refuses unverified addresses — otherwise anyone could
+ * make a Google account claiming someone else's email and walk into theirs.
+ */
+router.post("/google", async (req, res) => {
+  try {
+    if (!googleConfigured())
+      return res.status(503).json({ error: "Google sign-in is not configured" });
+
+    const credential = String(req.body?.credential ?? "");
+    if (!credential) return res.status(400).json({ error: "credential required" });
+
+    const profile = await verifyGoogleCredential(credential);
+    if (!profile) return res.status(401).json({ error: "could not verify that Google sign-in" });
+
+    let user = await User.findOne({ email: profile.email });
+    let created = false;
+
+    if (!user) {
+      const [firstName, ...rest] = profile.name.split(" ");
+      // No passwordHash: this account has no password until its owner sets one.
+      // `role` is left to the schema default — a Google signup cannot ask to be
+      // an admin any more than a password signup can.
+      user = await User.create({
+        email: profile.email,
+        name: profile.name,
+        firstName: firstName ?? "",
+        lastName: rest.join(" "),
+        googleId: profile.sub,
+        avatarUrl: profile.picture,
+      });
+      created = true;
+    } else if (!user.googleId) {
+      // An existing password account linking Google for the first time. The
+      // avatar is only filled in if empty, so a picture the user chose here is
+      // not overwritten by their Google one.
+      user.googleId = profile.sub;
+      if (!user.avatarUrl) user.avatarUrl = profile.picture;
+      await user.save();
+    }
+
+    const token = signToken(user.id);
+    res.status(created ? 201 : 200).json({ token, user: publicUser(user), created });
+  } catch (e) {
+    console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
+    res.status(500).json({ error: "Google sign-in failed" });
   }
 });
 

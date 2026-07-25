@@ -6,7 +6,16 @@ export type Role = (typeof ROLES)[number];
 const userSchema = new Schema(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    passwordHash: { type: String, required: true },
+    /**
+     * Optional: a Google-only account has never chosen a password.
+     *
+     * Login reads this before comparing, so an account without one is refused
+     * at the password step rather than being let through by a bcrypt compare
+     * against undefined.
+     */
+    passwordHash: { type: String, default: "" },
+    /** Google's stable subject id. Set the first time the account signs in with Google. */
+    googleId: { type: String, trim: true, default: "" },
     /**
      * Display name, derived from firstName/lastName whenever those are set.
      *
