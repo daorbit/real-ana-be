@@ -118,7 +118,10 @@ It's under SEO in your dashboard, and it works on any site you've added.`,
     // only the opening, which is what an admin should be personalising.
     layout: "invite",
     subject: "Analytics without the cookie banner",
-    body: `Hi {{name}},
+    // `{{greeting}}` rather than "Hi {{name}}": most invitations go to a bare
+    // address, and greeting a stranger by the local part of their email is the
+    // clearest possible signal that a machine sent this.
+    body: `{{greeting}},
 
 I thought Quantalog might be useful to you.
 

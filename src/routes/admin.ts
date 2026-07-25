@@ -276,9 +276,10 @@ function readLayout(raw: unknown): "plain" | "invite" {
  * Parse hand-entered recipients.
  *
  * Accepts either a bare address or `Name <address>`, so an admin can paste from
- * a contact list and still get `{{name}}` filled in. Without a name, the
- * address's local part is used — `personalize` would do the same, but doing it
- * here means the composer's preview shows what will actually be sent.
+ * a contact list and still get `{{name}}` filled in. A bare address gets no name
+ * at all rather than one invented from the local part: templates use
+ * `{{greeting}}`, which reads as a plain "Hello" when nothing is known, instead
+ * of greeting a stranger as "alex".
  *
  * Deliberately strict about the address and permissive about everything else:
  * an unparseable address is a bounce and a small hit to sender reputation, which
@@ -312,7 +313,7 @@ function parseAddresses(raw: unknown[]): {
     if (seen.has(email)) continue;
     seen.add(email);
 
-    valid.push({ email, name: name || email.split("@")[0] });
+    valid.push({ email, name });
   }
 
   return { valid, invalid };

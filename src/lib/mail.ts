@@ -161,10 +161,37 @@ export async function sendBulk(
  * as a greeting for accounts that never set a name.
  */
 export function personalize(template: string, person: Recipient): string {
-  const name = person.name?.trim() || person.email.split("@")[0];
-  return template
-    .replace(/\{\{\s*name\s*\}\}/g, name)
-    .replace(/\{\{\s*email\s*\}\}/g, person.email);
+  const name = person.name?.trim() ?? "";
+
+  return (
+    template
+      // `{{greeting}}` is the one to reach for on a message to strangers: it
+      // becomes "Hi Alex" when a name is known and a plain "Hello" when it
+      // isn't. Resolved before `{{name}}` because it contains it.
+      .replace(/\{\{\s*greeting\s*\}\}/g, greeting(name))
+      .replace(/\{\{\s*name\s*\}\}/g, name)
+      .replace(/\{\{\s*email\s*\}\}/g, person.email)
+      // An empty `{{name}}` leaves "Hi ," and a double space behind. Tidying
+      // those is what keeps the no-name case from reading as a broken merge —
+      // and it is only whitespace and stray punctuation, so it can't reword
+      // anything the author actually wrote.
+      .replace(/[ \t]+([,!.?])/g, "$1")
+      .replace(/[ \t]{2,}/g, " ")
+  );
+}
+
+/**
+ * The opening line.
+ *
+ * A name when we have one. When we don't, a plain "Hello" — deliberately not the
+ * address's local part, which turns a cold introduction into an obvious mail
+ * merge ("Hi alex"), and deliberately not a time-of-day greeting: that is
+ * computed when the message is sent, not when it is read, so "Good morning" on
+ * something opened at midnight is wrong in exactly the way it was trying to
+ * avoid.
+ */
+function greeting(name: string): string {
+  return name ? `Hi ${name}` : "Hello";
 }
 
 function sleep(ms: number): Promise<void> {
