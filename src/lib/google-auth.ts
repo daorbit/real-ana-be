@@ -11,9 +11,21 @@ export type GoogleProfile = {
   picture: string;
 };
 
-/** The client id the frontend signs in with. Tokens minted for anyone else are refused. */
+/**
+ * The client id the frontend signs in with. Tokens minted for anyone else are
+ * refused.
+ *
+ * `VITE_GOOGLE_CLIENT_ID` is accepted as an alias so the same variable name can
+ * be set across both Vercel projects. The prefix means nothing here — this is
+ * not a Vite build — but the value is the same public client id either way, and
+ * one name across both is one fewer thing to get wrong.
+ */
 function expectedAudience(): string {
-  return process.env.GOOGLE_CLIENT_ID ?? "";
+  return (
+    process.env.GOOGLE_CLIENT_ID ??
+    process.env.VITE_GOOGLE_CLIENT_ID ??
+    ""
+  );
 }
 
 export function googleConfigured(): boolean {
