@@ -7,7 +7,12 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
+import { Plan } from "../models/Plan.js";
+import { AddonPack } from "../models/AddonPack.js";
+import { Coupon } from "../models/Coupon.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
+import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
+import { getPlanCatalogEntry } from "../plans.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
@@ -564,6 +569,138 @@ async function resolveSegment(
   return users
     .filter((u) => matches(u.id))
     .map((u) => ({ id: u.id, email: u.email, name: u.name }));
+}
+
+/* ------------------------------- billing plans ----------------------------- */
+
+/**
+ * The plan catalogue is fixed in code (`src/plans.ts`) — name, quotas,
+ * workspace/site limits and Razorpay ids for each tier are not admin-editable.
+ * The only thing an admin can change here is price, which is why there's no
+ * create or delete route: adding or retiring a tier is a code change.
+ */
+router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listResolvedPlans());
+});
+
+/** Set a plan's price. Upserts the price row — a catalogue plan with no row yet defaults to ₹0. */
+router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => {
+  const slug = String(req.params.slug);
+  if (!getPlanCatalogEntry(slug))
+    return res.status(404).json({ error: "unknown plan" });
+
+  const priceMonthly = Number(req.body?.priceMonthly);
+  const priceYearly = Number(req.body?.priceYearly);
+  if (!Number.isFinite(priceMonthly) || priceMonthly < 0 || !Number.isFinite(priceYearly) || priceYearly < 0) {
+    return res.status(400).json({ error: "priceMonthly and priceYearly must be non-negative numbers" });
+  }
+
+  await Plan.updateOne(
+    { slug },
+    { $set: { priceMonthly, priceYearly } },
+    { upsert: true }
+  );
+  res.json(await getResolvedPlan(slug));
+});
+
+/* ------------------------------- billing addons ----------------------------- */
+
+router.get("/billing/addons", async (_req: AuthedRequest, res: Response) => {
+  const addons = await AddonPack.find().sort({ sortOrder: 1 });
+  res.json(addons);
+});
+
+router.post("/billing/addons", async (req: AuthedRequest, res: Response) => {
+  try {
+    const addon = await AddonPack.create(readAddonBody(req.body));
+    res.status(201).json(addon);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.put("/billing/addons/:id", async (req: AuthedRequest, res: Response) => {
+  try {
+    const addon = await AddonPack.findByIdAndUpdate(req.params.id, readAddonBody(req.body), {
+      new: true,
+      runValidators: true,
+    });
+    if (!addon) return res.status(404).json({ error: "addon not found" });
+    res.json(addon);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.delete("/billing/addons/:id", async (req: AuthedRequest, res: Response) => {
+  const deleted = await AddonPack.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "addon not found" });
+  res.status(204).end();
+});
+
+function readAddonBody(body: Record<string, unknown>) {
+  const type: "audit" | "crawl" = body?.type === "crawl" ? "crawl" : "audit";
+  return {
+    name: String(body?.name ?? "").trim(),
+    slug: String(body?.slug ?? "").trim().toLowerCase(),
+    type,
+    quantity: Math.max(1, Number(body?.quantity) || 1),
+    price: Math.max(0, Number(body?.price) || 0),
+    active: body?.active !== false,
+    sortOrder: Number(body?.sortOrder) || 0,
+  };
+}
+
+/* --------------------------------- coupons ------------------------------------ */
+
+router.get("/billing/coupons", async (_req: AuthedRequest, res: Response) => {
+  const coupons = await Coupon.find().sort({ createdAt: -1 });
+  res.json(coupons);
+});
+
+router.post("/billing/coupons", async (req: AuthedRequest, res: Response) => {
+  try {
+    const coupon = await Coupon.create(readCouponBody(req.body));
+    res.status(201).json(coupon);
+  } catch (e) {
+    res.status(400).json({ error: couponErrorMessage(e) });
+  }
+});
+
+router.put("/billing/coupons/:id", async (req: AuthedRequest, res: Response) => {
+  try {
+    const coupon = await Coupon.findByIdAndUpdate(req.params.id, readCouponBody(req.body), {
+      new: true,
+      runValidators: true,
+    });
+    if (!coupon) return res.status(404).json({ error: "coupon not found" });
+    res.json(coupon);
+  } catch (e) {
+    res.status(400).json({ error: couponErrorMessage(e) });
+  }
+});
+
+router.delete("/billing/coupons/:id", async (req: AuthedRequest, res: Response) => {
+  const deleted = await Coupon.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "coupon not found" });
+  res.status(204).end();
+});
+
+function readCouponBody(body: Record<string, unknown>) {
+  const expiresAt = body?.expiresAt ? new Date(String(body.expiresAt)) : null;
+  return {
+    code: String(body?.code ?? "").trim().toUpperCase(),
+    percentOff: Math.max(1, Math.min(100, Number(body?.percentOff) || 0)),
+    active: body?.active !== false,
+    expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+  };
+}
+
+/** A duplicate code hits Mongo's unique index — surface that as a plain message instead of a raw driver error. */
+function couponErrorMessage(e: unknown): string {
+  const message = (e as Error)?.message ?? "";
+  if (message.includes("E11000")) return "a coupon with that code already exists";
+  return message || "could not save the coupon";
 }
 
 export default router;
