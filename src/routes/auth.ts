@@ -41,8 +41,16 @@ function demoUser() {
   };
 }
 
-/** The shape every auth response returns — one place, so they can't drift. */
-function publicUser(user: InstanceType<typeof User>) {
+/**
+ * The shape every auth response returns — one place, so they can't drift.
+ *
+ * Async because it attaches `billing`: login, signup, and Google sign-in all
+ * build their response through this function, and every one of them needs
+ * the plan/quota state just as much as `/me` does — a client that logs in
+ * and never calls `/me` again (the common case) would otherwise never learn
+ * what plan it's on until the next full page load.
+ */
+async function publicUser(user: InstanceType<typeof User>) {
   return {
     id: user.id,
     email: user.email,
@@ -60,6 +68,7 @@ function publicUser(user: InstanceType<typeof User>) {
     googleLinked: Boolean(user.googleId),
     /** False for Google-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
+    billing: await quotaSummary(user.id),
   };
 }
 
@@ -287,7 +296,7 @@ router.post("/signup/verify", async (req, res) => {
     await assignFreePlan(user.id);
 
     const token = signToken(user.id);
-    res.status(201).json({ token, user: publicUser(user) });
+    res.status(201).json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "verification failed" });
   }
@@ -361,7 +370,7 @@ router.post("/login", async (req, res) => {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "invalid credentials" });
     const token = signToken(user.id);
-    res.json({ token, user: publicUser(user) });
+    res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "login failed" });
   }
@@ -418,7 +427,7 @@ router.post("/google", async (req, res) => {
     }
 
     const token = signToken(user.id);
-    res.status(created ? 201 : 200).json({ token, user: publicUser(user), created });
+    res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
   } catch (e) {
     console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
     res.status(500).json({ error: "Google sign-in failed" });
@@ -433,15 +442,11 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
   res.json({
-    ...publicUser(user),
+    ...(await publicUser(user)),
     // Survives a refresh, so the "you are viewing as …" banner can come back.
     impersonating: Boolean(req.impersonatorId),
     // Lets the client switch to its read-only demo behaviour after a reload.
     demo: Boolean(req.isDemo),
-    // Plan/usage travels with the profile rather than a separate billing
-    // endpoint — every authenticated page already fetches `/me`, so the quota
-    // numbers a nav badge or an upgrade prompt needs are already in hand.
-    billing: await quotaSummary(req.userId as string),
   });
 });
 
@@ -534,7 +539,7 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
   if (composed) user.name = composed;
 
   await user.save();
-  res.json(publicUser(user));
+  res.json(await publicUser(user));
 });
 
 /** Avatars are 200x200 on delivery, so there is no reason to accept a poster. */
@@ -590,7 +595,7 @@ router.post("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedReques
     // Only once the replacement is safely stored. Best-effort, as ever.
     if (previousId) void deleteImage(previousId);
 
-    res.json(publicUser(user));
+    res.json(await publicUser(user));
   } catch (e) {
     console.error("[auth] avatar upload failed:", e instanceof Error ? e.message : e);
     res.status(500).json({ error: "could not upload that image" });
@@ -610,7 +615,7 @@ router.delete("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequ
 
     if (previousId) void deleteImage(previousId);
 
-    res.json(publicUser(user));
+    res.json(await publicUser(user));
   } catch {
     res.status(500).json({ error: "could not remove the image" });
   }
