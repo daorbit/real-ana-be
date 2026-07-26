@@ -46,7 +46,7 @@ function isExpired(sub: { currentPeriodEnd?: Date | null }): boolean {
 }
 
 /** The catalogue plan the user is on, or null if they have no subscription, an unknown slug, or their period has lapsed. */
-async function currentPlan(userId: string) {
+export async function currentPlan(userId: string) {
   const sub = await Subscription.findOne({ userId });
   if (!sub || isExpired(sub)) return null;
   return getPlanCatalogEntry(sub.planSlug as string) ?? null;

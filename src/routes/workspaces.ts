@@ -25,7 +25,7 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
-import { canCreateWorkspace, canCreateSite, canUseRange } from "../lib/quota.js";
+import { canCreateWorkspace, canCreateSite, canUseRange, currentPlan } from "../lib/quota.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -465,6 +465,16 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
     userId: req.userId,
   });
   if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  // Funnels are a Starter/Pro feature — Free can view the builder UI but not
+  // spend compute on it.
+  const plan = await currentPlan(req.userId as string);
+  if (!plan || plan.slug === "free") {
+    return res.status(402).json({
+      error: "funnels need the Starter or Pro plan",
+      code: "plan_required",
+    });
+  }
 
   const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
   const steps: FunnelStep[] = raw
