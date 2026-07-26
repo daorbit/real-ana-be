@@ -23,7 +23,8 @@ export type BillingCycle = (typeof BILLING_CYCLES)[number];
 const subscriptionSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
-    planId: { type: Schema.Types.ObjectId, ref: "Plan", required: true },
+    /** Joins to the fixed catalogue in `src/plans.ts`, not a `Plan` document id. */
+    planSlug: { type: String, required: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 
     razorpaySubscriptionId: { type: String, default: "" },

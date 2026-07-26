@@ -9,8 +9,9 @@ import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { Plan } from "../models/Plan.js";
 import { AddonPack } from "../models/AddonPack.js";
-import { Subscription } from "../models/Subscription.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
+import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
+import { getPlanCatalogEntry } from "../plans.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
@@ -571,72 +572,35 @@ async function resolveSegment(
 
 /* ------------------------------- billing plans ----------------------------- */
 
-/** Every plan, including inactive ones — the admin needs to see and revive those too. */
-router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
-  const plans = await Plan.find().sort({ sortOrder: 1 });
-  res.json(plans);
-});
-
-router.post("/billing/plans", async (req: AuthedRequest, res: Response) => {
-  try {
-    const plan = await Plan.create(readPlanBody(req.body));
-    res.status(201).json(plan);
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
-  }
-});
-
 /**
- * Editing an existing plan is price-only. Everything else — name, slug,
- * quotas, workspace/site limits, Razorpay ids, features — is fixed once the
- * plan is created, so a subscriber's quota can't silently change under them
- * and the catalogue can't drift from what was decided when the plan was made.
- * Making a plan structurally different is a new plan (POST), not an edit.
+ * The plan catalogue is fixed in code (`src/plans.ts`) — name, quotas,
+ * workspace/site limits and Razorpay ids for each tier are not admin-editable.
+ * The only thing an admin can change here is price, which is why there's no
+ * create or delete route: adding or retiring a tier is a code change.
  */
-router.put("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
+router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listResolvedPlans());
+});
+
+/** Set a plan's price. Upserts the price row — a catalogue plan with no row yet defaults to ₹0. */
+router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => {
+  const slug = String(req.params.slug);
+  if (!getPlanCatalogEntry(slug))
+    return res.status(404).json({ error: "unknown plan" });
+
   const priceMonthly = Number(req.body?.priceMonthly);
   const priceYearly = Number(req.body?.priceYearly);
   if (!Number.isFinite(priceMonthly) || priceMonthly < 0 || !Number.isFinite(priceYearly) || priceYearly < 0) {
     return res.status(400).json({ error: "priceMonthly and priceYearly must be non-negative numbers" });
   }
 
-  const plan = await Plan.findByIdAndUpdate(
-    req.params.id,
+  await Plan.updateOne(
+    { slug },
     { $set: { priceMonthly, priceYearly } },
-    { new: true, runValidators: true }
+    { upsert: true }
   );
-  if (!plan) return res.status(404).json({ error: "plan not found" });
-  res.json(plan);
+  res.json(await getResolvedPlan(slug));
 });
-
-router.delete("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
-  const inUse = await Subscription.exists({ planId: req.params.id, status: { $in: ["active", "created", "past_due"] } });
-  if (inUse)
-    return res.status(400).json({ error: "plan has active subscribers — deactivate it instead of deleting" });
-
-  const deleted = await Plan.findByIdAndDelete(req.params.id);
-  if (!deleted) return res.status(404).json({ error: "plan not found" });
-  res.status(204).end();
-});
-
-function readPlanBody(body: Record<string, unknown>) {
-  return {
-    name: String(body?.name ?? "").trim(),
-    slug: String(body?.slug ?? "").trim().toLowerCase(),
-    description: String(body?.description ?? "").trim(),
-    priceMonthly: Number(body?.priceMonthly) || 0,
-    priceYearly: Number(body?.priceYearly) || 0,
-    razorpayPlanIdMonthly: String(body?.razorpayPlanIdMonthly ?? "").trim(),
-    razorpayPlanIdYearly: String(body?.razorpayPlanIdYearly ?? "").trim(),
-    maxWorkspaces: Math.max(1, Number(body?.maxWorkspaces) || 1),
-    maxSitesPerWorkspace: Math.max(1, Number(body?.maxSitesPerWorkspace) || 1),
-    monthlyAuditQuota: Math.max(0, Number(body?.monthlyAuditQuota) || 0),
-    monthlyCrawlQuota: Math.max(0, Number(body?.monthlyCrawlQuota) || 0),
-    features: Array.isArray(body?.features) ? body.features.map(String) : [],
-    active: body?.active !== false,
-    sortOrder: Number(body?.sortOrder) || 0,
-  };
-}
 
 /* ------------------------------- billing addons ----------------------------- */
 

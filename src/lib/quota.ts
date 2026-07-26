@@ -1,16 +1,15 @@
 import { Subscription } from "../models/Subscription.js";
-import { Plan } from "../models/Plan.js";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
+import { getPlanCatalogEntry } from "../plans.js";
 
 export type QuotaKind = "audit" | "crawl";
 
-/** The plan the user is on, or null if they have no subscription row at all. */
+/** The catalogue plan the user is on, or null if they have no subscription (or an unknown slug). */
 async function currentPlan(userId: string) {
   const sub = await Subscription.findOne({ userId });
   if (!sub) return null;
-  const plan = await Plan.findById(sub.planId);
-  return plan ?? null;
+  return getPlanCatalogEntry(sub.planSlug as string) ?? null;
 }
 
 /** Whether `userId` may create one more workspace under their plan. */
@@ -55,12 +54,12 @@ export async function hasQuota(userId: string, kind: QuotaKind): Promise<boolean
   // rather than silently allowing unlimited use.
   if (!sub) return false;
 
-  const plan = await Plan.findById(sub.planId);
+  const plan = getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return false;
 
   const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
   const used = kind === "audit" ? sub.auditsUsed : sub.crawlsUsed;
-  if ((used as number) < (planQuota as number)) return true;
+  if ((used as number) < planQuota) return true;
 
   const addonCredits = kind === "audit" ? sub.addonAuditCredits : sub.addonCrawlCredits;
   return (addonCredits as number) > 0;
@@ -78,7 +77,7 @@ export async function hasQuota(userId: string, kind: QuotaKind): Promise<boolean
 export async function spendQuota(userId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ userId });
   if (!sub) return false;
-  const plan = await Plan.findById(sub.planId);
+  const plan = getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return false;
 
   const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
@@ -86,7 +85,7 @@ export async function spendQuota(userId: string, kind: QuotaKind): Promise<boole
   const creditField = kind === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
 
   const used = sub.get(usedField) as number;
-  if (used < (planQuota as number)) {
+  if (used < planQuota) {
     sub.set(usedField, used + 1);
     await sub.save();
     return true;
@@ -106,13 +105,13 @@ export async function spendQuota(userId: string, kind: QuotaKind): Promise<boole
 export async function quotaSummary(userId: string) {
   const sub = await Subscription.findOne({ userId });
   if (!sub) return null;
-  const plan = await Plan.findById(sub.planId);
+  const plan = getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return null;
 
   const workspaceCount = await Workspace.countDocuments({ userId });
 
   return {
-    plan: { id: plan.id, name: plan.name, slug: plan.slug },
+    plan: { slug: plan.slug, name: plan.name },
     cycle: sub.cycle,
     status: sub.status,
     currentPeriodEnd: sub.currentPeriodEnd,

@@ -1,5 +1,4 @@
 import { Router, Response } from "express";
-import { Plan } from "../models/Plan.js";
 import { AddonPack } from "../models/AddonPack.js";
 import { Subscription } from "../models/Subscription.js";
 import { AddonPurchase } from "../models/AddonPurchase.js";
@@ -12,6 +11,7 @@ import {
   verifyOrderPayment,
 } from "../lib/razorpay.js";
 import { quotaSummary } from "../lib/quota.js";
+import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 
 /**
  * Subscription plans, addon packs, and the checkout flow that sells both
@@ -28,8 +28,7 @@ router.use(blockDemoWrites);
 /* --------------------------------- catalogue -------------------------------- */
 
 router.get("/plans", async (_req: AuthedRequest, res: Response) => {
-  const plans = await Plan.find({ active: true }).sort({ sortOrder: 1 });
-  res.json(plans);
+  res.json(await listResolvedPlans());
 });
 
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
@@ -55,10 +54,10 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   if (!razorpayConfigured())
     return res.status(503).json({ error: "payments are not configured" });
 
-  const planId = String(req.body?.planId ?? "");
+  const planSlug = String(req.body?.planSlug ?? "");
   const cycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
 
-  const plan = await Plan.findOne({ _id: planId, active: true });
+  const plan = await getResolvedPlan(planSlug);
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
   const rzpPlanId = cycle === "yearly" ? plan.razorpayPlanIdYearly : plan.razorpayPlanIdMonthly;
@@ -85,12 +84,12 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       plan_id: rzpPlanId,
       customer_notify: 1,
       total_count: cycle === "yearly" ? 1 : 12,
-      notes: { userId: String(req.userId), planId: String(plan.id), cycle },
+      notes: { userId: String(req.userId), planSlug: plan.slug, cycle },
     } as never);
 
     if (sub) {
       sub.set({
-        planId: plan.id,
+        planSlug: plan.slug,
         cycle,
         razorpaySubscriptionId: rzpSub.id,
         razorpayCustomerId: customerId,
@@ -100,7 +99,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     } else {
       sub = await Subscription.create({
         userId: req.userId,
-        planId: plan.id,
+        planSlug: plan.slug,
         cycle,
         razorpaySubscriptionId: rzpSub.id,
         razorpayCustomerId: customerId,
