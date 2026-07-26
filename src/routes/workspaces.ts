@@ -25,6 +25,7 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
+import { canCreateWorkspace, canCreateSite } from "../lib/quota.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -86,6 +87,10 @@ function selectSiteIds(
 router.post("/", async (req: AuthedRequest, res: Response) => {
   const { name } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
+
+  const allowed = await canCreateWorkspace(req.userId as string);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
   try {
     const ws = await Workspace.create({
       userId: req.userId,
@@ -117,6 +122,10 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   const { name, domain, framework, trackerOptions } = req.body ?? {};
   if (!name || !domain)
     return res.status(400).json({ error: "name, domain required" });
+
+  const allowed = await canCreateSite(req.userId as string, ws.id);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
   const site = await Site.create({
     workspaceId: ws.id,
     userId: req.userId,

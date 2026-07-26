@@ -22,7 +22,9 @@ const planSchema = new Schema(
     razorpayPlanIdMonthly: { type: String, default: "" },
     razorpayPlanIdYearly: { type: String, default: "" },
 
-    maxSites: { type: Number, required: true, min: 1 },
+    maxWorkspaces: { type: Number, required: true, min: 1 },
+    /** Sites allowed per workspace, not a total across the account. */
+    maxSitesPerWorkspace: { type: Number, required: true, min: 1 },
     /** Audits/crawls included per billing cycle. Extra usage needs an addon pack. */
     monthlyAuditQuota: { type: Number, required: true, min: 0 },
     monthlyCrawlQuota: { type: Number, required: true, min: 0 },

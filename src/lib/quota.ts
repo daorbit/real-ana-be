@@ -1,7 +1,48 @@
 import { Subscription } from "../models/Subscription.js";
 import { Plan } from "../models/Plan.js";
+import { Workspace } from "../models/Workspace.js";
+import { Site } from "../models/Site.js";
 
 export type QuotaKind = "audit" | "crawl";
+
+/** The plan the user is on, or null if they have no subscription row at all. */
+async function currentPlan(userId: string) {
+  const sub = await Subscription.findOne({ userId });
+  if (!sub) return null;
+  const plan = await Plan.findById(sub.planId);
+  return plan ?? null;
+}
+
+/** Whether `userId` may create one more workspace under their plan. */
+export async function canCreateWorkspace(userId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to create a workspace" };
+
+  const count = await Workspace.countDocuments({ userId });
+  if (count >= plan.maxWorkspaces)
+    return {
+      ok: false,
+      error: `your plan allows ${plan.maxWorkspaces} workspace${plan.maxWorkspaces === 1 ? "" : "s"} — upgrade to add more`,
+    };
+  return { ok: true };
+}
+
+/** Whether `userId` may add one more site to `workspaceId` under their plan. */
+export async function canCreateSite(
+  userId: string,
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to add a site" };
+
+  const count = await Site.countDocuments({ workspaceId });
+  if (count >= plan.maxSitesPerWorkspace)
+    return {
+      ok: false,
+      error: `your plan allows ${plan.maxSitesPerWorkspace} site${plan.maxSitesPerWorkspace === 1 ? "" : "s"} per workspace — upgrade to add more`,
+    };
+  return { ok: true };
+}
 
 /**
  * Whether `userId` has room for one more audit or crawl this cycle, without
@@ -68,6 +109,8 @@ export async function quotaSummary(userId: string) {
   const plan = await Plan.findById(sub.planId);
   if (!plan) return null;
 
+  const workspaceCount = await Workspace.countDocuments({ userId });
+
   return {
     plan: { id: plan.id, name: plan.name, slug: plan.slug },
     cycle: sub.cycle,
@@ -83,5 +126,10 @@ export async function quotaSummary(userId: string) {
       used: sub.crawlsUsed,
       addonCredits: sub.addonCrawlCredits,
     },
+    workspaces: {
+      quota: plan.maxWorkspaces,
+      used: workspaceCount,
+    },
+    maxSitesPerWorkspace: plan.maxSitesPerWorkspace,
   };
 }
