@@ -586,17 +586,27 @@ router.post("/billing/plans", async (req: AuthedRequest, res: Response) => {
   }
 });
 
+/**
+ * Editing an existing plan is price-only. Everything else — name, slug,
+ * quotas, workspace/site limits, Razorpay ids, features — is fixed once the
+ * plan is created, so a subscriber's quota can't silently change under them
+ * and the catalogue can't drift from what was decided when the plan was made.
+ * Making a plan structurally different is a new plan (POST), not an edit.
+ */
 router.put("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
-  try {
-    const plan = await Plan.findByIdAndUpdate(req.params.id, readPlanBody(req.body), {
-      new: true,
-      runValidators: true,
-    });
-    if (!plan) return res.status(404).json({ error: "plan not found" });
-    res.json(plan);
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
+  const priceMonthly = Number(req.body?.priceMonthly);
+  const priceYearly = Number(req.body?.priceYearly);
+  if (!Number.isFinite(priceMonthly) || priceMonthly < 0 || !Number.isFinite(priceYearly) || priceYearly < 0) {
+    return res.status(400).json({ error: "priceMonthly and priceYearly must be non-negative numbers" });
   }
+
+  const plan = await Plan.findByIdAndUpdate(
+    req.params.id,
+    { $set: { priceMonthly, priceYearly } },
+    { new: true, runValidators: true }
+  );
+  if (!plan) return res.status(404).json({ error: "plan not found" });
+  res.json(plan);
 });
 
 router.delete("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
