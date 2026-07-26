@@ -214,8 +214,17 @@ router.post("/addons/verify", async (req: AuthedRequest, res: Response) => {
  * `order.paid` independently of this router's own verify endpoint.
  */
 export async function creditAddonPurchase(purchaseId: string, paymentId: string) {
-  const purchase = await AddonPurchase.findById(purchaseId);
-  if (!purchase || purchase.status === "paid") return;
+  // Atomically claim the purchase before crediting anything — the
+  // client-side verify call and the webhook can call this for the same
+  // order at nearly the same instant, and a plain find-then-check-then-save
+  // lets both pass the "not yet paid" check before either writes, crediting
+  // the user twice. Only the caller whose update actually flips the status
+  // proceeds to credit.
+  const purchase = await AddonPurchase.findOneAndUpdate(
+    { _id: purchaseId, status: { $ne: "paid" } },
+    { $set: { status: "paid", razorpayPaymentId: paymentId } },
+  );
+  if (!purchase) return;
 
   const pack = await AddonPack.findById(purchase.addonPackId);
   if (!pack) return;
@@ -225,9 +234,6 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
     { userId: purchase.userId },
     { $inc: { [field]: pack.quantity } }
   );
-
-  purchase.set({ status: "paid", razorpayPaymentId: paymentId });
-  await purchase.save();
 }
 
 /**
@@ -239,17 +245,18 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
  * `order.paid` independently of this router's own verify endpoint.
  */
 export async function creditPlanPurchase(purchaseId: string, paymentId: string) {
-  const purchase = await PlanPurchase.findById(purchaseId);
-  if (!purchase || purchase.status === "paid") return;
+  // Same atomic-claim pattern as `creditAddonPurchase` — see its comment.
+  const purchase = await PlanPurchase.findOneAndUpdate(
+    { _id: purchaseId, status: { $ne: "paid" } },
+    { $set: { status: "paid", razorpayPaymentId: paymentId } },
+  );
+  if (!purchase) return;
 
   await activatePlanPeriod(
     String(purchase.userId),
     purchase.planSlug as string,
     purchase.cycle as BillingCycle
   );
-
-  purchase.set({ status: "paid", razorpayPaymentId: paymentId });
-  await purchase.save();
 }
 
 export default router;

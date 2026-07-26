@@ -144,24 +144,24 @@ export async function spendQuota(userId: string, kind: QuotaKind): Promise<boole
   const usedField = kind === "audit" ? "auditsUsed" : "crawlsUsed";
   const creditField = kind === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
 
+  // Atomic conditional increments — two concurrent requests (double-click, two
+  // tabs, a client retry) must not both read "quota left" before either
+  // writes, or the user spends one more unit than they have. The condition is
+  // re-checked by Mongo at write time, not by JS after a separate read.
   if (plan) {
     const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
-    const used = sub.get(usedField) as number;
-    if (used < planQuota) {
-      sub.set(usedField, used + 1);
-      await sub.save();
-      return true;
-    }
+    const spent = await Subscription.findOneAndUpdate(
+      { userId, [usedField]: { $lt: planQuota } },
+      { $inc: { [usedField]: 1 } },
+    );
+    if (spent) return true;
   }
 
-  const credits = sub.get(creditField) as number;
-  if (credits > 0) {
-    sub.set(creditField, credits - 1);
-    await sub.save();
-    return true;
-  }
-
-  return false;
+  const credited = await Subscription.findOneAndUpdate(
+    { userId, [creditField]: { $gt: 0 } },
+    { $inc: { [creditField]: -1 } },
+  );
+  return Boolean(credited);
 }
 
 /** Remaining quota for the dashboard's usage display. */
