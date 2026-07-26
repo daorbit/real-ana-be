@@ -10,6 +10,7 @@ import v1Routes from "./routes/v1.js";
 import adminRoutes from "./routes/admin.js";
 import shareRoutes from "./routes/share.js";
 import seoPublicRoutes from "./routes/seo-public.js";
+import plansPublicRoutes from "./routes/plans-public.js";
 import seoRoutes from "./routes/seo.js";
 import billingRoutes from "./routes/billing.js";
 import webhookRoutes from "./routes/webhooks.js";
@@ -75,6 +76,7 @@ app.use("/api/share", openCors, shareRoutes);
 // Public per-report SEO audits. Same unauthenticated, token-in-path model as
 // the shared dashboards above.
 app.use("/api/public/seo", openCors, seoPublicRoutes);
+app.use("/api/public/plans", openCors, plansPublicRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
