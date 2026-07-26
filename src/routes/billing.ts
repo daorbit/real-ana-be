@@ -5,7 +5,7 @@ import { AddonPurchase } from "../models/AddonPurchase.js";
 import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
-import { quotaSummary } from "../lib/quota.js";
+import { quotaSummary, activatePlanPeriod } from "../lib/quota.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
 
@@ -54,8 +54,6 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
 });
 
 /* -------------------------------- subscribe --------------------------------- */
-
-const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
 
 /**
  * Start checkout for a plan period: a one-time Razorpay Order, not a
@@ -139,35 +137,6 @@ router.post("/subscribe/verify", async (req: AuthedRequest, res: Response) => {
   await creditPlanPurchase(purchase.id, String(razorpay_payment_id));
   res.json({ ok: true });
 });
-
-/**
- * Put a user on a plan for one billing period starting now. Shared by the
- * free-plan fast path above and by `creditPlanPurchase` once a paid order is
- * confirmed — both just decide the period, this applies it.
- *
- * Switching plans (not just renewing the same one) resets usage too: the new
- * plan's quota starts from zero rather than inheriting whatever was used
- * against the old one this cycle.
- */
-async function activatePlanPeriod(userId: string, planSlug: string, cycle: BillingCycle) {
-  const now = new Date();
-  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
-  await Subscription.findOneAndUpdate(
-    { userId },
-    {
-      $set: {
-        planSlug,
-        cycle,
-        status: "active",
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
-        auditsUsed: 0,
-        crawlsUsed: 0,
-      },
-    },
-    { upsert: true }
-  );
-}
 
 /* ---------------------------------- addons ----------------------------------- */
 

@@ -1,9 +1,37 @@
-import { Subscription } from "../models/Subscription.js";
+import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { getPlanCatalogEntry } from "../plans.js";
 
 export type QuotaKind = "audit" | "crawl";
+
+const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
+
+ 
+export async function activatePlanPeriod(userId: string, planSlug: string, cycle: BillingCycle) {
+  const now = new Date();
+  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
+  await Subscription.findOneAndUpdate(
+    { userId },
+    {
+      $set: {
+        planSlug,
+        cycle,
+        status: "active",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        auditsUsed: 0,
+        crawlsUsed: 0,
+      },
+    },
+    { upsert: true }
+  );
+}
+
+/** Give a brand-new account the Free plan immediately, so it never has zero quota. */
+export async function assignFreePlan(userId: string) {
+  await activatePlanPeriod(userId, "free", "monthly");
+}
 
 /**
  * A plan is bought as a one-time order for one cycle — there is no

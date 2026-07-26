@@ -11,6 +11,7 @@ import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../lib/cloudinary.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
+import { assignFreePlan } from "../lib/quota.js";
 
 const router = Router();
 
@@ -283,6 +284,7 @@ router.post("/signup/verify", async (req, res) => {
       lastName: pending.lastName,
     });
     await pending.deleteOne();
+    await assignFreePlan(user.id);
 
     const token = signToken(user.id);
     res.status(201).json({ token, user: publicUser(user) });
@@ -404,6 +406,7 @@ router.post("/google", async (req, res) => {
         googleId: profile.sub,
         avatarUrl: profile.picture,
       });
+      await assignFreePlan(user.id);
       created = true;
     } else if (!user.googleId) {
       // An existing password account linking Google for the first time. The
