@@ -25,7 +25,7 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
-import { canCreateWorkspace, canCreateSite } from "../lib/quota.js";
+import { canCreateWorkspace, canCreateSite, canUseRange } from "../lib/quota.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -338,6 +338,9 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
   const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(req.userId as string, rangeKey);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const filters = parseFilters(req.query.filter);
   const stats = await computeStats(ids, rangeKey, filters, win);
@@ -379,6 +382,9 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
   const ids = selectSiteIds(sites, req.query.sites);
 
   const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(req.userId as string, rangeKey);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const filters = parseFilters(req.query.filter);
   const format = req.query.format === "csv" ? "csv" : "xlsx";
@@ -478,6 +484,9 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   if (ids.length === 0) return res.json({ steps: [] });
 
   const rangeKey = String(req.body?.range ?? "24h");
+  const allowed = await canUseRange(req.userId as string, rangeKey);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
   const result = await computeFunnel(ids, steps, rangeKey, win);
   res.json({ steps: result });

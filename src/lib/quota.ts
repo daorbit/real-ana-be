@@ -1,7 +1,7 @@
 import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
-import { getPlanCatalogEntry } from "../plans.js";
+import { getPlanCatalogEntry, type RangeKey } from "../plans.js";
 
 export type QuotaKind = "audit" | "crawl";
 
@@ -79,6 +79,25 @@ export async function canCreateSite(
     return {
       ok: false,
       error: `your plan allows ${plan.maxSitesPerWorkspace} site${plan.maxSitesPerWorkspace === 1 ? "" : "s"} per workspace — upgrade to add more`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether `userId`'s plan may query the given analytics date range. Free is
+ * capped to 1h/24h; a request for 7d/30d/custom on Free is refused server-side
+ * regardless of what the client sends — the range picker hiding the option is
+ * only the friendly half of this.
+ */
+export async function canUseRange(userId: string, range: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to view analytics" };
+
+  const key = (plan.allowedRanges.includes(range as RangeKey) ? range : null) as RangeKey | null;
+  if (!key)
+    return {
+      ok: false,
+      error: `your plan only supports ${plan.allowedRanges.join("/")} ranges — upgrade for 7d, 30d, and custom ranges`,
     };
   return { ok: true };
 }
@@ -174,5 +193,6 @@ export async function quotaSummary(userId: string) {
       used: workspaceCount,
     },
     maxSitesPerWorkspace: plan.maxSitesPerWorkspace,
+    allowedRanges: plan.allowedRanges,
   };
 }

@@ -14,6 +14,9 @@
  * Adding or retiring a tier is a code change (and a deploy), same as adding a
  * new route — not something the admin UI can do.
  */
+/** Analytics date-range keys, matching `stats-core.ts`'s `RANGES` plus "custom". */
+export type RangeKey = "1h" | "24h" | "7d" | "30d" | "custom";
+
 export type PlanCatalogEntry = {
   slug: string;
   name: string;
@@ -25,7 +28,11 @@ export type PlanCatalogEntry = {
   features: string[];
   /** Display order on the pricing page; lower first. */
   sortOrder: number;
+  /** Analytics date ranges this plan may query — everything else 402s. */
+  allowedRanges: RangeKey[];
 };
+
+const ALL_RANGES: RangeKey[] = ["1h", "24h", "7d", "30d", "custom"];
 
 export const PLAN_CATALOG: PlanCatalogEntry[] = [
   {
@@ -38,6 +45,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     monthlyCrawlQuota: 1,
     features: [],
     sortOrder: 0,
+    allowedRanges: ["1h", "24h"],
   },
   {
     slug: "starter",
@@ -49,6 +57,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     monthlyCrawlQuota: 10,
     features: ["Email support"],
     sortOrder: 1,
+    allowedRanges: ALL_RANGES,
   },
   {
     slug: "pro",
@@ -60,6 +69,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     monthlyCrawlQuota: 50,
     features: ["Priority support", "Competitor tracking"],
     sortOrder: 2,
+    allowedRanges: ALL_RANGES,
   },
 ];
 
