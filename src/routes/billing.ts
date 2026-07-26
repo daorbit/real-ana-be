@@ -5,7 +5,7 @@ import { AddonPurchase } from "../models/AddonPurchase.js";
 import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
-import { quotaSummary, activatePlanPeriod } from "../lib/quota.js";
+import { activatePlanPeriod } from "../lib/quota.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
 
@@ -30,12 +30,6 @@ router.get("/plans", async (_req: AuthedRequest, res: Response) => {
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
   const addons = await AddonPack.find({ active: true }).sort({ sortOrder: 1 });
   res.json(addons);
-});
-
-/** The caller's current subscription and this cycle's usage, or null if never subscribed. */
-router.get("/me", async (req: AuthedRequest, res: Response) => {
-  const summary = await quotaSummary(req.userId as string);
-  res.json(summary);
 });
 
 /**

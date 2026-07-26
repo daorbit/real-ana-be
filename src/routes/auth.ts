@@ -11,7 +11,7 @@ import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../lib/cloudinary.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
-import { assignFreePlan } from "../lib/quota.js";
+import { assignFreePlan, quotaSummary } from "../lib/quota.js";
 
 const router = Router();
 
@@ -438,6 +438,10 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
     impersonating: Boolean(req.impersonatorId),
     // Lets the client switch to its read-only demo behaviour after a reload.
     demo: Boolean(req.isDemo),
+    // Plan/usage travels with the profile rather than a separate billing
+    // endpoint — every authenticated page already fetches `/me`, so the quota
+    // numbers a nav badge or an upgrade prompt needs are already in hand.
+    billing: await quotaSummary(req.userId as string),
   });
 });
 
