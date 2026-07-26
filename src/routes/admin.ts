@@ -7,6 +7,9 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
+import { Plan } from "../models/Plan.js";
+import { AddonPack } from "../models/AddonPack.js";
+import { Subscription } from "../models/Subscription.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
@@ -564,6 +567,112 @@ async function resolveSegment(
   return users
     .filter((u) => matches(u.id))
     .map((u) => ({ id: u.id, email: u.email, name: u.name }));
+}
+
+/* ------------------------------- billing plans ----------------------------- */
+
+/** Every plan, including inactive ones — the admin needs to see and revive those too. */
+router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
+  const plans = await Plan.find().sort({ sortOrder: 1 });
+  res.json(plans);
+});
+
+router.post("/billing/plans", async (req: AuthedRequest, res: Response) => {
+  try {
+    const plan = await Plan.create(readPlanBody(req.body));
+    res.status(201).json(plan);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.put("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
+  try {
+    const plan = await Plan.findByIdAndUpdate(req.params.id, readPlanBody(req.body), {
+      new: true,
+      runValidators: true,
+    });
+    if (!plan) return res.status(404).json({ error: "plan not found" });
+    res.json(plan);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.delete("/billing/plans/:id", async (req: AuthedRequest, res: Response) => {
+  const inUse = await Subscription.exists({ planId: req.params.id, status: { $in: ["active", "created", "past_due"] } });
+  if (inUse)
+    return res.status(400).json({ error: "plan has active subscribers — deactivate it instead of deleting" });
+
+  const deleted = await Plan.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "plan not found" });
+  res.status(204).end();
+});
+
+function readPlanBody(body: Record<string, unknown>) {
+  return {
+    name: String(body?.name ?? "").trim(),
+    slug: String(body?.slug ?? "").trim().toLowerCase(),
+    description: String(body?.description ?? "").trim(),
+    priceMonthly: Number(body?.priceMonthly) || 0,
+    priceYearly: Number(body?.priceYearly) || 0,
+    razorpayPlanIdMonthly: String(body?.razorpayPlanIdMonthly ?? "").trim(),
+    razorpayPlanIdYearly: String(body?.razorpayPlanIdYearly ?? "").trim(),
+    maxSites: Math.max(1, Number(body?.maxSites) || 1),
+    monthlyAuditQuota: Math.max(0, Number(body?.monthlyAuditQuota) || 0),
+    monthlyCrawlQuota: Math.max(0, Number(body?.monthlyCrawlQuota) || 0),
+    features: Array.isArray(body?.features) ? body.features.map(String) : [],
+    active: body?.active !== false,
+    sortOrder: Number(body?.sortOrder) || 0,
+  };
+}
+
+/* ------------------------------- billing addons ----------------------------- */
+
+router.get("/billing/addons", async (_req: AuthedRequest, res: Response) => {
+  const addons = await AddonPack.find().sort({ sortOrder: 1 });
+  res.json(addons);
+});
+
+router.post("/billing/addons", async (req: AuthedRequest, res: Response) => {
+  try {
+    const addon = await AddonPack.create(readAddonBody(req.body));
+    res.status(201).json(addon);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.put("/billing/addons/:id", async (req: AuthedRequest, res: Response) => {
+  try {
+    const addon = await AddonPack.findByIdAndUpdate(req.params.id, readAddonBody(req.body), {
+      new: true,
+      runValidators: true,
+    });
+    if (!addon) return res.status(404).json({ error: "addon not found" });
+    res.json(addon);
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+router.delete("/billing/addons/:id", async (req: AuthedRequest, res: Response) => {
+  const deleted = await AddonPack.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "addon not found" });
+  res.status(204).end();
+});
+
+function readAddonBody(body: Record<string, unknown>) {
+  const type: "audit" | "crawl" = body?.type === "crawl" ? "crawl" : "audit";
+  return {
+    name: String(body?.name ?? "").trim(),
+    slug: String(body?.slug ?? "").trim().toLowerCase(),
+    type,
+    quantity: Math.max(1, Number(body?.quantity) || 1),
+    price: Math.max(0, Number(body?.price) || 0),
+    active: body?.active !== false,
+    sortOrder: Number(body?.sortOrder) || 0,
+  };
 }
 
 export default router;

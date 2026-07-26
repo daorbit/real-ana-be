@@ -11,6 +11,8 @@ import adminRoutes from "./routes/admin.js";
 import shareRoutes from "./routes/share.js";
 import seoPublicRoutes from "./routes/seo-public.js";
 import seoRoutes from "./routes/seo.js";
+import billingRoutes from "./routes/billing.js";
+import webhookRoutes from "./routes/webhooks.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -22,6 +24,10 @@ app.set("trust proxy", true);
 // globally — every other endpoint takes small JSON, and a generous body limit on
 // all of them is free memory for anyone who wants to spend ours.
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
+// Razorpay webhook signatures are over the exact request bytes, so this route
+// must see the raw body rather than the parsed-and-reserialised JSON every
+// other route gets — it has to be registered before the global json parser.
+app.use("/api/webhooks/razorpay", express.raw({ type: "application/json" }));
 app.use(express.json());
 // The tracker sends beacons as text/plain (an application/json beacon would
 // trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.
@@ -78,5 +84,9 @@ app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 app.use("/api/workspaces", dashboardCors, seoRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
+app.use("/api/billing", dashboardCors, billingRoutes);
+// Third-party webhooks: no CORS (never called from a browser) and no JWT —
+// the signature check in the route itself is the credential.
+app.use("/api/webhooks", webhookRoutes);
 
 export default app;
