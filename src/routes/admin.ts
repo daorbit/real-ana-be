@@ -8,10 +8,12 @@ import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { Plan } from "../models/Plan.js";
+import { Subscription } from "../models/Subscription.js";
 import { AddonPack } from "../models/AddonPack.js";
 import { Coupon } from "../models/Coupon.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
+import { quotaSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
@@ -95,22 +97,41 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     eventsByUser.set(owner, acc);
   }
 
+  const subs = await Subscription.find({ userId: { $in: ids } }).select("userId planSlug status currentPeriodEnd");
+  const subByUser = new Map(subs.map((s) => [String(s.userId), s]));
+
   res.json({
-    users: users.map((u) => ({
-      id: u.id,
-      email: u.email,
-      name: u.name,
-      role: u.role,
-      createdAt: u.get("createdAt"),
-      workspaceCount: wsByUser.get(u.id) ?? 0,
-      siteCount: sitesByUser.get(u.id) ?? 0,
-      eventCount: eventsByUser.get(u.id)?.n ?? 0,
-      lastEventAt: eventsByUser.get(u.id)?.last ?? null,
-    })),
+    users: users.map((u) => {
+      const sub = subByUser.get(u.id);
+      const expired = sub ? new Date(sub.currentPeriodEnd as Date).getTime() < Date.now() : true;
+      const planEntry = sub ? getPlanCatalogEntry(sub.planSlug as string) : null;
+      return {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        createdAt: u.get("createdAt"),
+        workspaceCount: wsByUser.get(u.id) ?? 0,
+        siteCount: sitesByUser.get(u.id) ?? 0,
+        eventCount: eventsByUser.get(u.id)?.n ?? 0,
+        lastEventAt: eventsByUser.get(u.id)?.last ?? null,
+        plan: planEntry ? { slug: planEntry.slug, name: planEntry.name, expired } : null,
+      };
+    }),
     total,
     page,
     pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
   });
+});
+
+/** A user's plan, cycle, and quota usage — same shape the dashboard shows the user themselves. */
+router.get("/users/:userId/billing", async (req: AuthedRequest, res: Response) => {
+  const target = await User.findById(req.params.userId).select("_id");
+  if (!target) return res.status(404).json({ error: "user not found" });
+
+  const summary = await quotaSummary(String(req.params.userId));
+  if (!summary) return res.json({ subscribed: false });
+  res.json({ subscribed: true, ...summary });
 });
 
 /**
