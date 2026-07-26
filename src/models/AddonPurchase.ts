@@ -12,7 +12,10 @@ const addonPurchaseSchema = new Schema(
     addonPackId: { type: Schema.Types.ObjectId, ref: "AddonPack", required: true },
     razorpayOrderId: { type: String, required: true, unique: true },
     razorpayPaymentId: { type: String, default: "" },
+    /** Final charged amount, after any coupon discount. */
     amount: { type: Number, required: true },
+    /** The code applied, if any — kept for the order history even after the coupon itself is deactivated. */
+    couponCode: { type: String, default: "" },
     status: { type: String, enum: ["created", "paid", "failed"], default: "created" },
   },
   { timestamps: true }

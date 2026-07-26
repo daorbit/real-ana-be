@@ -9,6 +9,7 @@ import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { Plan } from "../models/Plan.js";
 import { AddonPack } from "../models/AddonPack.js";
+import { Coupon } from "../models/Coupon.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { getPlanCatalogEntry } from "../plans.js";
@@ -648,6 +649,58 @@ function readAddonBody(body: Record<string, unknown>) {
     active: body?.active !== false,
     sortOrder: Number(body?.sortOrder) || 0,
   };
+}
+
+/* --------------------------------- coupons ------------------------------------ */
+
+router.get("/billing/coupons", async (_req: AuthedRequest, res: Response) => {
+  const coupons = await Coupon.find().sort({ createdAt: -1 });
+  res.json(coupons);
+});
+
+router.post("/billing/coupons", async (req: AuthedRequest, res: Response) => {
+  try {
+    const coupon = await Coupon.create(readCouponBody(req.body));
+    res.status(201).json(coupon);
+  } catch (e) {
+    res.status(400).json({ error: couponErrorMessage(e) });
+  }
+});
+
+router.put("/billing/coupons/:id", async (req: AuthedRequest, res: Response) => {
+  try {
+    const coupon = await Coupon.findByIdAndUpdate(req.params.id, readCouponBody(req.body), {
+      new: true,
+      runValidators: true,
+    });
+    if (!coupon) return res.status(404).json({ error: "coupon not found" });
+    res.json(coupon);
+  } catch (e) {
+    res.status(400).json({ error: couponErrorMessage(e) });
+  }
+});
+
+router.delete("/billing/coupons/:id", async (req: AuthedRequest, res: Response) => {
+  const deleted = await Coupon.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "coupon not found" });
+  res.status(204).end();
+});
+
+function readCouponBody(body: Record<string, unknown>) {
+  const expiresAt = body?.expiresAt ? new Date(String(body.expiresAt)) : null;
+  return {
+    code: String(body?.code ?? "").trim().toUpperCase(),
+    percentOff: Math.max(1, Math.min(100, Number(body?.percentOff) || 0)),
+    active: body?.active !== false,
+    expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
+  };
+}
+
+/** A duplicate code hits Mongo's unique index — surface that as a plain message instead of a raw driver error. */
+function couponErrorMessage(e: unknown): string {
+  const message = (e as Error)?.message ?? "";
+  if (message.includes("E11000")) return "a coupon with that code already exists";
+  return message || "could not save the coupon";
 }
 
 export default router;
