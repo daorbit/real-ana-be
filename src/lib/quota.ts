@@ -5,10 +5,22 @@ import { getPlanCatalogEntry } from "../plans.js";
 
 export type QuotaKind = "audit" | "crawl";
 
-/** The catalogue plan the user is on, or null if they have no subscription (or an unknown slug). */
+/**
+ * A plan is bought as a one-time order for one cycle — there is no
+ * auto-renewal, so "does this user still have access" is just "has their
+ * paid period ended". A null `currentPeriodEnd` (shouldn't happen once
+ * `activatePlanPeriod` has run at least once) is treated as expired rather
+ * than as unlimited.
+ */
+function isExpired(sub: { currentPeriodEnd?: Date | null }): boolean {
+  if (!sub.currentPeriodEnd) return true;
+  return sub.currentPeriodEnd.getTime() < Date.now();
+}
+
+/** The catalogue plan the user is on, or null if they have no subscription, an unknown slug, or their period has lapsed. */
 async function currentPlan(userId: string) {
   const sub = await Subscription.findOne({ userId });
-  if (!sub) return null;
+  if (!sub || isExpired(sub)) return null;
   return getPlanCatalogEntry(sub.planSlug as string) ?? null;
 }
 
@@ -50,16 +62,19 @@ export async function canCreateSite(
  */
 export async function hasQuota(userId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ userId });
-  // No subscription at all means no plan quota and no addon credits — refuse
-  // rather than silently allowing unlimited use.
+  // No subscription, or a lapsed paid period, means no plan quota — but a
+  // lapsed period can still have unspent addon credits, which never expire,
+  // so this falls through to the credits check below rather than refusing
+  // outright.
   if (!sub) return false;
 
-  const plan = getPlanCatalogEntry(sub.planSlug as string);
-  if (!plan) return false;
+  const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
 
-  const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
-  const used = kind === "audit" ? sub.auditsUsed : sub.crawlsUsed;
-  if ((used as number) < planQuota) return true;
+  if (plan) {
+    const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
+    const used = kind === "audit" ? sub.auditsUsed : sub.crawlsUsed;
+    if ((used as number) < planQuota) return true;
+  }
 
   const addonCredits = kind === "audit" ? sub.addonAuditCredits : sub.addonCrawlCredits;
   return (addonCredits as number) > 0;
@@ -77,18 +92,19 @@ export async function hasQuota(userId: string, kind: QuotaKind): Promise<boolean
 export async function spendQuota(userId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ userId });
   if (!sub) return false;
-  const plan = getPlanCatalogEntry(sub.planSlug as string);
-  if (!plan) return false;
+  const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
 
-  const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
   const usedField = kind === "audit" ? "auditsUsed" : "crawlsUsed";
   const creditField = kind === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
 
-  const used = sub.get(usedField) as number;
-  if (used < planQuota) {
-    sub.set(usedField, used + 1);
-    await sub.save();
-    return true;
+  if (plan) {
+    const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
+    const used = sub.get(usedField) as number;
+    if (used < planQuota) {
+      sub.set(usedField, used + 1);
+      await sub.save();
+      return true;
+    }
   }
 
   const credits = sub.get(creditField) as number;
@@ -113,7 +129,7 @@ export async function quotaSummary(userId: string) {
   return {
     plan: { slug: plan.slug, name: plan.name },
     cycle: sub.cycle,
-    status: sub.status,
+    status: isExpired(sub) ? ("expired" as const) : sub.status,
     currentPeriodEnd: sub.currentPeriodEnd,
     audits: {
       planQuota: plan.monthlyAuditQuota,

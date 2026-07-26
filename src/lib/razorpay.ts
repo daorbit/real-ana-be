@@ -37,21 +37,6 @@ export function verifyOrderPayment(params: {
   return timingSafeEqual(expected, params.signature);
 }
 
-/**
- * Verify a checkout success callback for a subscription.
- * Razorpay's documented scheme: HMAC of `payment_id|subscription_id`.
- */
-export function verifySubscriptionPayment(params: {
-  subscriptionId: string;
-  paymentId: string;
-  signature: string;
-}): boolean {
-  const secret = process.env.RAZORPAY_KEY_SECRET;
-  if (!secret) return false;
-  const expected = sign(`${params.paymentId}|${params.subscriptionId}`, secret);
-  return timingSafeEqual(expected, params.signature);
-}
-
 /** Verify an incoming webhook body against `RAZORPAY_WEBHOOK_SECRET`. */
 export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET;

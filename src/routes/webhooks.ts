@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
-import { Subscription } from "../models/Subscription.js";
 import { AddonPurchase } from "../models/AddonPurchase.js";
+import { PlanPurchase } from "../models/PlanPurchase.js";
 import { verifyWebhookSignature } from "../lib/razorpay.js";
-import { creditAddonPurchase } from "./billing.js";
+import { creditAddonPurchase, creditPlanPurchase } from "./billing.js";
 
 /**
  * Inbound webhooks from third parties. Unauthenticated by design — the
@@ -17,6 +17,10 @@ const router = Router();
  * global JSON parser) because signature verification needs the exact bytes
  * Razorpay signed — a body that has been parsed and re-serialised is not
  * guaranteed to match byte-for-byte.
+ *
+ * Only `order.paid` matters here — plans and addon packs are both bought as
+ * one-time Orders, not Razorpay Subscriptions, so there's no recurring-billing
+ * lifecycle to track.
  */
 router.post("/razorpay", async (req: Request, res: Response) => {
   const signature = req.headers["x-razorpay-signature"];
@@ -29,55 +33,15 @@ router.post("/razorpay", async (req: Request, res: Response) => {
   const event = JSON.parse(rawBody);
 
   try {
-    switch (event.event) {
-      case "subscription.activated":
-      case "subscription.charged": {
-        const payload = event.payload.subscription.entity;
-        const sub = await Subscription.findOne({ razorpaySubscriptionId: payload.id });
-        if (sub) {
-          const periodStart = payload.current_start ? new Date(payload.current_start * 1000) : null;
-          const periodEnd = payload.current_end ? new Date(payload.current_end * 1000) : null;
-          // A new billing period started: reset this cycle's plan usage.
-          // Addon credits are untouched — those persist until spent.
-          const isNewPeriod =
-            periodStart && (!sub.currentPeriodStart || periodStart > sub.currentPeriodStart);
-          sub.set({
-            status: "active",
-            currentPeriodStart: periodStart,
-            currentPeriodEnd: periodEnd,
-            ...(isNewPeriod ? { auditsUsed: 0, crawlsUsed: 0 } : {}),
-          });
-          await sub.save();
-        }
-        break;
-      }
-      case "subscription.pending":
-      case "subscription.halted": {
-        const payload = event.payload.subscription.entity;
-        await Subscription.updateOne(
-          { razorpaySubscriptionId: payload.id },
-          { $set: { status: "past_due" } }
-        );
-        break;
-      }
-      case "subscription.cancelled":
-      case "subscription.completed": {
-        const payload = event.payload.subscription.entity;
-        await Subscription.updateOne(
-          { razorpaySubscriptionId: payload.id },
-          { $set: { status: "cancelled" } }
-        );
-        break;
-      }
-      case "order.paid": {
-        const payload = event.payload.order.entity;
-        const payment = event.payload.payment?.entity;
-        const purchase = await AddonPurchase.findOne({ razorpayOrderId: payload.id });
-        if (purchase) await creditAddonPurchase(purchase.id, payment?.id ?? "");
-        break;
-      }
-      default:
-        break;
+    if (event.event === "order.paid") {
+      const payload = event.payload.order.entity;
+      const payment = event.payload.payment?.entity;
+
+      const addonPurchase = await AddonPurchase.findOne({ razorpayOrderId: payload.id });
+      if (addonPurchase) await creditAddonPurchase(addonPurchase.id, payment?.id ?? "");
+
+      const planPurchase = await PlanPurchase.findOne({ razorpayOrderId: payload.id });
+      if (planPurchase) await creditPlanPurchase(planPurchase.id, payment?.id ?? "");
     }
     res.json({ ok: true });
   } catch (e) {

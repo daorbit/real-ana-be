@@ -1,15 +1,10 @@
 import { Router, Response } from "express";
 import { AddonPack } from "../models/AddonPack.js";
-import { Subscription } from "../models/Subscription.js";
+import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { AddonPurchase } from "../models/AddonPurchase.js";
-import { User } from "../models/User.js";
+import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
-import {
-  razorpay,
-  razorpayConfigured,
-  verifySubscriptionPayment,
-  verifyOrderPayment,
-} from "../lib/razorpay.js";
+import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
 import { quotaSummary } from "../lib/quota.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 
@@ -44,124 +39,114 @@ router.get("/me", async (req: AuthedRequest, res: Response) => {
 
 /* -------------------------------- subscribe --------------------------------- */
 
+const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
+
 /**
- * Start (or switch) a subscription: creates a Razorpay Customer if the user
- * doesn't have one yet, then a Razorpay Subscription against the chosen
- * plan+cycle's Razorpay plan id. The client completes payment with Razorpay
- * Checkout using the returned `subscriptionId`, then calls `/subscribe/verify`.
+ * Start checkout for a plan period: a one-time Razorpay Order, not a
+ * recurring Subscription — there is no auto-charge on renewal. The client
+ * completes payment with Razorpay Checkout using the returned `orderId`, then
+ * calls `/subscribe/verify`. Buying again after the period ends (or early, to
+ * switch plans) is how renewal works.
  */
 router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
-  if (!razorpayConfigured())
-    return res.status(503).json({ error: "payments are not configured" });
-
   const planSlug = String(req.body?.planSlug ?? "");
-  const cycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
+  const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
 
   const plan = await getResolvedPlan(planSlug);
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
-  const rzpPlanId = cycle === "yearly" ? plan.razorpayPlanIdYearly : plan.razorpayPlanIdMonthly;
-  if (!rzpPlanId)
-    return res.status(400).json({ error: `plan has no Razorpay ${cycle} price configured` });
+  const amount = cycle === "yearly" ? plan.priceYearly : plan.priceMonthly;
 
-  const user = await User.findById(req.userId).select("email name");
-  if (!user) return res.status(404).json({ error: "user not found" });
+  // Free has no charge to make — assign it directly rather than round-tripping
+  // through Razorpay for a ₹0 order.
+  if (amount === 0) {
+    await activatePlanPeriod(req.userId as string, plan.slug, cycle);
+    return res.json({ free: true, plan: { name: plan.name, cycle } });
+  }
 
-  let sub = await Subscription.findOne({ userId: req.userId });
+  if (!razorpayConfigured())
+    return res.status(503).json({ error: "payments are not configured" });
 
   try {
-    let customerId = sub?.razorpayCustomerId || "";
-    if (!customerId) {
-      const customer = await razorpay().customers.create({
-        name: user.name,
-        email: user.email,
-        fail_existing: 0,
-      } as never);
-      customerId = customer.id;
-    }
-
-    const rzpSub = await razorpay().subscriptions.create({
-      plan_id: rzpPlanId,
-      customer_notify: 1,
-      total_count: cycle === "yearly" ? 1 : 12,
+    const order = await razorpay().orders.create({
+      amount,
+      currency: "INR",
       notes: { userId: String(req.userId), planSlug: plan.slug, cycle },
-    } as never);
+    });
 
-    if (sub) {
-      sub.set({
-        planSlug: plan.slug,
-        cycle,
-        razorpaySubscriptionId: rzpSub.id,
-        razorpayCustomerId: customerId,
-        status: "created",
-      });
-      await sub.save();
-    } else {
-      sub = await Subscription.create({
-        userId: req.userId,
-        planSlug: plan.slug,
-        cycle,
-        razorpaySubscriptionId: rzpSub.id,
-        razorpayCustomerId: customerId,
-        status: "created",
-      });
-    }
+    await PlanPurchase.create({
+      userId: req.userId,
+      planSlug: plan.slug,
+      cycle,
+      razorpayOrderId: order.id,
+      amount,
+      status: "created",
+    });
 
     res.json({
-      subscriptionId: rzpSub.id,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID,
       plan: { name: plan.name, cycle },
     });
   } catch (e) {
-    console.error("Razorpay subscribe failed:", (e as Error).message);
+    console.error("Razorpay order failed:", (e as Error).message);
     res.status(502).json({ error: "could not start checkout with Razorpay" });
   }
 });
 
-/**
- * Confirm a subscription checkout client-side, as a fast path to unlock the
- * account immediately — the webhook is still the source of truth and will
- * reconcile `status`/`currentPeriodEnd` moments later regardless.
- */
+/** Confirm a plan purchase client-side; the webhook also activates it independently and idempotently. */
 router.post("/subscribe/verify", async (req: AuthedRequest, res: Response) => {
-  const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature } = req.body ?? {};
-  if (!razorpay_payment_id || !razorpay_subscription_id || !razorpay_signature)
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body ?? {};
+  if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature)
     return res.status(400).json({ error: "missing verification fields" });
 
-  const ok = verifySubscriptionPayment({
-    subscriptionId: String(razorpay_subscription_id),
+  const ok = verifyOrderPayment({
+    orderId: String(razorpay_order_id),
     paymentId: String(razorpay_payment_id),
     signature: String(razorpay_signature),
   });
   if (!ok) return res.status(400).json({ error: "signature mismatch" });
 
-  const sub = await Subscription.findOne({
+  const purchase = await PlanPurchase.findOne({
     userId: req.userId,
-    razorpaySubscriptionId: razorpay_subscription_id,
+    razorpayOrderId: razorpay_order_id,
   });
-  if (!sub) return res.status(404).json({ error: "subscription not found" });
+  if (!purchase) return res.status(404).json({ error: "purchase not found" });
 
-  sub.set({ status: "active" });
-  await sub.save();
+  await creditPlanPurchase(purchase.id, String(razorpay_payment_id));
   res.json({ ok: true });
 });
 
-/** Cancel at the end of the current period — no refund, access continues until then. */
-router.post("/cancel", async (req: AuthedRequest, res: Response) => {
-  const sub = await Subscription.findOne({ userId: req.userId });
-  if (!sub || !sub.razorpaySubscriptionId)
-    return res.status(404).json({ error: "no active subscription" });
-
-  try {
-    await razorpay().subscriptions.cancel(sub.razorpaySubscriptionId as string, true);
-    sub.set({ cancelAtPeriodEnd: true });
-    await sub.save();
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("Razorpay cancel failed:", (e as Error).message);
-    res.status(502).json({ error: "could not cancel with Razorpay" });
-  }
-});
+/**
+ * Put a user on a plan for one billing period starting now. Shared by the
+ * free-plan fast path above and by `creditPlanPurchase` once a paid order is
+ * confirmed — both just decide the period, this applies it.
+ *
+ * Switching plans (not just renewing the same one) resets usage too: the new
+ * plan's quota starts from zero rather than inheriting whatever was used
+ * against the old one this cycle.
+ */
+async function activatePlanPeriod(userId: string, planSlug: string, cycle: BillingCycle) {
+  const now = new Date();
+  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
+  await Subscription.findOneAndUpdate(
+    { userId },
+    {
+      $set: {
+        planSlug,
+        cycle,
+        status: "active",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        auditsUsed: 0,
+        crawlsUsed: 0,
+      },
+    },
+    { upsert: true }
+  );
+}
 
 /* ---------------------------------- addons ----------------------------------- */
 
@@ -243,6 +228,28 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   await Subscription.updateOne(
     { userId: purchase.userId },
     { $inc: { [field]: pack.quantity } }
+  );
+
+  purchase.set({ status: "paid", razorpayPaymentId: paymentId });
+  await purchase.save();
+}
+
+/**
+ * Activate the plan period a `PlanPurchase` paid for. Idempotent on
+ * `purchase.status`, same guard as `creditAddonPurchase` — the client-side
+ * verify call and the webhook can both race to call this for the same order.
+ *
+ * Exported for the webhook route, which activates the same purchase on
+ * `order.paid` independently of this router's own verify endpoint.
+ */
+export async function creditPlanPurchase(purchaseId: string, paymentId: string) {
+  const purchase = await PlanPurchase.findById(purchaseId);
+  if (!purchase || purchase.status === "paid") return;
+
+  await activatePlanPeriod(
+    String(purchase.userId),
+    purchase.planSlug as string,
+    purchase.cycle as BillingCycle
   );
 
   purchase.set({ status: "paid", razorpayPaymentId: paymentId });

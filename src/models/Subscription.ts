@@ -1,20 +1,20 @@
 import mongoose, { Schema } from "mongoose";
 
 /**
- * One user's billing state: which plan they're on, the Razorpay subscription
- * behind it, and how much of this cycle's audit/crawl quota is left.
+ * One user's billing state: which plan they're on, when the current paid
+ * period ends, and how much of this cycle's audit/crawl quota is left.
+ *
+ * No Razorpay subscription id — plans are bought via a one-time Order per
+ * billing cycle, not an auto-recurring Razorpay Subscription. Renewal is the
+ * user buying again; nothing here auto-charges. `status` therefore only
+ * tracks whether the account currently has access, not a payment-provider
+ * lifecycle — see `lib/quota.ts` for how `currentPeriodEnd` decides that.
  *
  * One per user rather than per workspace — plans are sold to the account, not
  * to an individual site or workspace, matching how Workspace itself hangs off
  * `userId`.
  */
-export const SUBSCRIPTION_STATUSES = [
-  "created", // Razorpay subscription created, first charge not yet confirmed
-  "active",
-  "past_due", // a renewal charge failed but Razorpay is still retrying
-  "cancelled",
-  "expired",
-] as const;
+export const SUBSCRIPTION_STATUSES = ["active", "expired"] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 
 export const BILLING_CYCLES = ["monthly", "yearly"] as const;
@@ -27,17 +27,15 @@ const subscriptionSchema = new Schema(
     planSlug: { type: String, required: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 
-    razorpaySubscriptionId: { type: String, default: "" },
-    razorpayCustomerId: { type: String, default: "" },
-    status: { type: String, enum: SUBSCRIPTION_STATUSES, required: true, default: "created" },
+    status: { type: String, enum: SUBSCRIPTION_STATUSES, required: true, default: "active" },
 
     currentPeriodStart: { type: Date, default: null },
+    /** Free has no real expiry (see the seed script); paid plans expire one cycle after purchase. */
     currentPeriodEnd: { type: Date, default: null },
-    cancelAtPeriodEnd: { type: Boolean, default: false },
 
     /**
-     * Quota usage for the *current* billing cycle only. Reset to 0 on every
-     * renewal (see the webhook handler) — unused plan quota does not roll over,
+     * Quota usage for the *current* billing cycle only. Reset to 0 whenever a
+     * purchase starts a new period — unused plan quota does not roll over,
      * only purchased addon credits do.
      */
     auditsUsed: { type: Number, default: 0 },
