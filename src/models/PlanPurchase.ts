@@ -1,5 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import { BILLING_CYCLES, type BillingCycle } from "./Subscription.js";
+import { CURRENCIES, DEFAULT_CURRENCY } from "../lib/currency.js";
 
 /**
  * One Razorpay order for a plan period (new subscription or a renewal).
@@ -17,6 +18,7 @@ const planPurchaseSchema = new Schema(
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */
     amount: { type: Number, required: true },
+    currency: { type: String, enum: CURRENCIES, default: DEFAULT_CURRENCY },
     /** The code applied, if any — kept for the order history even after the coupon itself is deactivated. */
     couponCode: { type: String, default: "" },
     status: { type: String, enum: ["created", "paid", "failed"], default: "created" },

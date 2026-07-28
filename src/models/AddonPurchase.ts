@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { CURRENCIES, DEFAULT_CURRENCY } from "../lib/currency.js";
 
 /**
  * One Razorpay order for an addon pack. Created when the user starts checkout,
@@ -14,6 +15,7 @@ const addonPurchaseSchema = new Schema(
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */
     amount: { type: Number, required: true },
+    currency: { type: String, enum: CURRENCIES, default: DEFAULT_CURRENCY },
     /** The code applied, if any — kept for the order history even after the coupon itself is deactivated. */
     couponCode: { type: String, default: "" },
     status: { type: String, enum: ["created", "paid", "failed"], default: "created" },

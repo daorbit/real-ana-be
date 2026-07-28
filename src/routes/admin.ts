@@ -15,6 +15,7 @@ import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { quotaSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
+import { CURRENCIES } from "../lib/currency.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
@@ -604,16 +605,16 @@ router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
 });
 
-/** Set a plan's price. Upserts the price row — a catalogue plan with no row yet defaults to ₹0. */
+/** Set a plan's per-currency prices. Upserts the price row — a catalogue plan with no row yet defaults to 0 in every currency. */
 router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => {
   const slug = String(req.params.slug);
   if (!getPlanCatalogEntry(slug))
     return res.status(404).json({ error: "unknown plan" });
 
-  const priceMonthly = Number(req.body?.priceMonthly);
-  const priceYearly = Number(req.body?.priceYearly);
-  if (!Number.isFinite(priceMonthly) || priceMonthly < 0 || !Number.isFinite(priceYearly) || priceYearly < 0) {
-    return res.status(400).json({ error: "priceMonthly and priceYearly must be non-negative numbers" });
+  const priceMonthly = readCurrencyPrices(req.body?.priceMonthly);
+  const priceYearly = readCurrencyPrices(req.body?.priceYearly);
+  if (!priceMonthly || !priceYearly) {
+    return res.status(400).json({ error: "priceMonthly and priceYearly must have non-negative numbers for every currency" });
   }
 
   await Plan.updateOne(
@@ -623,6 +624,17 @@ router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => 
   );
   res.json(await getResolvedPlan(slug));
 });
+
+/** Validates a `{ INR, USD, EUR }` price object from an admin request body. */
+function readCurrencyPrices(body: unknown): Record<string, number> | null {
+  const result: Record<string, number> = {};
+  for (const currency of CURRENCIES) {
+    const value = Number((body as Record<string, unknown> | undefined)?.[currency]);
+    if (!Number.isFinite(value) || value < 0) return null;
+    result[currency] = value;
+  }
+  return result;
+}
 
 /* ------------------------------- billing addons ----------------------------- */
 
@@ -661,12 +673,15 @@ router.delete("/billing/addons/:id", async (req: AuthedRequest, res: Response) =
 
 function readAddonBody(body: Record<string, unknown>) {
   const type: "audit" | "crawl" = body?.type === "crawl" ? "crawl" : "audit";
+  const price = Object.fromEntries(
+    CURRENCIES.map((c) => [c, Math.max(0, Number((body?.price as Record<string, unknown>)?.[c]) || 0)])
+  );
   return {
     name: String(body?.name ?? "").trim(),
     slug: String(body?.slug ?? "").trim().toLowerCase(),
     type,
     quantity: Math.max(1, Number(body?.quantity) || 1),
-    price: Math.max(0, Number(body?.price) || 0),
+    price,
     active: body?.active !== false,
     sortOrder: Number(body?.sortOrder) || 0,
   };

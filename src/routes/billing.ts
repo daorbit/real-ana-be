@@ -8,6 +8,7 @@ import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpa
 import { activatePlanPeriod } from "../lib/quota.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
+import { resolveCurrency } from "../lib/currency.js";
 
 /**
  * Subscription plans, addon packs, and the checkout flow that sells both
@@ -59,18 +60,19 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
 router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const planSlug = String(req.body?.planSlug ?? "");
   const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
+  const currency = resolveCurrency(req.body?.currency);
 
   const plan = await getResolvedPlan(planSlug);
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
-  const listPrice = cycle === "yearly" ? plan.priceYearly : plan.priceMonthly;
+  const listPrice = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
   const discounted = await applyCoupon(listPrice, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
   const amount = discounted.amount;
 
   // Free has no charge to make — assign it directly rather than round-tripping
-  // through Razorpay for a ₹0 order. A coupon can also discount a paid plan to
-  // ₹0, which takes the same free path.
+  // through Razorpay for a ₹0/$0/€0 order. A coupon can also discount a paid
+  // plan to 0, which takes the same free path.
   if (amount === 0) {
     await activatePlanPeriod(req.userId as string, plan.slug, cycle);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
@@ -82,7 +84,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   try {
     const order = await razorpay().orders.create({
       amount,
-      currency: "INR",
+      currency,
       notes: { userId: String(req.userId), planSlug: plan.slug, cycle },
     });
 
@@ -92,6 +94,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       cycle,
       razorpayOrderId: order.id,
       amount,
+      currency,
       couponCode: discounted.coupon?.code ?? "",
       status: "created",
     });
@@ -142,21 +145,23 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   const pack = await AddonPack.findOne({ slug: req.params.slug, active: true });
   if (!pack) return res.status(404).json({ error: "addon not found" });
 
-  const discounted = await applyCoupon(pack.price as number, req.body?.couponCode);
+  const currency = resolveCurrency(req.body?.currency);
+  const price = (pack.price as unknown as Record<string, number>)[currency] ?? 0;
+  const discounted = await applyCoupon(price, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
 
   if (!razorpayConfigured())
     return res.status(503).json({ error: "payments are not configured" });
 
   try {
-    // Razorpay Orders don't accept ₹0 — a coupon big enough to zero out an
-    // addon still needs a real (if tiny) charge, unlike a free plan there's no
-    // "just activate it" path for credits.
+    // Razorpay Orders don't accept a 0 amount — a coupon big enough to zero
+    // out an addon still needs a real (if tiny) charge, unlike a free plan
+    // there's no "just activate it" path for credits.
     const amount = Math.max(discounted.amount, 100);
 
     const order = await razorpay().orders.create({
       amount,
-      currency: "INR",
+      currency,
       notes: { userId: String(req.userId), addonPackId: String(pack.id) },
     });
 
@@ -165,6 +170,7 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
       addonPackId: pack.id,
       razorpayOrderId: order.id,
       amount,
+      currency,
       couponCode: discounted.coupon?.code ?? "",
       status: "created",
     });
