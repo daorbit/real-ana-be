@@ -147,8 +147,16 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
   const target = await User.findById(req.params.userId).select("email name role");
   if (!target) return res.status(404).json({ error: "user not found" });
 
-  // Admins impersonating admins is an escalation path with no legitimate use.
-  if (target.role === "admin" || target.role === "super_admin")
+  // Nobody impersonates the superadmin — there's no legitimate use, and it's
+  // the one account every other guard in this file defers to.
+  if (target.role === "super_admin")
+    return res.status(400).json({ error: "cannot impersonate the superadmin" });
+
+  // A regular admin impersonating another admin is a sideways escalation path
+  // with no legitimate use. The superadmin is exempt — reviewing what an
+  // admin sees is exactly the kind of oversight the role exists for.
+  const requester = await User.findById(req.userId).select("role");
+  if (target.role === "admin" && requester?.role !== "super_admin")
     return res.status(400).json({ error: "cannot impersonate an admin" });
 
   const token = signImpersonationToken(target.id, req.userId as string);
