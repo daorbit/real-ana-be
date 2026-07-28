@@ -18,7 +18,7 @@ import { getPlanCatalogEntry } from "../plans.js";
 import { CURRENCIES } from "../lib/currency.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
-import { requireAuth, requireAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
+import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
 const router = Router();
 router.use(requireAuth, requireAdmin);
@@ -148,7 +148,7 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
   if (!target) return res.status(404).json({ error: "user not found" });
 
   // Admins impersonating admins is an escalation path with no legitimate use.
-  if (target.role === "admin")
+  if (target.role === "admin" || target.role === "super_admin")
     return res.status(400).json({ error: "cannot impersonate an admin" });
 
   const token = signImpersonationToken(target.id, req.userId as string);
@@ -162,7 +162,36 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
 });
 
 /**
- * Delete an account and everything it owns.
+ * Grant or revoke admin on another account. Superadmin-only: a regular admin
+ * being able to mint more admins (or demote a rival) is an escalation path
+ * with no legitimate use — only the one hardcoded superadmin account may.
+ */
+router.put("/users/:userId/role", requireSuperAdmin, async (req: AuthedRequest, res: Response) => {
+  const role = req.body?.role === "admin" ? "admin" : req.body?.role === "user" ? "user" : null;
+  if (!role) return res.status(400).json({ error: "role must be 'admin' or 'user'" });
+
+  const target = await User.findById(req.params.userId).select("email role");
+  if (!target) return res.status(404).json({ error: "user not found" });
+  if (target.id === req.userId)
+    return res.status(400).json({ error: "cannot change your own role" });
+  // super_admin is not a role this route can set or touch — it's granted only
+  // by a direct DB write, and this guard keeps it that way even against the
+  // account holding it.
+  if (target.role === "super_admin")
+    return res.status(400).json({ error: "cannot change the superadmin's role" });
+
+  target.role = role;
+  await target.save();
+
+  console.log(`[admin] ${req.userId} set ${target.email} role to ${role}`);
+
+  res.json({ id: target.id, email: target.email, role: target.role });
+});
+
+/**
+ * Delete an account and everything it owns. Superadmin-only, same reasoning
+ * as the role route above — an irreversible action on another account isn't
+ * something every admin should be able to do.
  *
  * The cascade mirrors workspace deletion, one tenant at a time: a user's
  * workspaces take their sites, and each site takes its events. Api keys hang
@@ -170,13 +199,13 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
  * mid-cascade failure leaves the account still present and retryable rather
  * than an orphaned pile of data pointing at nothing.
  */
-router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
+router.delete("/users/:userId", requireSuperAdmin, async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId).select("email role");
   if (!target) return res.status(404).json({ error: "user not found" });
 
   // Deleting an admin — or yourself — is an own-goal with no undo, so block
   // both at the door. The role guard also stops one admin from wiping another.
-  if (target.role === "admin")
+  if (target.role === "admin" || target.role === "super_admin")
     return res.status(400).json({ error: "cannot delete an admin account" });
   if (target.id === req.userId)
     return res.status(400).json({ error: "cannot delete your own account" });

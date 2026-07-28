@@ -92,7 +92,28 @@ export async function requireAdmin(
     return res.status(403).json({ error: "not available while impersonating" });
 
   const user = await User.findById(req.userId).select("role");
-  if (user?.role !== "admin")
+  if (user?.role !== "admin" && user?.role !== "super_admin")
     return res.status(403).json({ error: "admin only" });
+  next();
+}
+
+/**
+ * Gate for superadmin-only routes: granting/revoking admin and deleting
+ * users. `super_admin` is a real role on the User document — not derivable
+ * from a request body, only settable by a direct DB write — so this can't be
+ * spoofed by a client tweaking what it sends. Must be mounted after
+ * `requireAuth`.
+ */
+export async function requireSuperAdmin(
+  req: AuthedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (req.impersonatorId)
+    return res.status(403).json({ error: "not available while impersonating" });
+
+  const user = await User.findById(req.userId).select("role");
+  if (user?.role !== "super_admin")
+    return res.status(403).json({ error: "superadmin only" });
   next();
 }

@@ -1,6 +1,10 @@
 import mongoose, { Schema, InferSchemaType } from "mongoose";
 
-export const ROLES = ["admin", "user"] as const;
+/**
+ * `super_admin` is not grantable through the role-change route — it exists so
+ * a request body can never spoof it, only a direct DB write can set it.
+ */
+export const ROLES = ["super_admin", "admin", "user"] as const;
 export type Role = (typeof ROLES)[number];
 
 const userSchema = new Schema(
