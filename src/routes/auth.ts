@@ -477,7 +477,7 @@ function clientIp(req: Request): string {
 router.post("/demo", async (req: Request, res: Response) => {
   try {
     const limit = await getDemoDailyLimit();
-    const attempt = tryStartDemo(clientIp(req), limit);
+    const attempt = await tryStartDemo(clientIp(req), limit);
 
     if (!attempt.allowed) {
       const seconds = Math.max(1, Math.ceil((attempt.retryAt.getTime() - Date.now()) / 1000));

@@ -1,43 +1,31 @@
 /**
- * Per-address demo throttling, held in memory.
+ * Per-address demo throttling.
  *
- * Nothing about a demo visitor is written to the database: the only state is a
- * list of recent start times per address, kept in this process and dropped as
- * soon as it ages past the window. That means no IPs at rest, nothing to expire
- * or purge, and no personal data accumulating for a feature that only needs to
- * answer "has this address had its three goes today?".
+ * Backed by the `DemoStart` collection rather than process memory: the API runs
+ * serverless, so a `Map` in this module is only ever seen by the one instance
+ * that wrote it — the next request lands somewhere cold, sees no history, and
+ * the limit lets it straight through. Anything that has to hold across requests
+ * has to be shared state.
  *
- * The trade-off is deliberate: process memory does not survive a restart and is
- * not shared between instances, so the limit is best-effort rather than exact.
- * For discouraging casual repeat visits — which is what this is for — that is
- * the right side of the trade.
+ * No address is stored. Callers are counted by an HMAC of the address keyed by
+ * the server secret (see `DemoStart`), and the rows expire on their own after
+ * the window.
  */
+
+import crypto from "crypto";
+import { DemoStart } from "../models/DemoStart.js";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
-/** Start times per address, newest last. Pruned on every read. */
-const starts = new Map<string, number[]>();
-
-/** Counters for the admin summary. Reset when the process does. */
-const totals = { started: 0, blocked: 0, since: Date.now() };
-
-/** Drop anything older than the window, and forget addresses with nothing left. */
-function recent(ip: string, now: number): number[] {
-  const cutoff = now - WINDOW_MS;
-  const kept = (starts.get(ip) ?? []).filter((t) => t > cutoff);
-  if (kept.length) starts.set(ip, kept);
-  else starts.delete(ip);
-  return kept;
-}
-
 /**
- * Sweep every address occasionally so one-off visitors don't sit in the map
- * forever. Cheap: the map only ever holds addresses seen in the last day.
+ * Key the hash with the server secret so a leaked database can't be walked
+ * back to addresses by hashing candidate IPs — an unkeyed digest of a value
+ * from a space this small is trivially reversible.
  */
-function sweep(now: number) {
-  for (const ip of [...starts.keys()]) recent(ip, now);
+function hashIp(ip: string): string {
+  const secret = process.env.JWT_SECRET ?? "";
+  return crypto.createHmac("sha256", secret).update(ip).digest("hex").slice(0, 32);
 }
-let lastSweep = Date.now();
 
 export type DemoAttempt =
   | { allowed: true }
@@ -46,44 +34,48 @@ export type DemoAttempt =
 /**
  * Record an attempt from `ip` and say whether it may proceed.
  *
- * A refusal is counted for the admin summary but does not extend the window —
- * otherwise a blocked visitor retrying would push their own reset further away
- * every time.
+ * A refusal is written too — the admin summary reports how often the limit
+ * bites — but refusals are not counted toward the limit itself, so a blocked
+ * visitor retrying doesn't push their own reset further away every time.
  */
-export function tryStartDemo(ip: string, limit: number): DemoAttempt {
-  const now = Date.now();
-  if (now - lastSweep > WINDOW_MS / 24) {
-    sweep(now);
-    lastSweep = now;
-  }
+export async function tryStartDemo(ip: string, limit: number): Promise<DemoAttempt> {
+  const ipHash = hashIp(ip);
+  const since = new Date(Date.now() - WINDOW_MS);
 
-  const mine = recent(ip, now);
+  const mine = await DemoStart.find({ ipHash, allowed: true, createdAt: { $gt: since } })
+    .sort({ createdAt: 1 })
+    .select("createdAt")
+    .lean();
+
   if (mine.length >= limit) {
-    totals.blocked++;
+    await DemoStart.create({ ipHash, allowed: false });
     // The oldest start in the window is the one that has to age out.
-    return { allowed: false, retryAt: new Date(mine[0] + WINDOW_MS) };
+    const oldest = mine[0].createdAt as Date;
+    return { allowed: false, retryAt: new Date(oldest.getTime() + WINDOW_MS) };
   }
 
-  mine.push(now);
-  starts.set(ip, mine);
-  totals.started++;
+  await DemoStart.create({ ipHash, allowed: true });
   return { allowed: true };
 }
 
 /** What the admin summary reports. No addresses leave this module. */
-export function demoUsageSnapshot() {
-  const now = Date.now();
-  sweep(now);
-  let activeStarts = 0;
-  for (const times of starts.values()) activeStarts += times.length;
+export async function demoUsageSnapshot() {
+  const since = new Date(Date.now() - WINDOW_MS);
+
+  const [started, blocked, distinct] = await Promise.all([
+    DemoStart.countDocuments({ allowed: true, createdAt: { $gt: since } }),
+    DemoStart.countDocuments({ allowed: false, createdAt: { $gt: since } }),
+    DemoStart.distinct("ipHash", { allowed: true, createdAt: { $gt: since } }),
+  ]);
+
   return {
     /** Demo starts in the last 24 hours, across all addresses. */
-    today: activeStarts,
+    today: started,
     /** Distinct addresses with a start in the last 24 hours. */
-    activeIps: starts.size,
-    /** Totals since this server process started. */
-    startedSinceBoot: totals.started,
-    blockedSinceBoot: totals.blocked,
-    since: new Date(totals.since).toISOString(),
+    activeIps: distinct.length,
+    /** Attempts the limit turned away in the same window. */
+    blocked: blocked,
+    /** Start of the window these figures cover. */
+    since: since.toISOString(),
   };
 }

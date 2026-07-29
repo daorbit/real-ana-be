@@ -7,11 +7,11 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
+import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { Plan } from "../models/Plan.js";
 import { Subscription } from "../models/Subscription.js";
 import { AddonPack } from "../models/AddonPack.js";
 import { Coupon } from "../models/Coupon.js";
-import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { quotaSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
@@ -251,16 +251,15 @@ function escapeRegex(s: string): string {
 /**
  * How the public demo is being used.
  *
- * The figures come from the in-process throttle rather than a table: nothing
- * about a demo visitor is stored, so this is a live snapshot — counts reset
- * when the server does, and each instance reports its own. Enough to see
- * whether the demo is being used and whether the limit is biting; deliberately
- * not an audit trail.
+ * A rolling 24-hour picture, which is the whole window the throttle keeps:
+ * rows older than that expire themselves, so there is no history behind these
+ * figures and deliberately no audit trail. No visitor address is stored — only
+ * a keyed hash used to count repeat starts.
  */
 router.get("/demo/usage", async (_req: AuthedRequest, res: Response) => {
   const [limit, snapshot] = await Promise.all([
     getDemoDailyLimit(),
-    Promise.resolve(demoUsageSnapshot()),
+    demoUsageSnapshot(),
   ]);
   res.json({ limit, ...snapshot });
 });
