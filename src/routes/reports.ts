@@ -4,7 +4,8 @@ import { ReportSchedule, FREQUENCIES, computeNextRun, type Frequency } from "../
 import { Workspace } from "../models/Workspace.js";
 import { User } from "../models/User.js";
 import { canCreateReportSchedule, canConfigureReport } from "../lib/quota.js";
-import { runSchedule } from "../lib/report-runner.js";
+import { runSchedule, testWhatsApp } from "../lib/report-runner.js";
+import { normalizePhone, whatsappConfigured, sessionStatus } from "../lib/whatsapp.js";
 import { mailConfigured } from "../lib/mail.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
 
@@ -36,6 +37,12 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
       email: r.email,
       unsubscribed: Boolean(r.unsubscribedAt),
     })),
+    phoneRecipients: (schedule.get("phoneRecipients") as { phone: string; label?: string; optedOutAt?: Date }[]).map((p) => ({
+      phone: p.phone,
+      label: p.label ?? "",
+      optedOut: Boolean(p.optedOutAt),
+    })),
+    channels: schedule.get("channels") ?? { email: true, whatsapp: false },
     include: schedule.get("include"),
     attachXlsx: schedule.get("attachXlsx"),
     enabled: schedule.get("enabled"),
@@ -52,7 +59,7 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
  * can't see going out is a report you can't tell is broken.
  */
 async function readBody(req: AuthedRequest): Promise<
-  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; include: Record<string, boolean>; attachXlsx: boolean } }
+  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; phones: { phone: string; label: string }[]; channels: { email: boolean; whatsapp: boolean }; include: Record<string, boolean>; attachXlsx: boolean } }
   | { ok: false; error: string }
 > {
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
@@ -90,9 +97,34 @@ async function readBody(req: AuthedRequest): Promise<
     ? req.body.siteIds.map((s: unknown) => String(s)).filter(Boolean).slice(0, 50)
     : [];
 
+  // Channels default to email-only, matching how every schedule behaved before
+  // WhatsApp existed.
+  const channels = {
+    email: req.body?.channels?.email !== false,
+    whatsapp: Boolean(req.body?.channels?.whatsapp),
+  };
+  if (!channels.email && !channels.whatsapp)
+    return { ok: false, error: "pick at least one delivery channel" };
+
+  const submittedPhones = Array.isArray(req.body?.phoneRecipients) ? req.body.phoneRecipients : [];
+  const phones: { phone: string; label: string }[] = [];
+  for (const entry of submittedPhones) {
+    const raw = String(typeof entry === "string" ? entry : entry?.phone ?? "").trim();
+    if (!raw) continue;
+    const normalized = normalizePhone(raw);
+    // Normalised on the way in, so "+91 70820 72347" and "917082072347" can't
+    // both sit on the list as two different destinations.
+    if (!normalized) return { ok: false, error: `"${raw}" is not a valid phone number` };
+    if (phones.some((p) => p.phone === normalized)) continue;
+    phones.push({ phone: normalized, label: String(entry?.label ?? "").trim().slice(0, 60) });
+  }
+
+  if (channels.whatsapp && !phones.length)
+    return { ok: false, error: "add at least one WhatsApp number, or turn the channel off" };
+
   return {
     ok: true,
-    value: { name, siteIds, frequency: frequency as Frequency, emails, include, attachXlsx: req.body?.attachXlsx !== false },
+    value: { name, siteIds, frequency: frequency as Frequency, emails, phones, channels, include, attachXlsx: req.body?.attachXlsx !== false },
   };
 }
 
@@ -123,6 +155,8 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
     siteIds: parsed.value.siteIds,
     frequency: parsed.value.frequency,
     recipients: parsed.value.emails.map((email) => ({ email, unsubToken: nanoid(32) })),
+    phoneRecipients: parsed.value.phones,
+    channels: parsed.value.channels,
     include: parsed.value.include,
     attachXlsx: parsed.value.attachXlsx,
     nextRunAt: computeNextRun(parsed.value.frequency),
@@ -151,10 +185,21 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
     (schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[]).map((r) => [r.email, r])
   );
 
+  // Phone numbers keep their opted-out state across an edit, same reasoning as
+  // the email unsubscribe tokens above.
+  const existingPhones = new Map(
+    (schedule.get("phoneRecipients") as { phone: string; label?: string; optedOutAt?: Date }[]).map((p) => [p.phone, p])
+  );
+
   schedule.set({
     name: parsed.value.name,
     siteIds: parsed.value.siteIds,
     frequency: parsed.value.frequency,
+    channels: parsed.value.channels,
+    phoneRecipients: parsed.value.phones.map((p) => {
+      const prior = existingPhones.get(p.phone);
+      return prior ? { ...p, optedOutAt: prior.optedOutAt } : p;
+    }),
     include: parsed.value.include,
     attachXlsx: parsed.value.attachXlsx,
     recipients: parsed.value.emails.map(
@@ -208,6 +253,56 @@ router.post("/:id/test", async (req: AuthedRequest, res: Response) => {
       return res.status(502).json({ error: `could not send: ${reason}` });
     }
     res.json({ ok: true, sentTo: outcome.sent });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
+});
+
+/**
+ * Whether WhatsApp delivery is available, and the paired session's state.
+ *
+ * The session is checked live rather than cached: an unofficial gateway drops
+ * its pairing without warning, and a UI that says "connected" from a lookup an
+ * hour old is worse than one that says nothing.
+ */
+router.get("/whatsapp/status", async (_req: AuthedRequest, res: Response) => {
+  if (!whatsappConfigured()) return res.json({ configured: false });
+
+  try {
+    const session = await sessionStatus();
+    res.json({ configured: true, status: session.status, phoneNumber: session.phoneNumber });
+  } catch (e) {
+    // A gateway that is down is a status, not a server error — the page still
+    // renders, it just reports the channel as unavailable.
+    res.json({ configured: true, status: "error", error: (e as Error).message });
+  }
+});
+
+/**
+ * Send this report over WhatsApp now, to one number the owner nominates.
+ *
+ * The number must already be on the schedule: "test" must not become a way to
+ * message an arbitrary phone through someone else's paired account.
+ */
+router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  if (!whatsappConfigured()) return res.status(503).json({ error: "WhatsApp is not configured" });
+
+  const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
+  if (!schedule) return res.status(404).json({ error: "schedule not found" });
+
+  const requested = normalizePhone(String(req.body?.phone ?? ""));
+  const onSchedule = (schedule.get("phoneRecipients") as { phone: string }[]).some(
+    (p) => p.phone === requested
+  );
+  if (!requested || !onSchedule)
+    return res.status(400).json({ error: "pick a number that is already on this report" });
+
+  try {
+    const messageId = await testWhatsApp(schedule, requested);
+    res.json({ ok: true, sentTo: requested, messageId });
   } catch (e) {
     res.status(502).json({ error: (e as Error).message });
   }

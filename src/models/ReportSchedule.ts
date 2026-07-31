@@ -46,6 +46,27 @@ const recipientSchema = new Schema(
   { _id: false }
 );
 
+/**
+ * A WhatsApp destination.
+ *
+ * Separate from `recipients` rather than a `type` field on it, because the two
+ * differ in more than transport: a phone number has no unsubscribe link to
+ * follow (there is no page to open from a chat), so opting out is a reply to
+ * the sender or a change made by the owner. Modelling them as one list would
+ * mean carrying an unsubscribe token that can never be used.
+ */
+const phoneRecipientSchema = new Schema(
+  {
+    /** Digits only, country code first — normalised on save by `lib/whatsapp.ts`. */
+    phone: { type: String, required: true, trim: true },
+    /** Free-text note so an owner can tell two numbers apart. */
+    label: { type: String, trim: true, maxlength: 60 },
+    /** Set when the owner removes them from delivery without deleting the row. */
+    optedOutAt: { type: Date },
+  },
+  { _id: false }
+);
+
 const reportScheduleSchema = new Schema(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
@@ -55,6 +76,23 @@ const reportScheduleSchema = new Schema(
 
     frequency: { type: String, enum: FREQUENCIES, required: true },
     recipients: { type: [recipientSchema], default: [] },
+    /**
+     * WhatsApp destinations. Empty on every schedule that predates the channel,
+     * which is exactly the right default — an existing report must not start
+     * messaging phones because the feature shipped.
+     */
+    phoneRecipients: { type: [phoneRecipientSchema], default: [] },
+    /**
+     * Which channels this report goes out on.
+     *
+     * Defaulting to email alone keeps existing schedules behaving as they did.
+     * Both can be on at once: the same numbers by email with the spreadsheet,
+     * and a short version on WhatsApp.
+     */
+    channels: {
+      email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: false },
+    },
 
     /**
      * What goes in the email. All three off would send a greeting and nothing

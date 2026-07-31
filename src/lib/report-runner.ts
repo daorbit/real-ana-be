@@ -5,6 +5,8 @@ import { SeoReport } from "../models/SeoReport.js";
 import { computeStats, resolveWindow } from "../stats-core.js";
 import { buildReportWorkbook, type SeoRow } from "./report-xlsx.js";
 import { sendReportEmail } from "./report-mail.js";
+import { sendWhatsAppReport } from "./report-whatsapp.js";
+import { whatsappConfigured } from "./whatsapp.js";
 
 /**
  * Turning a due schedule into sent email.
@@ -76,11 +78,40 @@ async function latestSeoRows(siteIds: string[]): Promise<SeoRow[]> {
   return [...byUrl.values()].sort((a, b) => a.score - b.score).slice(0, 20);
 }
 
+/**
+ * The headline numbers, in the order they're read.
+ *
+ * Shared by both channels so an email and a WhatsApp message describing the
+ * same period can't disagree — including the bounce-rate inversion, which is
+ * the one that would be easy to get wrong in only one of them.
+ */
+function buildMetrics(stats: Awaited<ReturnType<typeof computeStats>> | null) {
+  if (!stats) return [];
+  return [
+    { label: "Visitors", value: String(stats.visitors), delta: stats.deltas?.visitors },
+    { label: "Pageviews", value: String(stats.pageviews), delta: stats.deltas?.pageviews },
+    { label: "Sessions", value: String(stats.sessions), delta: stats.deltas?.sessions },
+    // Negated: a bounce rate going *down* is good news, and an unnegated red
+    // arrow on an improvement reads as a regression.
+    {
+      label: "Bounce rate",
+      value: `${stats.bounceRate}%`,
+      delta: stats.deltas?.bounceRate == null ? null : -stats.deltas.bounceRate,
+    },
+    { label: "Avg. session", value: duration(stats.avgSessionMs), delta: stats.deltas?.avgSessionMs },
+    { label: "Pages / session", value: String(stats.pagesPerSession), delta: stats.deltas?.pagesPerSession },
+  ];
+}
+
 export type SendOutcome = {
   scheduleName: string;
+  /** Email addresses the report reached. */
   sent: string[];
   failed: { email: string; error: string }[];
   skipped: string[];
+  /** Phone numbers the report reached, and the ones it didn't. */
+  whatsappSent: string[];
+  whatsappFailed: { phone: string; error: string }[];
 };
 
 /**
@@ -117,22 +148,7 @@ export async function runSchedule(
 
   const label = periodLabel(frequency, window.since, window.until);
 
-  const metrics = stats
-    ? [
-        { label: "Visitors", value: String(stats.visitors), delta: stats.deltas?.visitors },
-        { label: "Pageviews", value: String(stats.pageviews), delta: stats.deltas?.pageviews },
-        { label: "Sessions", value: String(stats.sessions), delta: stats.deltas?.sessions },
-        // Bounce delta is negated: a bounce rate going *down* is good news, and
-        // an unnegated red arrow on an improvement reads as a regression.
-        {
-          label: "Bounce rate",
-          value: `${stats.bounceRate}%`,
-          delta: stats.deltas?.bounceRate == null ? null : -stats.deltas.bounceRate,
-        },
-        { label: "Avg. session", value: duration(stats.avgSessionMs), delta: stats.deltas?.avgSessionMs },
-        { label: "Pages / session", value: String(stats.pagesPerSession), delta: stats.deltas?.pagesPerSession },
-      ]
-    : [];
+  const metrics = buildMetrics(stats);
 
   const xlsx = schedule.get("attachXlsx")
     ? await buildReportWorkbook({
@@ -152,35 +168,123 @@ export async function runSchedule(
       ? `${appUrl()}/share/${shareToken}`
       : undefined;
 
-  const outcome: SendOutcome = { scheduleName: schedule.get("name") as string, sent: [], failed: [], skipped: [] };
-  const recipients = schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[];
+  const outcome: SendOutcome = {
+    scheduleName: schedule.get("name") as string,
+    sent: [],
+    failed: [],
+    skipped: [],
+    whatsappSent: [],
+    whatsappFailed: [],
+  };
 
-  for (const recipient of recipients) {
-    if (options.onlyTo && recipient.email !== options.onlyTo) continue;
-    if (recipient.unsubscribedAt) {
-      outcome.skipped.push(recipient.email);
-      continue;
+  const channels = (schedule.get("channels") ?? { email: true, whatsapp: false }) as {
+    email: boolean;
+    whatsapp: boolean;
+  };
+
+  if (channels.email) {
+    const recipients = schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[];
+
+    for (const recipient of recipients) {
+      if (options.onlyTo && recipient.email !== options.onlyTo) continue;
+      if (recipient.unsubscribedAt) {
+        outcome.skipped.push(recipient.email);
+        continue;
+      }
+
+      try {
+        await sendReportEmail({
+          to: recipient.email,
+          workspaceName: workspace.get("name") as string,
+          periodLabel: label,
+          metrics,
+          seo,
+          dashboardUrl,
+          unsubscribeUrl: `${apiUrl()}/api/public/reports/unsubscribe/${recipient.unsubToken}`,
+          xlsx,
+          isTest: options.isTest,
+        });
+        outcome.sent.push(recipient.email);
+      } catch (e) {
+        outcome.failed.push({ email: recipient.email, error: (e as Error).message });
+      }
     }
+  }
 
-    try {
-      await sendReportEmail({
-        to: recipient.email,
-        workspaceName: workspace.get("name") as string,
-        periodLabel: label,
-        metrics,
-        seo,
-        dashboardUrl,
-        unsubscribeUrl: `${apiUrl()}/api/public/reports/unsubscribe/${recipient.unsubToken}`,
-        xlsx,
-        isTest: options.isTest,
-      });
-      outcome.sent.push(recipient.email);
-    } catch (e) {
-      outcome.failed.push({ email: recipient.email, error: (e as Error).message });
+  if (channels.whatsapp) {
+    // A test send goes to the owner's email only, so it must not fan out to
+    // every phone on the list — someone previewing a report should not message
+    // their client to find out what it looks like.
+    const phones = options.onlyTo
+      ? []
+      : (schedule.get("phoneRecipients") as { phone: string; optedOutAt?: Date }[]).filter(
+          (p) => !p.optedOutAt
+        );
+
+    if (phones.length && !whatsappConfigured()) {
+      outcome.whatsappFailed.push(...phones.map((p) => ({ phone: p.phone, error: "WhatsApp is not configured" })));
+    } else {
+      for (const recipient of phones) {
+        try {
+          await sendWhatsAppReport({
+            to: recipient.phone,
+            workspaceName: workspace.get("name") as string,
+            periodLabel: label,
+            metrics,
+            seo,
+            dashboardUrl,
+            isTest: options.isTest,
+          });
+          outcome.whatsappSent.push(recipient.phone);
+        } catch (e) {
+          outcome.whatsappFailed.push({ phone: recipient.phone, error: (e as Error).message });
+        }
+      }
     }
   }
 
   return outcome;
+}
+
+/**
+ * Send this report to one phone number, now.
+ *
+ * The WhatsApp counterpart to the owner-only email test: the owner picks which
+ * of their own numbers to preview on, and nobody else is messaged.
+ */
+export async function testWhatsApp(
+  schedule: InstanceType<typeof ReportSchedule>,
+  phone: string
+): Promise<string> {
+  const workspace = await Workspace.findById(schedule.get("workspaceId"));
+  if (!workspace) throw new Error("workspace no longer exists");
+
+  const configured = schedule.get("siteIds") as string[];
+  const siteIds = configured.length
+    ? configured
+    : (await Site.find({ workspaceId: workspace.id }).select("siteId").lean()).map((s) => s.siteId as string);
+
+  const frequency = schedule.get("frequency") as Frequency;
+  const include = schedule.get("include") as { analytics: boolean; seo: boolean; dashboardLink: boolean };
+  const range = rangeForFrequency(frequency);
+  const window = resolveWindow(range);
+
+  const stats = include.analytics && siteIds.length ? await computeStats(siteIds, range) : null;
+  const seo = include.seo ? await latestSeoRows(siteIds) : [];
+  const shareToken = workspace.get("shareToken") as string | undefined;
+
+  return sendWhatsAppReport({
+    to: phone,
+    workspaceName: workspace.get("name") as string,
+    periodLabel: periodLabel(frequency, window.since, window.until),
+    metrics: buildMetrics(stats),
+    seo,
+    dashboardUrl:
+      include.dashboardLink && workspace.get("shareEnabled") && shareToken
+        ? `${appUrl()}/share/${shareToken}`
+        : undefined,
+    isTest: true,
+  });
 }
 
 export type RunSummary = {
@@ -190,6 +294,8 @@ export type RunSummary = {
   failed: number;
   /** Due, but sent within the last 24h — held back by the minimum-interval guard. */
   skipped: number;
+  /** WhatsApp messages delivered across the batch. */
+  whatsappSent: number;
   errors: string[];
 };
 
@@ -206,7 +312,7 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
     .sort({ nextRunAt: 1 })
     .limit(BATCH_LIMIT);
 
-  const summary: RunSummary = { due: due.length, attempted: 0, sent: 0, failed: 0, skipped: 0, errors: [] };
+  const summary: RunSummary = { due: due.length, attempted: 0, sent: 0, failed: 0, skipped: 0, whatsappSent: 0, errors: [] };
 
   for (const schedule of due) {
     const lastSentAt = schedule.get("lastSentAt") as Date | undefined;
@@ -224,11 +330,15 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
     try {
       const outcome = await runSchedule(schedule);
       summary.sent += outcome.sent.length;
-      summary.failed += outcome.failed.length;
-      if (outcome.failed.length) {
-        summary.errors.push(`${outcome.scheduleName}: ${outcome.failed.map((f) => `${f.email} (${f.error})`).join(", ")}`);
-      }
-      schedule.set("lastError", outcome.failed.length ? outcome.failed[0].error : undefined);
+      summary.failed += outcome.failed.length + outcome.whatsappFailed.length;
+      summary.whatsappSent += outcome.whatsappSent.length;
+
+      const problems = [
+        ...outcome.failed.map((f) => `${f.email} (${f.error})`),
+        ...outcome.whatsappFailed.map((f) => `${f.phone} (${f.error})`),
+      ];
+      if (problems.length) summary.errors.push(`${outcome.scheduleName}: ${problems.join(", ")}`);
+      schedule.set("lastError", problems.length ? problems[0] : undefined);
     } catch (e) {
       summary.failed++;
       summary.errors.push(`${schedule.get("name")}: ${(e as Error).message}`);
