@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { repriceAllPlans } from "../lib/fx.js";
+import { sendFxSuccessReport, sendFxFailureReport } from "../lib/fx-report.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -52,10 +53,15 @@ router.get("/fx-sync", async (req: Request, res: Response) => {
   try {
     const result = await repriceAllPlans();
     console.log(`[cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${result.snapshot.rates.USD} USD`);
+    // Awaited, not fired and forgotten: a serverless function is frozen the
+    // instant the response goes out, which would kill the send mid-flight.
+    await sendFxSuccessReport(result, "Vercel Cron");
     res.json({ ok: true, ...result });
   } catch (e) {
-    console.error("[cron] fx reprice failed, prices unchanged:", (e as Error).message);
-    res.status(502).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] fx reprice failed, prices unchanged:", message);
+    await sendFxFailureReport(message, "Vercel Cron");
+    res.status(502).json({ ok: false, error: message });
   }
 });
 

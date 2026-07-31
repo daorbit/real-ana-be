@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { repriceAllPlans, fxConfigured } from "./fx.js";
+import { sendFxSuccessReport, sendFxFailureReport } from "./fx-report.js";
 
 /**
  * In-process nightly repricing, for hosts where the process stays alive.
@@ -62,7 +63,10 @@ async function runFxSync(): Promise<void> {
     const result = await repriceAllPlans();
     const rate = result.snapshot.rates.USD;
     console.log(`[fx-cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${rate} USD`);
+    await sendFxSuccessReport(result, "in-process cron");
   } catch (e) {
-    console.error("[fx-cron] reprice failed, prices unchanged:", (e as Error).message);
+    const message = (e as Error).message;
+    console.error("[fx-cron] reprice failed, prices unchanged:", message);
+    await sendFxFailureReport(message, "in-process cron");
   }
 }
