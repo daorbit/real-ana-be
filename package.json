@@ -11,6 +11,7 @@
     "start:dist": "node dist/index.js"
   },
   "dependencies": {
+    "@types/node-cron": "^3.0.11",
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
@@ -21,6 +22,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.4",
     "nanoid": "^5.1.16",
+    "node-cron": "^4.6.0",
     "nodemailer": "^9.0.3",
     "razorpay": "^2.9.8",
     "ua-parser-js": "^2.0.10"

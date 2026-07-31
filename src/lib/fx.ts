@@ -1,6 +1,8 @@
 import axios from "axios";
 import { AppSetting } from "../models/AppSetting.js";
-import type { Currency } from "./currency.js";
+import { Plan } from "../models/Plan.js";
+import { listResolvedPlans } from "./planPricing.js";
+import { CURRENCIES, type Currency } from "./currency.js";
 
 /**
  * USD pricing, derived from the INR price an admin actually types.
@@ -10,11 +12,12 @@ import type { Currency } from "./currency.js";
  * and nobody notices until a US customer is quoted last quarter's price. So
  * the USD column is computed from a live rate instead.
  *
- * The refresh is a button an admin presses, not a cron: exchange rates move
- * slowly enough that a daily job buys nothing, and a price that changes on its
- * own — mid-checkout, without anyone deciding to — is worse than a stale one.
- * The admin sees the rate, presses the button, prices change. That's the whole
- * contract.
+ * Two things trigger a reprice, and both call `repriceAllPlans` below:
+ *
+ *  - a nightly `node-cron` job (`lib/fx-cron.ts`), so prices track the rate
+ *    without anyone remembering to look;
+ *  - an admin button, for when the rate has moved and waiting for tonight
+ *    isn't acceptable.
  *
  * The last fetched rate is cached in `AppSetting` so the admin screen can show
  * what the current prices were computed from without spending an API call on
@@ -104,4 +107,51 @@ export function convertMinor(amountMinor: number, currency: Currency, snapshot: 
     throw new Error(`no rate available for ${currency}`);
   }
   return Math.max(0, Math.round(amountMinor * (rate as number)));
+}
+
+export type RepricedPlan = {
+  slug: string;
+  name: string;
+  priceMonthly: Record<string, number>;
+  priceYearly: Record<string, number>;
+};
+
+export type RepriceResult = {
+  snapshot: FxSnapshot;
+  base: Currency;
+  /** The currencies that were recomputed — everything except the base. */
+  derived: Currency[];
+  plans: RepricedPlan[];
+};
+
+/**
+ * Recompute every plan's non-base price from its base price at the current rate.
+ *
+ * Shared by the admin button and the nightly job so the two can't drift into
+ * doing subtly different things to the same prices.
+ *
+ * Fetches the rate fresh rather than reading the cache: the point of a reprice
+ * is that the new numbers reflect today's rate, not whenever someone last
+ * looked. If the fetch fails this throws and no plan is touched — a partial
+ * reprice, where some tiers moved and others didn't, is worse than none.
+ */
+export async function repriceAllPlans(): Promise<RepriceResult> {
+  const snapshot = await fetchRates();
+  const derived = CURRENCIES.filter((c) => c !== FX_BASE);
+  const plans = await listResolvedPlans();
+  const repriced: RepricedPlan[] = [];
+
+  for (const plan of plans) {
+    const priceMonthly = { ...plan.priceMonthly };
+    const priceYearly = { ...plan.priceYearly };
+    for (const currency of derived) {
+      priceMonthly[currency] = convertMinor(plan.priceMonthly[FX_BASE] ?? 0, currency, snapshot);
+      priceYearly[currency] = convertMinor(plan.priceYearly[FX_BASE] ?? 0, currency, snapshot);
+    }
+
+    await Plan.updateOne({ slug: plan.slug }, { $set: { priceMonthly, priceYearly } }, { upsert: true });
+    repriced.push({ slug: plan.slug, name: plan.name, priceMonthly, priceYearly });
+  }
+
+  return { snapshot, base: FX_BASE, derived, plans: repriced };
 }

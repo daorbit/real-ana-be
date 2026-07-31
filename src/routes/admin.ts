@@ -15,8 +15,8 @@ import { Coupon } from "../models/Coupon.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { quotaSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
-import { CURRENCIES, type Currency } from "../lib/currency.js";
-import { FX_BASE, fxConfigured, fetchRates, getCachedRates, convertMinor } from "../lib/fx.js";
+import { CURRENCIES } from "../lib/currency.js";
+import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../lib/fx.js";
 import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
@@ -674,47 +674,19 @@ router.get("/billing/fx", async (_req: AuthedRequest, res: Response) => {
 });
 
 /**
- * Recompute every plan's USD price from its INR price at the current rate.
+ * Recompute every plan's USD price from its INR price at the current rate, now,
+ * rather than waiting for tonight's job (`lib/fx-cron.ts`).
  *
- * Deliberately manual: an admin presses this, sees what changed, and lives
- * with the result until they press it again. Prices that move on their own
- * schedule surprise customers mid-checkout.
- *
- * The rate is fetched fresh rather than read from cache — the whole point is
- * that the new prices reflect today's rate, not whenever someone last looked.
+ * Same code path as the scheduled run — see `repriceAllPlans`.
  */
 router.post("/billing/plans/sync-currency", async (_req: AuthedRequest, res: Response) => {
-  let snapshot;
   try {
-    snapshot = await fetchRates();
+    res.json(await repriceAllPlans());
   } catch (e) {
     // A rate provider being down is not the admin's fault and not a 500 on our
     // side — it just means the prices stay exactly as they were.
-    return res.status(502).json({ error: (e as Error).message });
+    res.status(502).json({ error: (e as Error).message });
   }
-
-  const plans = await listResolvedPlans();
-  const derived: Currency[] = CURRENCIES.filter((c) => c !== FX_BASE);
-  const changes: {
-    slug: string;
-    name: string;
-    priceMonthly: Record<string, number>;
-    priceYearly: Record<string, number>;
-  }[] = [];
-
-  for (const plan of plans) {
-    const priceMonthly = { ...plan.priceMonthly };
-    const priceYearly = { ...plan.priceYearly };
-    for (const currency of derived) {
-      priceMonthly[currency] = convertMinor(plan.priceMonthly[FX_BASE] ?? 0, currency, snapshot);
-      priceYearly[currency] = convertMinor(plan.priceYearly[FX_BASE] ?? 0, currency, snapshot);
-    }
-
-    await Plan.updateOne({ slug: plan.slug }, { $set: { priceMonthly, priceYearly } }, { upsert: true });
-    changes.push({ slug: plan.slug, name: plan.name, priceMonthly, priceYearly });
-  }
-
-  res.json({ snapshot, base: FX_BASE, derived, plans: changes });
 });
 
 /** Validates a `{ INR, USD, EUR }` price object from an admin request body. */

@@ -1,5 +1,6 @@
 {
   "version": 2,
   "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }],
-  "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }]
+  "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }],
+  "crons": [{ "path": "/api/cron/fx-sync", "schedule": "0 2 * * *" }]
 }

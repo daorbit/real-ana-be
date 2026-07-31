@@ -14,6 +14,7 @@ import plansPublicRoutes from "./routes/plans-public.js";
 import seoRoutes from "./routes/seo.js";
 import billingRoutes from "./routes/billing.js";
 import webhookRoutes from "./routes/webhooks.js";
+import cronRoutes from "./routes/cron.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -90,5 +91,8 @@ app.use("/api/billing", dashboardCors, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —
 // the signature check in the route itself is the credential.
 app.use("/api/webhooks", webhookRoutes);
+// Vercel Cron: same reasoning as the webhooks above — never called from a
+// browser, and `CRON_SECRET` in the route is the credential.
+app.use("/api/cron", cronRoutes);
 
 export default app;
