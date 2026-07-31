@@ -15,6 +15,8 @@ import seoRoutes from "./routes/seo.js";
 import billingRoutes from "./routes/billing.js";
 import webhookRoutes from "./routes/webhooks.js";
 import cronRoutes from "./routes/cron.js";
+import reportRoutes from "./routes/reports.js";
+import reportsPublicRoutes from "./routes/reports-public.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -78,6 +80,10 @@ app.use("/api/share", openCors, shareRoutes);
 // the shared dashboards above.
 app.use("/api/public/seo", openCors, seoPublicRoutes);
 app.use("/api/public/plans", openCors, plansPublicRoutes);
+// Report unsubscribe links. Unauthenticated for the same reason as the share
+// links above — most recipients have no account, and requiring one to stop
+// receiving mail is how a report turns into a spam complaint.
+app.use("/api/public/reports", openCors, reportsPublicRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
@@ -85,6 +91,8 @@ app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.
 app.use("/api/workspaces", dashboardCors, seoRoutes);
+// Scheduled email reports, same prefix and same ownership check.
+app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
 app.use("/api/billing", dashboardCors, billingRoutes);

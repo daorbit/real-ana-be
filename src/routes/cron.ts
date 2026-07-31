@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { repriceAllPlans } from "../lib/fx.js";
 import { sendFxSuccessReport, sendFxFailureReport } from "../lib/fx-report.js";
+import { runDueSchedules } from "../lib/report-runner.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -62,6 +63,32 @@ router.get("/fx-sync", async (req: Request, res: Response) => {
     console.error("[cron] fx reprice failed, prices unchanged:", message);
     await sendFxFailureReport(message, "Vercel Cron");
     res.status(502).json({ ok: false, error: message });
+  }
+});
+
+/**
+ * Send every scheduled report that has come due.
+ *
+ * One cron entry covers daily, weekly and monthly alike: each schedule stores
+ * its own `nextRunAt`, so frequency is arithmetic on that field rather than
+ * three separate cron expressions — which also keeps this inside the Hobby
+ * tier's one-run-per-day limit.
+ *
+ * Always 200, even when individual sends failed. A non-2xx tells Vercel the
+ * job itself is broken, and a single bad recipient address is not that; the
+ * failures are in the body and the logs instead.
+ */
+router.get("/reports", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await runDueSchedules();
+    console.log(`[cron] reports: ${summary.attempted} due, ${summary.sent} sent, ${summary.failed} failed`);
+    if (summary.errors.length) console.error("[cron] report errors:", summary.errors.join(" | "));
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] report run failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
 

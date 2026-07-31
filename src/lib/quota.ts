@@ -1,7 +1,8 @@
 import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
-import { getPlanCatalogEntry, type RangeKey } from "../plans.js";
+import { getPlanCatalogEntry, type RangeKey, type Frequency } from "../plans.js";
+import { ReportSchedule } from "../models/ReportSchedule.js";
 
 export type QuotaKind = "audit" | "crawl";
 
@@ -99,6 +100,61 @@ export async function canUseRange(userId: string, range: string): Promise<{ ok: 
       ok: false,
       error: `your plan only supports ${plan.allowedRanges.join("/")} ranges — upgrade for 7d, 30d, and custom ranges`,
     };
+  return { ok: true };
+}
+
+/**
+ * Whether `userId` may add one more emailed report schedule to `workspaceId`.
+ *
+ * `excludeId` lets an edit re-check the limits without the schedule being
+ * edited counting against itself.
+ */
+export async function canCreateReportSchedule(
+  userId: string,
+  workspaceId: string,
+  excludeId?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to schedule reports" };
+
+  if (excludeId) return { ok: true };
+
+  const count = await ReportSchedule.countDocuments({ workspaceId });
+  if (count >= plan.maxReportSchedules)
+    return {
+      ok: false,
+      error: `your plan allows ${plan.maxReportSchedules} scheduled report${plan.maxReportSchedules === 1 ? "" : "s"} per workspace — upgrade to add more`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether a schedule's frequency and recipient count fit the user's plan.
+ *
+ * Checked server-side rather than trusted from the form: the recipient cap is
+ * what stops a free account from using us as a mailing list, so the UI hiding
+ * the "add" button is only the polite half of it.
+ */
+export async function canConfigureReport(
+  userId: string,
+  frequency: string,
+  recipientCount: number,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to schedule reports" };
+
+  if (!plan.allowedReportFrequencies.includes(frequency as Frequency))
+    return {
+      ok: false,
+      error: `your plan supports ${plan.allowedReportFrequencies.join("/")} reports — upgrade for more frequent delivery`,
+    };
+
+  if (recipientCount > plan.maxReportRecipients)
+    return {
+      ok: false,
+      error: `your plan allows ${plan.maxReportRecipients} recipient${plan.maxReportRecipients === 1 ? "" : "s"} per report — upgrade to send to more people`,
+    };
+
   return { ok: true };
 }
 

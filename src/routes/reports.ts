@@ -1,0 +1,216 @@
+import { Router, Response } from "express";
+import { nanoid } from "nanoid";
+import { ReportSchedule, FREQUENCIES, computeNextRun, type Frequency } from "../models/ReportSchedule.js";
+import { Workspace } from "../models/Workspace.js";
+import { User } from "../models/User.js";
+import { canCreateReportSchedule, canConfigureReport } from "../lib/quota.js";
+import { runSchedule } from "../lib/report-runner.js";
+import { mailConfigured } from "../lib/mail.js";
+import { requireAuth, AuthedRequest } from "../auth.js";
+
+/**
+ * Scheduled email reports, owned by the workspace owner.
+ *
+ * Mounted under `/api/workspaces/:wid/reports` so ownership is checked the same
+ * way every other workspace-scoped route checks it: the workspace must belong
+ * to the caller, or it doesn't exist as far as they're concerned.
+ */
+const router = Router({ mergeParams: true });
+router.use(requireAuth);
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/** The caller's workspace, or null — never "someone else's workspace". */
+async function ownedWorkspace(req: AuthedRequest) {
+  return Workspace.findOne({ _id: req.params.wid, userId: req.userId });
+}
+
+/** The shape the client sees. `unsubToken` never leaves the server — it's a credential. */
+function present(schedule: InstanceType<typeof ReportSchedule>) {
+  return {
+    id: schedule.id,
+    name: schedule.get("name"),
+    siteIds: schedule.get("siteIds"),
+    frequency: schedule.get("frequency"),
+    recipients: (schedule.get("recipients") as { email: string; unsubscribedAt?: Date }[]).map((r) => ({
+      email: r.email,
+      unsubscribed: Boolean(r.unsubscribedAt),
+    })),
+    include: schedule.get("include"),
+    attachXlsx: schedule.get("attachXlsx"),
+    enabled: schedule.get("enabled"),
+    lastSentAt: schedule.get("lastSentAt"),
+    nextRunAt: schedule.get("nextRunAt"),
+    lastError: schedule.get("lastError"),
+  };
+}
+
+/**
+ * Validates and normalises a schedule body.
+ *
+ * The owner's own address is always included and always first: a report you
+ * can't see going out is a report you can't tell is broken.
+ */
+async function readBody(req: AuthedRequest): Promise<
+  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; include: Record<string, boolean>; attachXlsx: boolean } }
+  | { ok: false; error: string }
+> {
+  const name = String(req.body?.name ?? "").trim().slice(0, 80);
+  if (!name) return { ok: false, error: "name is required" };
+
+  const frequency = String(req.body?.frequency ?? "");
+  if (!FREQUENCIES.includes(frequency as Frequency))
+    return { ok: false, error: `frequency must be one of ${FREQUENCIES.join(", ")}` };
+
+  const include = {
+    analytics: req.body?.include?.analytics !== false,
+    seo: req.body?.include?.seo !== false,
+    dashboardLink: Boolean(req.body?.include?.dashboardLink),
+  };
+  if (!include.analytics && !include.seo)
+    return { ok: false, error: "include analytics, SEO, or both — a report of neither is empty" };
+
+  const owner = await User.findById(req.userId).select("email");
+  const ownerEmail = String(owner?.get("email") ?? "").toLowerCase();
+
+  const submitted = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+  const extras = submitted
+    .map((r: unknown) => String(typeof r === "string" ? r : (r as { email?: string })?.email ?? "").trim().toLowerCase())
+    .filter(Boolean);
+
+  for (const email of extras) {
+    if (!EMAIL_RE.test(email)) return { ok: false, error: `"${email}" is not a valid email address` };
+  }
+
+  // Deduped with the owner first, so re-adding your own address can't produce
+  // two copies of every report.
+  const emails = [...new Set([ownerEmail, ...extras])].filter(Boolean);
+
+  const siteIds = Array.isArray(req.body?.siteIds)
+    ? req.body.siteIds.map((s: unknown) => String(s)).filter(Boolean).slice(0, 50)
+    : [];
+
+  return {
+    ok: true,
+    value: { name, siteIds, frequency: frequency as Frequency, emails, include, attachXlsx: req.body?.attachXlsx !== false },
+  };
+}
+
+router.get("/", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const schedules = await ReportSchedule.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
+  res.json({ schedules: schedules.map(present), mailConfigured: mailConfigured() });
+});
+
+router.post("/", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const parsed = await readBody(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+  const allowed = await canCreateReportSchedule(req.userId as string, ws.id);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
+  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length);
+  if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
+
+  const schedule = await ReportSchedule.create({
+    workspaceId: ws.id,
+    name: parsed.value.name,
+    siteIds: parsed.value.siteIds,
+    frequency: parsed.value.frequency,
+    recipients: parsed.value.emails.map((email) => ({ email, unsubToken: nanoid(32) })),
+    include: parsed.value.include,
+    attachXlsx: parsed.value.attachXlsx,
+    nextRunAt: computeNextRun(parsed.value.frequency),
+  });
+
+  res.status(201).json(present(schedule));
+});
+
+router.put("/:id", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
+  if (!schedule) return res.status(404).json({ error: "schedule not found" });
+
+  const parsed = await readBody(req);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error });
+
+  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length);
+  if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
+
+  // Existing recipients keep their unsubscribe token, and their unsubscribed
+  // state with it. Reissuing tokens on every edit would silently resubscribe
+  // everyone who had opted out, and break the link in mail already delivered.
+  const existing = new Map(
+    (schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[]).map((r) => [r.email, r])
+  );
+
+  schedule.set({
+    name: parsed.value.name,
+    siteIds: parsed.value.siteIds,
+    frequency: parsed.value.frequency,
+    include: parsed.value.include,
+    attachXlsx: parsed.value.attachXlsx,
+    recipients: parsed.value.emails.map(
+      (email) => existing.get(email) ?? { email, unsubToken: nanoid(32) }
+    ),
+  });
+
+  if (typeof req.body?.enabled === "boolean") schedule.set("enabled", req.body.enabled);
+  // Frequency changes move the next run, otherwise a schedule switched from
+  // monthly to daily would still wait until the 1st.
+  schedule.set("nextRunAt", computeNextRun(parsed.value.frequency));
+
+  await schedule.save();
+  res.json(present(schedule));
+});
+
+router.delete("/:id", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
+  if (!schedule) return res.status(404).json({ error: "schedule not found" });
+
+  await schedule.deleteOne();
+  res.status(204).end();
+});
+
+/**
+ * Send this schedule now, to the owner only.
+ *
+ * Owner-only on purpose: "preview" must not be a way to mail a client an
+ * unlimited number of times, and the person clicking is the person who should
+ * see the result.
+ */
+router.post("/:id/test", async (req: AuthedRequest, res: Response) => {
+  const ws = await ownedWorkspace(req);
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  if (!mailConfigured()) return res.status(503).json({ error: "outbound email is not configured" });
+
+  const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
+  if (!schedule) return res.status(404).json({ error: "schedule not found" });
+
+  const owner = await User.findById(req.userId).select("email");
+  const ownerEmail = String(owner?.get("email") ?? "").toLowerCase();
+
+  try {
+    const outcome = await runSchedule(schedule, { isTest: true, onlyTo: ownerEmail });
+    if (!outcome.sent.length) {
+      const reason = outcome.failed[0]?.error ?? "your address is not on this report's recipient list";
+      return res.status(502).json({ error: `could not send: ${reason}` });
+    }
+    res.json({ ok: true, sentTo: outcome.sent });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
+});
+
+export default router;

@@ -209,6 +209,10 @@ export async function sendOne(
   subject: string,
   text: string,
   html?: string,
+  /** Files to send alongside the message — the logo part is added for you. */
+  attachments: { filename: string; content: Buffer; contentType?: string }[] = [],
+  /** Extra headers, e.g. `List-Unsubscribe` on mail to people without an account. */
+  headers?: Record<string, string>,
 ): Promise<void> {
   await getTransport().sendMail({
     from: mailFrom(),
@@ -219,7 +223,8 @@ export async function sendOne(
     // message that looks like it came from somewhere else.
     html: html ?? broadcastHtml(text),
     // The shell references the logo by cid, so the part must ride along.
-    attachments: [LOGO_ATTACHMENT],
+    attachments: [LOGO_ATTACHMENT, ...attachments],
+    ...(headers ? { headers } : {}),
   });
 }
 

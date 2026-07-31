@@ -30,7 +30,16 @@ export type PlanCatalogEntry = {
   sortOrder: number;
   /** Analytics date ranges this plan may query — everything else 402s. */
   allowedRanges: RangeKey[];
+  /** How many emailed report schedules a workspace may have. */
+  maxReportSchedules: number;
+  /** Addresses one schedule may send to, owner included. */
+  maxReportRecipients: number;
+  /** How often a schedule may run. Free gets monthly only — a daily digest is the paid draw. */
+  allowedReportFrequencies: Frequency[];
 };
+
+/** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
+export type Frequency = "daily" | "weekly" | "monthly";
 
 const ALL_RANGES: RangeKey[] = ["1h", "24h", "7d", "30d", "custom"];
 
@@ -46,6 +55,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     features: [],
     sortOrder: 0,
     allowedRanges: ["1h", "24h"],
+    maxReportSchedules: 1,
+    // Owner only: mailing a free account's chosen third parties is the part
+    // that costs us deliverability reputation, so it's the part that's paid.
+    maxReportRecipients: 1,
+    allowedReportFrequencies: ["monthly"],
   },
   {
     slug: "starter",
@@ -55,9 +69,12 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxSitesPerWorkspace: 5,
     monthlyAuditQuota: 10,
     monthlyCrawlQuota: 10,
-    features: ["Email support"],
+    features: ["Email support", "Scheduled email reports"],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
+    maxReportSchedules: 5,
+    maxReportRecipients: 5,
+    allowedReportFrequencies: ["weekly", "monthly"],
   },
   {
     slug: "pro",
@@ -67,9 +84,12 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxSitesPerWorkspace: 10,
     monthlyAuditQuota: 50,
     monthlyCrawlQuota: 50,
-    features: ["Priority support", "Competitor tracking"],
+    features: ["Priority support", "Competitor tracking", "Daily scheduled reports"],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
+    maxReportSchedules: 20,
+    maxReportRecipients: 20,
+    allowedReportFrequencies: ["daily", "weekly", "monthly"],
   },
 ];
 
