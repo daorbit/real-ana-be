@@ -36,6 +36,13 @@ export type PlanCatalogEntry = {
   maxReportRecipients: number;
   /** How often a schedule may run. Free gets monthly only — a daily digest is the paid draw. */
   allowedReportFrequencies: Frequency[];
+  /**
+   * Whether reports may be delivered over WhatsApp.
+   *
+   * Paid-only because every message costs us gateway spend against one shared
+   * sender number, so an unmetered free tier on it is a bill with no ceiling.
+   */
+  whatsappReports: boolean;
 };
 
 /** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
@@ -60,6 +67,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     // that costs us deliverability reputation, so it's the part that's paid.
     maxReportRecipients: 1,
     allowedReportFrequencies: ["monthly"],
+    whatsappReports: false,
   },
   {
     slug: "starter",
@@ -75,6 +83,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxReportSchedules: 5,
     maxReportRecipients: 5,
     allowedReportFrequencies: ["weekly", "monthly"],
+    whatsappReports: false,
   },
   {
     slug: "pro",
@@ -90,6 +99,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxReportSchedules: 20,
     maxReportRecipients: 20,
     allowedReportFrequencies: ["daily", "weekly", "monthly"],
+    whatsappReports: true,
   },
 ];
 

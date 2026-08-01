@@ -3,7 +3,7 @@ import { nanoid } from "nanoid";
 import { ReportSchedule, FREQUENCIES, computeNextRun, type Frequency } from "../models/ReportSchedule.js";
 import { Workspace } from "../models/Workspace.js";
 import { User } from "../models/User.js";
-import { canCreateReportSchedule, canConfigureReport } from "../lib/quota.js";
+import { canCreateReportSchedule, canConfigureReport, canUseWhatsAppReports } from "../lib/quota.js";
 import { runSchedule, testWhatsApp } from "../lib/report-runner.js";
 import { normalizePhone, whatsappConfigured, sessionStatus } from "../lib/whatsapp.js";
 import { mailConfigured } from "../lib/mail.js";
@@ -153,7 +153,7 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
   const allowed = await canCreateReportSchedule(req.userId as string, ws.id);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
-  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length);
+  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
   if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
 
   const schedule = await ReportSchedule.create({
@@ -182,7 +182,7 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
   const parsed = await readBody(req);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
-  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length);
+  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
   if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
 
   // Existing recipients keep their unsubscribe token, and their unsubscribed
@@ -298,6 +298,12 @@ router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
   if (!ws) return res.status(404).json({ error: "workspace not found" });
 
   if (!whatsappConfigured()) return res.status(503).json({ error: "WhatsApp is not configured" });
+
+  // Checked here as well as on save: a schedule created on Pro keeps its
+  // WhatsApp channel after a downgrade, and without this the test button
+  // stays a working way to send messages the plan no longer includes.
+  const allowed = await canUseWhatsAppReports(req.userId as string);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error });
 
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
   if (!schedule) return res.status(404).json({ error: "schedule not found" });

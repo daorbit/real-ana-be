@@ -135,13 +135,33 @@ export async function canCreateReportSchedule(
  * what stops a free account from using us as a mailing list, so the UI hiding
  * the "add" button is only the polite half of it.
  */
+/** Whether this user's plan includes WhatsApp report delivery at all. */
+export async function canUseWhatsAppReports(
+  userId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(userId);
+  if (!plan) return { ok: false, error: "no active plan — subscribe to schedule reports" };
+  if (!plan.whatsappReports)
+    return {
+      ok: false,
+      error: "WhatsApp delivery is a Pro feature — upgrade, or deliver this report by email",
+    };
+  return { ok: true };
+}
+
 export async function canConfigureReport(
   userId: string,
   frequency: string,
   recipientCount: number,
+  wantsWhatsApp = false,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const plan = await currentPlan(userId);
   if (!plan) return { ok: false, error: "no active plan — subscribe to schedule reports" };
+
+  if (wantsWhatsApp && !plan.whatsappReports) {
+    const wa = await canUseWhatsAppReports(userId);
+    if (!wa.ok) return wa;
+  }
 
   if (!plan.allowedReportFrequencies.includes(frequency as Frequency))
     return {
