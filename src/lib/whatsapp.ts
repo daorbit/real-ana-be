@@ -122,55 +122,6 @@ export async function sendWhatsApp(to: string, text: string): Promise<string> {
 }
 
 /**
- * Send a document — the report PDF.
- *
- * Multipart rather than JSON, per the gateway's `/v1/media` contract: the file
- * rides as a real upload alongside the text fields. Native `FormData` is used
- * rather than a helper library, which means the request goes through `fetch`
- * instead of axios — axios needs a Node stream and would require pulling in
- * `form-data` for nothing.
- */
-export async function sendWhatsAppDocument(
-  to: string,
-  file: Buffer,
-  fileName: string,
-  caption?: string
-): Promise<string> {
-  if (!whatsappConfigured()) throw new WhatsAppError("WhatsApp is not configured");
-
-  const phone = normalizePhone(to);
-  if (!phone) throw new WhatsAppError(`"${to}" is not a valid phone number`);
-
-  const form = new FormData();
-  form.append("sessionId", process.env.WIREWEB_SESSION_ID as string);
-  form.append("to", phone);
-  form.append("mediaType", "document");
-  form.append("fileName", fileName);
-  if (caption) form.append("caption", caption);
-  form.append("file", new Blob([new Uint8Array(file)], { type: "application/pdf" }), fileName);
-
-  let response: Response;
-  try {
-    response = await fetch(`${baseUrl()}/v1/media`, {
-      method: "POST",
-      // No Content-Type: fetch sets it with the multipart boundary, and an
-      // explicit one would omit the boundary and break the upload.
-      headers: { Authorization: `Bearer ${process.env.WIREWEB_API_KEY}` },
-      body: form,
-      signal: AbortSignal.timeout(45_000),
-    });
-  } catch (e) {
-    throw new WhatsAppError((e as Error).name === "TimeoutError" ? "WhatsApp upload timed out" : (e as Error).message);
-  }
-
-  const body = (await response.json().catch(() => ({}))) as { messageId?: string; message?: string };
-  if (!response.ok) {
-    throw new WhatsAppError(body?.message ?? `WhatsApp gateway returned ${response.status}`);
-  }
-  return String(body?.messageId ?? "");
-}
-
-/**
  * The gateway's own error text where it has one.
  *
  * `{"message":"session not found"}` tells an operator what to fix; "Request
