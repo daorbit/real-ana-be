@@ -269,6 +269,7 @@ export async function runSchedule(
           periodLabel: label,
           metrics,
           seo,
+          topPages: (stats?.topPages ?? []).map((r) => ({ label: r.key, value: r.count })),
           dashboardUrl,
           unsubscribeUrl: `${apiUrl()}/api/public/reports/unsubscribe/${recipient.unsubToken}`,
           xlsx,

@@ -1,4 +1,4 @@
-import { sendOne, shell, button, mailConfigured } from "./mail.js";
+import { sendOne, shell, button, mailConfigured, statTile, barRow, C } from "./mail.js";
 import type { SeoRow } from "./report-xlsx.js";
 
 /**
@@ -26,6 +26,8 @@ export type ReportEmailInput = {
   periodLabel: string;
   metrics: Metric[];
   seo: SeoRow[];
+  /** Busiest pages, for the bar breakdown. Absent when analytics is off. */
+  topPages?: { label: string; value: number }[];
   /** Public share URL, when the owner turned the live link on. */
   dashboardUrl?: string;
   unsubscribeUrl: string;
@@ -58,15 +60,14 @@ function deltaText(delta: number | null | undefined): string {
  * worth the nicer markup elsewhere.
  */
 function metricGrid(metrics: Metric[]): string {
-  const cells = metrics
-    .map(
-      (m) => `
-      <td width="50%" style="padding:12px 14px;vertical-align:top">
-        <div style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px">${m.label}</div>
-        <div style="font-size:24px;font-weight:700;color:#f3f4f6;line-height:1.3">${m.value}</div>
-        <div style="font-size:12px;color:${deltaColor(m.delta)}">${deltaText(m.delta)}</div>
-      </td>`
-    );
+  const cells = metrics.map((m) =>
+    statTile(
+      escapeHtml(m.label),
+      escapeHtml(m.value),
+      deltaText(m.delta) || undefined,
+      m.delta === null || m.delta === undefined || m.delta === 0 ? "flat" : m.delta > 0 ? "up" : "down"
+    )
+  );
 
   const rows: string[] = [];
   for (let i = 0; i < cells.length; i += 2) {
@@ -74,13 +75,40 @@ function metricGrid(metrics: Metric[]): string {
     // instead of stretching across the whole table.
     const pair = cells.slice(i, i + 2);
     if (pair.length === 1) pair.push('<td width="50%"></td>');
-    rows.push(`<tr>${pair.join("")}</tr>`);
+    // A spacer column between the two tiles: `border-spacing` is unreliable in
+    // Outlook, and margins on a `td` do nothing at all.
+    rows.push(`<tr>${pair[0]}<td width="12" style="font-size:0;line-height:0">&nbsp;</td>${pair[1]}</tr>`);
+    rows.push(`<tr><td colspan="3" height="12" style="font-size:0;line-height:0">&nbsp;</td></tr>`);
   }
 
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
-    style="background:#131519;border:1px solid #22252c;border-radius:12px;margin:0 0 20px">
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 12px">
     ${rows.join("")}
   </table>`;
+}
+
+/**
+ * A breakdown as bar rows — the stand-in for a chart.
+ *
+ * Bars are drawn as table cells with a percentage width, so they need no image
+ * and appear the moment the message opens. An image would be hidden behind the
+ * client's "show images" prompt, which for an email whose entire content is
+ * numbers is the wrong thing to hide.
+ *
+ * Shares are normalised against the largest row rather than the total: the
+ * point is comparing rows with each other, and against a total the top row of
+ * a long tail would be a sliver.
+ */
+function breakdown(title: string, rows: { label: string; value: number }[], format: (n: number) => string): string {
+  if (!rows.length) return "";
+  const top = rows.slice(0, 5);
+  const max = Math.max(...top.map((r) => r.value), 1);
+
+  return `
+    <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:${C.text}">${escapeHtml(title)}</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="panel"
+      style="background:${C.panel};border:1px solid ${C.line};border-radius:10px;margin:0 0 20px">
+      ${top.map((r) => barRow(escapeHtml(r.label), format(r.value), (r.value / max) * 100)).join("")}
+    </table>`;
 }
 
 function seoBlock(seo: SeoRow[]): string {
@@ -95,22 +123,22 @@ function seoBlock(seo: SeoRow[]): string {
           ? '<span style="color:#6b7280">—</span>'
           : `<span style="color:${moved > 0 ? "#10b981" : "#f87171"}">${moved > 0 ? "+" : ""}${moved} pts</span>`;
       return `<tr>
-        <td style="padding:8px 12px;border-top:1px solid #22252c;font-size:13px;color:#9ca3af;word-break:break-all">${escapeHtml(r.url)}</td>
-        <td style="padding:8px 12px;border-top:1px solid #22252c;font-size:13px;color:#f3f4f6;font-weight:600">${r.score}</td>
-        <td style="padding:8px 12px;border-top:1px solid #22252c;font-size:13px">${movement}</td>
+        <td style="padding:9px 12px;border-top:1px solid ${C.line};font-size:13px;color:${C.dim};word-break:break-all">${escapeHtml(r.url)}</td>
+        <td style="padding:9px 12px;border-top:1px solid ${C.line};font-size:13px;color:${C.text};font-weight:700">${r.score}</td>
+        <td style="padding:9px 12px;border-top:1px solid ${C.line};font-size:13px;font-weight:600">${movement}</td>
       </tr>`;
     })
     .join("");
 
   return `
-    <p style="margin:0 0 10px;font-size:15px;font-weight:600;color:#f3f4f6">SEO</p>
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"
-      style="background:#131519;border:1px solid #22252c;border-radius:12px;border-collapse:separate;margin:0 0 20px">
+    <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:${C.text}">SEO scores</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="panel"
+      style="background:${C.panel};border:1px solid ${C.line};border-radius:10px;border-collapse:separate;margin:0 0 20px">
       <tr>
         ${["Page", "Score", "Change"]
           .map(
             (h) =>
-              `<th style="padding:8px 12px;text-align:left;font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px">${h}</th>`
+              `<th style="padding:9px 12px;text-align:left;font-size:11px;color:${C.faint};text-transform:uppercase;letter-spacing:0.6px;font-weight:600">${h}</th>`
           )
           .join("")}
       </tr>
@@ -143,11 +171,12 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
            </p>`
         : ""
     }
-     <p style="margin:0 0 4px;font-size:17px;font-weight:600;color:#f3f4f6">${escapeHtml(input.workspaceName)}</p>
-     <p style="margin:0 0 20px;font-size:14px;color:#9ca3af">${escapeHtml(input.periodLabel)}</p>
+     <p style="margin:0 0 3px;font-size:19px;font-weight:700;color:${C.text};letter-spacing:-0.3px">${escapeHtml(input.workspaceName)}</p>
+     <p style="margin:0 0 20px;font-size:13.5px;color:${C.dim}">${escapeHtml(input.periodLabel)}</p>
      ${metricGrid(input.metrics)}
+     ${breakdown("Top pages", input.topPages ?? [], (n) => n.toLocaleString("en-US"))}
      ${seoBlock(input.seo)}
-     ${input.xlsx ? `<p style="margin:0 0 20px;font-size:13px;color:#6b7280">The full breakdown is attached as a spreadsheet.</p>` : ""}
+     ${input.xlsx ? `<p style="margin:0 0 20px;font-size:12.5px;color:${C.faint}">The full breakdown is attached as a spreadsheet.</p>` : ""}
      ${input.dashboardUrl ? button("Open live dashboard", input.dashboardUrl) : button("Open Quantalog", appUrl())}`,
     `You're receiving this because someone shares their Quantalog reports with you. <a href="${input.unsubscribeUrl}" style="color:#6b7280">Unsubscribe</a>.`
   );

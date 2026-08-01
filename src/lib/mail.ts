@@ -287,6 +287,72 @@ const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="36" height="36" alt="Quantal
  * eye.
  */
 /**
+ * The palette, in one place.
+ *
+ * Named rather than inlined at each use because the same six values run through
+ * every template, and a card that drifts one shade off the others is the kind
+ * of thing nobody can point at but everybody notices.
+ *
+ * Text colours are deliberately brighter than a browser design would need. Some
+ * clients — Outlook's Word engine most reliably — discard background colours
+ * while keeping text colours, so any text that depends on a dark card behind it
+ * to be readable becomes invisible. Every foreground here is chosen to survive
+ * being dropped onto white.
+ */
+export const C = {
+  page: "#0b0c0f",
+  card: "#16181d",
+  panel: "#1b1e24",
+  line: "#2a2e36",
+  text: "#f3f4f6",
+  /** Body copy. Passes on the dark card, still legible if a client strips it. */
+  dim: "#9aa1ad",
+  faint: "#6b7280",
+  accent: "#10b981",
+  accentDeep: "#047857",
+  danger: "#f87171",
+} as const;
+
+/**
+ * A labelled number.
+ *
+ * Laid out as a table cell rather than a flex child: this is the piece most
+ * likely to end up in a grid, and Outlook supports neither flex nor grid.
+ */
+export function statTile(label: string, value: string, delta?: string, tone: "up" | "down" | "flat" = "flat"): string {
+  const toneColor = tone === "up" ? C.accent : tone === "down" ? C.danger : C.faint;
+  return `<td width="50%" class="panel" style="padding:14px 16px;background:${C.panel};border:1px solid ${C.line};border-radius:10px;vertical-align:top">
+    <div style="font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:${C.faint};font-weight:600">${label}</div>
+    <div style="font-size:24px;font-weight:700;color:${C.text};line-height:1.3;padding-top:2px">${value}</div>
+    ${delta ? `<div style="font-size:12px;font-weight:600;color:${toneColor}">${delta}</div>` : ""}
+  </td>`;
+}
+
+/**
+ * A horizontal bar row — the chart substitute.
+ *
+ * Real charts would mean an image, and an image in email is hidden until the
+ * recipient clicks "show images" — which for a numbers email is exactly the
+ * wrong thing to hide. A bar drawn as a table cell of a given width needs no
+ * image, no SVG and no script, and is visible the moment the message opens.
+ *
+ * `pct` is the bar's share of full width, already normalised by the caller
+ * against whatever the largest row is.
+ */
+export function barRow(label: string, value: string, pct: number): string {
+  const width = Math.max(2, Math.min(100, Math.round(pct)));
+  return `<tr>
+    <td style="padding:7px 0 7px 14px;font-size:13px;color:${C.dim};white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis">${label}</td>
+    <td style="padding:7px 10px;width:100%">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${C.line};border-radius:3px">
+        <tr><td style="width:${width}%;height:7px;background:${C.accent};border-radius:3px;font-size:0;line-height:0">&nbsp;</td><td style="font-size:0;line-height:0">&nbsp;</td></tr>
+      </table>
+    </td>
+    <td style="padding:7px 14px 7px 0;font-size:13px;font-weight:600;color:${C.text};text-align:right;white-space:nowrap">${value}</td>
+  </tr>`;
+}
+
+/**
  * A call-to-action button.
  *
  * A table with a background colour rather than a styled `<a>`: Outlook renders
@@ -313,7 +379,16 @@ const DEFAULT_REASON = "You're receiving this because you have a Quantalog accou
 
 export function shell(inner: string, reason: string = DEFAULT_REASON): string {
   return `<div style="background:#0b0c0f;padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:480px;margin:0 auto">
+  <!--[if mso]>
+  <style>
+    /* Outlook's Word engine drops border-radius and renders every background
+       it does keep without antialiasing, so rounded cards come out as square
+       boxes with ragged edges. Squaring them deliberately looks intentional;
+       leaving them to Word does not. */
+    .card, .panel { border-radius: 0 !important; }
+  </style>
+  <![endif]-->
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto">
 
     <!-- Header. Kept dark rather than an emerald band: the logo tile is itself
          an emerald gradient, and on a green background the tile vanishes and
@@ -331,7 +406,7 @@ export function shell(inner: string, reason: string = DEFAULT_REASON): string {
 
     <!-- Footer: product links, then the legal line. -->
     <tr><td style="background:#131519;border:1px solid #22252c;border-top:none;border-radius:0 0 16px 16px;padding:20px 32px">
-      <p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:#8b929e">
+      <p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:#9aa1ad">
         Real-time analytics, SEO audits and a multi-tenant API — from one script tag.
       </p>
       <p style="margin:0;font-size:13px">
@@ -344,9 +419,9 @@ export function shell(inner: string, reason: string = DEFAULT_REASON): string {
     </td></tr>
 
     <tr><td style="padding:18px 8px 0;text-align:center">
-      <p style="margin:0;font-size:11px;line-height:1.7;color:#5f6673">
+      <p style="margin:0;font-size:11px;line-height:1.7;color:#6b7280">
         ${reason}<br>
-        <a href="${LINKS.site}" style="color:#5f6673;text-decoration:underline">quantalog.daorbit.in</a>
+        <a href="${LINKS.site}" style="color:#6b7280;text-decoration:underline">quantalog.daorbit.in</a>
       </p>
     </td></tr>
   </table>
@@ -355,19 +430,24 @@ export function shell(inner: string, reason: string = DEFAULT_REASON): string {
 
 function otpHtml(code: string, minutes: number): string {
   return shell(`
-      <p style="margin:0;font-size:17px;font-weight:600;color:#f3f4f6;letter-spacing:-0.2px">Verify your email address</p>
-      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:#8b929e">
+      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center">Verify your account</p>
+      <p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${C.dim};text-align:center">
         Enter this code on the signup page to finish creating your account.
       </p>
 
-      <div style="margin:26px 0;background:#0f1114;border:1px solid #2b2f38;border-radius:12px;padding:22px;text-align:center">
-        <div style="font-size:34px;font-weight:700;letter-spacing:10px;color:#34d399;font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
-        <div style="margin-top:10px;font-size:12px;color:#5f6673">Expires in ${minutes} minutes</div>
-      </div>
+      <!-- The code panel is the whole point of this email, so it gets the only
+           accent border in the shell and nothing else competes for attention. -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0">
+        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.accentDeep};border-radius:12px;padding:24px;text-align:center">
+          <div style="font-size:36px;font-weight:700;letter-spacing:12px;text-indent:12px;color:${C.accent};font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
+          <div style="margin-top:12px;font-size:12px;color:${C.faint}">Valid for ${minutes} minutes</div>
+        </td></tr>
+      </table>
 
-      <div style="padding-top:20px;border-top:1px solid #22252c">
-        <p style="margin:0;font-size:12px;line-height:1.65;color:#5f6673">
-          Didn't try to sign up? You can ignore this email — no account has been created.
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
+        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint};text-align:center">
+          If you didn't request this code, you can safely ignore this email —
+          no account has been created.
         </p>
       </div>`);
 }
@@ -391,7 +471,7 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
       const style =
         i === 0
           ? "margin:0 0 16px;font-size:16px;font-weight:600;color:#f3f4f6;line-height:1.6"
-          : "margin:0 0 16px;font-size:15px;line-height:1.7;color:#a8aeb8";
+          : "margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad";
       return `<p style="${style}">${html}</p>`;
     })
     .join("");
@@ -454,7 +534,7 @@ function featureRow({ title, body }: { title: string; body: string }): string {
     </td>
     <td style="padding:0 0 18px;vertical-align:top">
       <p style="margin:0;font-size:14px;font-weight:600;color:#e8eaee;letter-spacing:-0.1px">${escapeHtml(title)}</p>
-      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:#8b929e">${escapeHtml(body)}</p>
+      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:#9aa1ad">${escapeHtml(body)}</p>
     </td>
   </tr>`;
 }
@@ -482,7 +562,7 @@ export function inviteHtml(
       const style =
         i === 0
           ? "margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px"
-          : "margin:0 0 14px;font-size:15px;line-height:1.7;color:#a8aeb8";
+          : "margin:0 0 14px;font-size:15px;line-height:1.7;color:#9aa1ad";
       return `<p style="${style}">${html}</p>`;
     })
     .join("");
@@ -496,7 +576,7 @@ export function inviteHtml(
 
     <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
 
-    <p style="margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#5f6673">
+    <p style="margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
       What you get
     </p>
 
@@ -507,7 +587,7 @@ export function inviteHtml(
     <!-- The caveats sit above the button, not below it. A paragraph after the
          call to action competes with the one thing this message is asking for,
          and the demo link in particular is an invitation to not sign up. -->
-    <p style="margin:6px 0 0;font-size:13px;line-height:1.65;color:#8b929e">
+    <p style="margin:6px 0 0;font-size:13px;line-height:1.65;color:#9aa1ad">
       Free to start, and the tracker is one line — or try the
       <a href="${escapeAttr(LINKS.site)}" style="color:#34d399;text-decoration:none;font-weight:500">live demo</a>
       first, which needs no account at all.
