@@ -270,5 +270,9 @@ export async function quotaSummary(userId: string) {
     },
     maxSitesPerWorkspace: plan.maxSitesPerWorkspace,
     allowedRanges: plan.allowedRanges,
+    // Sent with the profile for the same reason as allowedRanges: the report
+    // form has to know before it's submitted, and a 402 after filling it in
+    // reads as a bug rather than a plan boundary.
+    whatsappReports: plan.whatsappReports,
   };
 }
