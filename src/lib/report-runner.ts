@@ -6,6 +6,7 @@ import { computeStats, resolveWindow } from "../stats-core.js";
 import { buildReportWorkbook, type SeoRow } from "./report-xlsx.js";
 import { sendReportEmail } from "./report-mail.js";
 import { sendWhatsAppReport } from "./report-whatsapp.js";
+import { renderReportPage } from "./report-html.js";
 import { whatsappConfigured } from "./whatsapp.js";
 
 /**
@@ -101,6 +102,75 @@ function buildMetrics(stats: Awaited<ReturnType<typeof computeStats>> | null) {
     { label: "Avg. session", value: duration(stats.avgSessionMs), delta: stats.deltas?.avgSessionMs },
     { label: "Pages / session", value: String(stats.pagesPerSession), delta: stats.deltas?.pagesPerSession },
   ];
+}
+
+/**
+ * Everything a rendering of this report needs, gathered once.
+ *
+ * Shared by the hosted page, the PDF, the email and the WhatsApp message, so
+ * all four describe the same period with the same numbers. Computed on demand
+ * rather than stored: the hosted link is meant to stay current, and a snapshot
+ * frozen at send time would quietly go stale in the recipient's bookmark.
+ */
+export async function buildReportView(schedule: InstanceType<typeof ReportSchedule>) {
+  const workspace = await Workspace.findById(schedule.get("workspaceId"));
+  if (!workspace) throw new Error("workspace no longer exists");
+
+  const configured = schedule.get("siteIds") as string[];
+  const siteIds = configured.length
+    ? configured
+    : (await Site.find({ workspaceId: workspace.id }).select("siteId").lean()).map((s) => s.siteId as string);
+
+  const frequency = schedule.get("frequency") as Frequency;
+  const include = schedule.get("include") as { analytics: boolean; seo: boolean; dashboardLink: boolean };
+  const range = rangeForFrequency(frequency);
+  const window = resolveWindow(range);
+
+  const stats = include.analytics && siteIds.length ? await computeStats(siteIds, range) : null;
+  const seo = include.seo ? await latestSeoRows(siteIds) : [];
+  const shareToken = workspace.get("shareToken") as string | undefined;
+
+  return {
+    workspace,
+    workspaceName: workspace.get("name") as string,
+    reportName: schedule.get("name") as string,
+    frequency,
+    periodLabel: periodLabel(frequency, window.since, window.until),
+    stats,
+    seo,
+    metrics: buildMetrics(stats),
+    dashboardUrl:
+      include.dashboardLink && workspace.get("shareEnabled") && shareToken
+        ? `${appUrl()}/share/${shareToken}`
+        : undefined,
+    /** The hosted view of this report — always current, safe to forward. */
+    reportUrl: `${apiUrl()}/api/public/reports/view/${schedule.get("viewToken")}`,
+  };
+}
+
+/** The report as a standalone HTML page — the hosted view and the PDF source. */
+export async function renderScheduleHtml(schedule: InstanceType<typeof ReportSchedule>): Promise<string> {
+  const view = await buildReportView(schedule);
+  const s = view.stats;
+
+  return renderReportPage({
+    workspaceName: view.workspaceName,
+    reportName: view.reportName,
+    periodLabel: view.periodLabel,
+    metrics: view.metrics,
+    seo: view.seo,
+    breakdowns: s
+      ? [
+          { title: "Top pages", label: "Page", rows: s.topPages ?? [] },
+          { title: "Referrers", label: "Referrer", rows: s.topReferrers ?? [] },
+          { title: "Channels", label: "Channel", rows: s.channels ?? [] },
+          { title: "Countries", label: "Country", rows: s.countries ?? [] },
+          { title: "Devices", label: "Device", rows: s.devices ?? [] },
+        ]
+      : [],
+    dashboardUrl: view.dashboardUrl,
+    generatedAt: new Date(),
+  });
 }
 
 export type SendOutcome = {

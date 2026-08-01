@@ -77,7 +77,7 @@ async function readBody(req: AuthedRequest): Promise<
   if (!include.analytics && !include.seo)
     return { ok: false, error: "include analytics, SEO, or both — a report of neither is empty" };
 
-  const owner = await User.findById(req.userId).select("email");
+  const owner = await User.findById(req.userId).select("email mobile");
   const ownerEmail = String(owner?.get("email") ?? "").toLowerCase();
 
   const submitted = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
@@ -106,21 +106,28 @@ async function readBody(req: AuthedRequest): Promise<
   if (!channels.email && !channels.whatsapp)
     return { ok: false, error: "pick at least one delivery channel" };
 
-  const submittedPhones = Array.isArray(req.body?.phoneRecipients) ? req.body.phoneRecipients : [];
+  /**
+   * WhatsApp goes to the account owner's own mobile, and nowhere else.
+   *
+   * The platform sends from one paired number shared by every account, so a
+   * report delivered to a customer's client would arrive from a stranger's
+   * personal WhatsApp — and any complaint about it would land on the one
+   * account that can be banned. Restricting the channel to the owner's own
+   * verified mobile keeps it useful (you get your numbers on your phone)
+   * without turning a shared sender into a way to message third parties.
+   *
+   * Client-facing delivery stays on email, which has a real unsubscribe.
+   */
   const phones: { phone: string; label: string }[] = [];
-  for (const entry of submittedPhones) {
-    const raw = String(typeof entry === "string" ? entry : entry?.phone ?? "").trim();
-    if (!raw) continue;
-    const normalized = normalizePhone(raw);
-    // Normalised on the way in, so "+91 70820 72347" and "917082072347" can't
-    // both sit on the list as two different destinations.
-    if (!normalized) return { ok: false, error: `"${raw}" is not a valid phone number` };
-    if (phones.some((p) => p.phone === normalized)) continue;
-    phones.push({ phone: normalized, label: String(entry?.label ?? "").trim().slice(0, 60) });
+  if (channels.whatsapp) {
+    const ownerMobile = normalizePhone(String(owner?.get("mobile") ?? ""));
+    if (!ownerMobile)
+      return {
+        ok: false,
+        error: "add your mobile number in Settings before turning on WhatsApp delivery",
+      };
+    phones.push({ phone: ownerMobile, label: "You" });
   }
-
-  if (channels.whatsapp && !phones.length)
-    return { ok: false, error: "add at least one WhatsApp number, or turn the channel off" };
 
   return {
     ok: true,
@@ -270,7 +277,9 @@ router.get("/whatsapp/status", async (_req: AuthedRequest, res: Response) => {
 
   try {
     const session = await sessionStatus();
-    res.json({ configured: true, status: session.status, phoneNumber: session.phoneNumber });
+    // The paired number is deliberately not returned: it belongs to the
+    // platform, not the account, and no client screen has a use for it.
+    res.json({ configured: true, status: session.status });
   } catch (e) {
     // A gateway that is down is a status, not a server error — the page still
     // renders, it just reports the channel as unavailable.

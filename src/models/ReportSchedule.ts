@@ -107,6 +107,16 @@ const reportScheduleSchema = new Schema(
     /** Attach the full data as a spreadsheet alongside the summary in the body. */
     attachXlsx: { type: Boolean, default: true },
 
+    /**
+     * Credential for the hosted view of this report.
+     *
+     * Its own token rather than the workspace share token: a report link handed
+     * to one client must not also unlock the full live dashboard, and revoking
+     * one must not revoke the other. Prefixed so a glance at a log line says
+     * what kind of secret it is.
+     */
+    viewToken: { type: String, required: true, unique: true, default: () => `rp_${nanoid(28)}`, index: true },
+
     enabled: { type: Boolean, default: true },
     lastSentAt: { type: Date },
     /**
