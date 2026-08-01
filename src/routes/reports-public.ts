@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { ReportSchedule } from "../models/ReportSchedule.js";
+import { renderScheduleHtml } from "../lib/report-runner.js";
 
 /**
  * Unsubscribing from a scheduled report.
@@ -73,6 +74,44 @@ async function unsubscribe(req: Request, res: Response): Promise<void> {
     )
   );
 }
+
+/**
+ * The hosted view of a report.
+ *
+ * Unauthenticated, like the unsubscribe route above and for the same reason:
+ * the recipient is someone the owner shared with, not an account holder. The
+ * token in the URL is the whole credential, so it is long, random, and its own
+ * — revoking a report link must not touch the workspace's dashboard link.
+ *
+ * Figures are recomputed per request rather than frozen at send time. A link
+ * that keeps working but shows last month's numbers is worse than one that
+ * expired, because nothing about it looks wrong.
+ */
+router.get("/view/:token", async (req: Request, res: Response) => {
+  const token = String(req.params.token ?? "");
+  // Cheap shape check before a database round trip, so a flood of junk tokens
+  // costs nothing — same reasoning as the workspace share route.
+  if (!token.startsWith("rp_") || token.length > 64) {
+    res.status(404).send(page("Report not found", "This report link is not valid.", "error"));
+    return;
+  }
+
+  const schedule = await ReportSchedule.findOne({ viewToken: token });
+  if (!schedule) {
+    res.status(404).send(page("Report not found", "This report link is no longer valid.", "error"));
+    return;
+  }
+
+  try {
+    const html = await renderScheduleHtml(schedule);
+    // Briefly cacheable: a recipient refreshing or a PDF renderer fetching the
+    // same page twice shouldn't recompute a full analytics aggregation.
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.type("html").send(html);
+  } catch (e) {
+    res.status(500).send(page("Report unavailable", `This report could not be generated: ${escapeHtml((e as Error).message)}`, "error"));
+  }
+});
 
 router.get("/unsubscribe/:token", unsubscribe);
 router.post("/unsubscribe/:token", unsubscribe);
