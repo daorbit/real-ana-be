@@ -3,18 +3,15 @@ import type { SeoRow } from "./report-xlsx.js";
 /**
  * The report as a standalone HTML page.
  *
- * One template, two consumers: the hosted page a recipient opens from a link,
- * and the source a PDF service renders. Keeping them the same document is the
- * point — a PDF built from a different template is a second thing to keep in
- * step, and it drifts the first time either is edited.
+ * Served as the hosted view a recipient opens from a link in their report.
  *
- * Self-contained by necessity rather than preference: an external PDF renderer
- * fetches this page from its own network, so any stylesheet, font or image that
+ * Self-contained by necessity rather than preference: the page is opened from
+ * a link by someone with no session here, so any stylesheet, font or image that
  * lives elsewhere either fails to load or silently changes the output. Every
  * style is inline, and the only images are ones drawn with CSS.
  *
- * Print rules live in the same document too, so a recipient who hits Ctrl+P
- * gets the same layout as the attachment.
+ * Print rules live in the same document, so a recipient who wants a file hits
+ * Ctrl+P and gets the same layout the page shows.
  */
 
 type Metric = { label: string; value: string; delta?: number | null };

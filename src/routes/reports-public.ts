@@ -104,8 +104,8 @@ router.get("/view/:token", async (req: Request, res: Response) => {
 
   try {
     const html = await renderScheduleHtml(schedule);
-    // Briefly cacheable: a recipient refreshing or a PDF renderer fetching the
-    // same page twice shouldn't recompute a full analytics aggregation.
+    // Briefly cacheable: a recipient refreshing the same page shouldn't
+    // recompute a full analytics aggregation each time.
     res.setHeader("Cache-Control", "public, max-age=300");
     res.type("html").send(html);
   } catch (e) {

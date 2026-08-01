@@ -107,8 +107,8 @@ function buildMetrics(stats: Awaited<ReturnType<typeof computeStats>> | null) {
 /**
  * Everything a rendering of this report needs, gathered once.
  *
- * Shared by the hosted page, the PDF, the email and the WhatsApp message, so
- * all four describe the same period with the same numbers. Computed on demand
+ * Shared by the hosted page, the email and the WhatsApp message, so all three
+ * describe the same period with the same numbers. Computed on demand
  * rather than stored: the hosted link is meant to stay current, and a snapshot
  * frozen at send time would quietly go stale in the recipient's bookmark.
  */
@@ -148,7 +148,7 @@ export async function buildReportView(schedule: InstanceType<typeof ReportSchedu
   };
 }
 
-/** The report as a standalone HTML page — the hosted view and the PDF source. */
+/** The report as a standalone HTML page, served as the hosted view. */
 export async function renderScheduleHtml(schedule: InstanceType<typeof ReportSchedule>): Promise<string> {
   const view = await buildReportView(schedule);
   const s = view.stats;
