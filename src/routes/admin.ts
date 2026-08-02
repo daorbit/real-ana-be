@@ -825,8 +825,11 @@ router.get("/contact", async (req: AuthedRequest, res: Response) => {
   const q = String(req.query.q ?? "").trim();
   const page = Math.max(1, Number(req.query.page) || 1);
 
+  const source = String(req.query.source ?? "").trim();
+
   const filter: Record<string, unknown> = {};
   if (CONTACT_STATUSES.includes(status as ContactStatus)) filter.status = status;
+  if (source === "app" || source === "marketing") filter.source = source;
   if (q) {
     filter.$or = [
       { name: { $regex: escapeRegex(q), $options: "i" } },

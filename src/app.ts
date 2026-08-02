@@ -18,6 +18,7 @@ import cronRoutes from "./routes/cron.js";
 import reportRoutes from "./routes/reports.js";
 import reportsPublicRoutes from "./routes/reports-public.js";
 import contactPublicRoutes from "./routes/contact-public.js";
+import supportRoutes from "./routes/support.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -99,6 +100,7 @@ app.use("/api/workspaces", dashboardCors, seoRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
+app.use("/api/support", dashboardCors, supportRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
 app.use("/api/billing", dashboardCors, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —

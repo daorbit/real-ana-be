@@ -25,13 +25,41 @@ const contactMessageSchema = new Schema(
     subject: {
       type: String,
       required: true,
-      enum: ["general", "sales", "support", "platform-api", "privacy", "other"],
+      enum: [
+        "general",
+        "sales",
+        "support",
+        "platform-api",
+        "privacy",
+        "other",
+        // Raised from inside the dashboard rather than the marketing site.
+        "bug",
+        "feedback",
+      ],
       default: "general",
     },
     message: { type: String, required: true, trim: true, maxlength: 5000 },
 
     /** Where the sender was when they submitted, for context on the reply. */
     pageUrl: { type: String, trim: true, maxlength: 500, default: "" },
+
+    /**
+     * Which surface this came from. A bug report from a signed-in customer and
+     * a sales enquiry from a stranger deserve different urgency, and the two
+     * are indistinguishable once they are both just rows.
+     */
+    source: {
+      type: String,
+      enum: ["marketing", "app"],
+      default: "marketing",
+      index: true,
+    },
+    /**
+     * The account that sent it, when there was one. Set from the authenticated
+     * session on the server — never from the request body, which the client
+     * could claim anything in.
+     */
+    userId: { type: Schema.Types.ObjectId, ref: "User", default: null },
 
     status: {
       type: String,
