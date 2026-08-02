@@ -250,6 +250,46 @@ If you didn't try to sign up, you can ignore this email — no account has been 
 }
 
 /**
+ * The password reset code.
+ *
+ * Separate from the signup OTP rather than sharing it: the two arrive in very
+ * different situations, and the line that matters here — "if this wasn't you,
+ * your password has not changed" — is the whole reason someone reads a reset
+ * email they did not ask for.
+ */
+export async function sendResetEmail(
+  to: Recipient,
+  code: string,
+  minutes: number,
+): Promise<void> {
+  const text = `Your Quantalog password reset code is ${code}
+
+It expires in ${minutes} minutes. Enter it on the password reset page to choose a new password.
+
+If you didn't ask to reset your password, you can ignore this email — your password has not changed, and nobody can change it without this code.`;
+
+  await sendOne(to, `${code} is your Quantalog password reset code`, text, resetHtml(code, minutes));
+}
+
+/**
+ * Sent after a password actually changes.
+ *
+ * Not a courtesy: this is the only thing that tells the real owner their
+ * password was changed by someone else, and it is the point at which a stolen
+ * inbox stops being a silent takeover. It goes out on every successful reset,
+ * including ones we believe are legitimate.
+ */
+export async function sendPasswordChangedEmail(to: Recipient): Promise<void> {
+  const text = `Your Quantalog password was just changed.
+
+If that was you, there is nothing to do.
+
+If it wasn't, your account may be at risk — reset your password immediately at ${LINKS.app}/forgot-password, and check that your email account is still secure.`;
+
+  await sendOne(to, "Your Quantalog password was changed", text, passwordChangedHtml());
+}
+
+/**
  * The content-id the logo is referenced by.
  *
  * Gmail strips `data:` URIs out of `<img src>` and drops inline `<svg>`
@@ -450,6 +490,56 @@ function otpHtml(code: string, minutes: number): string {
           no account has been created.
         </p>
       </div>`);
+}
+
+function resetHtml(code: string, minutes: number): string {
+  return shell(`
+      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center">Reset your password</p>
+      <p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${C.dim};text-align:center">
+        Enter this code on the password reset page to choose a new password.
+      </p>
+
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0">
+        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.accentDeep};border-radius:12px;padding:24px;text-align:center">
+          <div style="font-size:36px;font-weight:700;letter-spacing:12px;text-indent:12px;color:${C.accent};font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
+          <div style="margin-top:12px;font-size:12px;color:${C.faint}">Valid for ${minutes} minutes</div>
+        </td></tr>
+      </table>
+
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
+        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint};text-align:center">
+          If you didn't ask to reset your password, ignore this email — your
+          password has not changed, and nobody can change it without this code.
+        </p>
+      </div>`);
+}
+
+/**
+ * The after-the-fact notification.
+ *
+ * Deliberately blunt and deliberately actionable: whoever reads this and did
+ * not expect it has minutes, not days, and burying the instruction under
+ * reassurance would waste them.
+ */
+function passwordChangedHtml(): string {
+  return shell(`
+      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Your password was changed</p>
+      <p style="margin:12px 0 0;font-size:15px;line-height:1.7;color:${C.dim}">
+        The password on your Quantalog account was just changed. If that was
+        you, there is nothing to do.
+      </p>
+
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 0">
+        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.line};border-radius:12px;padding:18px 20px">
+          <p style="margin:0;font-size:14px;line-height:1.7;color:${C.dim}">
+            <strong style="color:${C.text}">If it wasn't you</strong>, someone
+            else may have access to your account. Reset your password again
+            straight away, and check that your email account is still secure.
+          </p>
+        </td></tr>
+      </table>
+
+      ${button("Reset your password", `${LINKS.app}/forgot-password`)}`);
 }
 
 /**

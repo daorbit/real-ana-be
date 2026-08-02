@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
 import { User } from "../models/User.js";
 import { PendingSignup } from "../models/PendingSignup.js";
-import { mailConfigured, sendOne, sendOtpEmail } from "../lib/mail.js";
+import { PasswordReset } from "../models/PasswordReset.js";
+import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChangedEmail } from "../lib/mail.js";
 import { getDemoDailyLimit } from "../models/AppSetting.js";
 import { tryStartDemo } from "../lib/demo-limit.js";
 import { googleConfigured, verifyGoogleCredential } from "../lib/google-auth.js";
@@ -618,6 +619,261 @@ router.delete("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequ
     res.json(await publicUser(user));
   } catch {
     res.status(500).json({ error: "could not remove the image" });
+  }
+});
+
+/* --------------------------- password reset ------------------------------- */
+
+/**
+ * Password reset, by the same six-digit code the signup flow uses.
+ *
+ * A code rather than a link, for one reason: a reset link is a bearer token
+ * that lives in a URL, and URLs end up in browser history, referrer headers,
+ * chat previews and corporate mail scanners that fetch every link they see.
+ * A code has to be read by a person and typed back, which none of those do.
+ *
+ * The rule running through all three routes below: the response never reveals
+ * whether an account exists. `POST /forgot-password` answers identically for a
+ * registered address and an unknown one, because the alternative is a free
+ * membership oracle for anyone with a list of emails.
+ */
+
+/** Validation for the new password only — reuses the signup rules. */
+function passwordError(password: string): string | null {
+  if (password.length < 8) return "password must be at least 8 characters";
+  if (password.length > 72) return "password must be 72 characters or fewer";
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password))
+    return "password must contain at least one letter and one number";
+  return null;
+}
+
+/**
+ * Start a reset: send a code to the address, if it belongs to an account.
+ *
+ * Always answers 202. Whether a code was actually sent is deliberately not
+ * observable — see the note above.
+ */
+router.post("/forgot-password", async (req, res) => {
+  const accepted = { pending: true, expiresInMinutes: OTP_TTL_MINUTES };
+
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "email required" });
+
+    const user = await User.findOne({ email });
+
+    // Unknown address, or a Google-only account with no password to reset.
+    // Both answer exactly like the success case.
+    if (!user || !user.passwordHash) {
+      if (user && !user.passwordHash) {
+        // The real owner is told, over email, that there is nothing to reset —
+        // where an enumerating caller cannot read it.
+        try {
+          await sendOne(
+            { email, name: user.name },
+            "About your Quantalog password",
+            `Hi ${user.name},\n\nSomeone asked to reset the password on your Quantalog account, but this account signs in with Google — there is no password to reset.\n\nUse "Continue with Google" on the login page and you're in.\n\nIf this wasn't you, nothing about your account has changed.`,
+          );
+        } catch {
+          console.warn(`[reset] could not send google-account notice to ${email}`);
+        }
+      }
+      return res.status(202).json(accepted);
+    }
+
+    if (!mailConfigured()) {
+      return res.status(503).json({
+        error: "password reset is unavailable right now — please try again later",
+      });
+    }
+
+    // Spacing applies before a new record replaces the old one, otherwise
+    // repeat requests would be an unmetered way to flood someone's inbox.
+    const existing = await PasswordReset.findOne({ userId: user._id });
+    if (existing) {
+      const since = Date.now() - new Date(existing.lastSentAt).getTime();
+      if (since < OTP_RESEND_GAP_MS) {
+        // Still 202: a caller must not learn from timing or status that the
+        // address is registered.
+        return res.status(202).json(accepted);
+      }
+      if (existing.sends >= OTP_MAX_SENDS) {
+        return res.status(202).json(accepted);
+      }
+    }
+
+    const code = generateOtp();
+    const codeHash = await bcrypt.hash(code, 10);
+
+    await PasswordReset.findOneAndUpdate(
+      { userId: user._id },
+      {
+        userId: user._id,
+        email,
+        codeHash,
+        expiresAt: new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000),
+        attempts: 0,
+        sends: (existing?.sends ?? 0) + 1,
+        lastSentAt: new Date(),
+        // Not reset on resend: the TTL is keyed off `createdAt` precisely so a
+        // stream of resends cannot keep one record alive forever.
+        ...(existing ? {} : { createdAt: new Date() }),
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    try {
+      await sendResetEmail({ email, name: user.name }, code, OTP_TTL_MINUTES);
+    } catch (e) {
+      await PasswordReset.deleteOne({ userId: user._id });
+      console.error("[reset] code send failed:", e instanceof Error ? e.message : e);
+      // Still 202 — a mail failure is ours, and reporting it differently would
+      // confirm the address exists.
+      return res.status(202).json(accepted);
+    }
+
+    res.status(202).json(accepted);
+  } catch {
+    // Even an unexpected failure answers the same shape, for the same reason.
+    res.status(202).json(accepted);
+  }
+});
+
+/**
+ * Finish a reset: prove the code, set the new password.
+ *
+ * Deliberately one step rather than two. Exchanging the code for a short-lived
+ * token first would create a second credential to leak, and gains nothing —
+ * the user already has the new password in hand by the time they submit.
+ */
+router.post("/reset-password", async (req, res) => {
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    const code = String(req.body?.code ?? "").trim();
+    const password = String(req.body?.password ?? "");
+
+    if (!email || !code || !password)
+      return res.status(400).json({ error: "email, code and password required" });
+    if (!/^\d{6}$/.test(code))
+      return res.status(400).json({ error: "enter the 6-digit code" });
+
+    const invalid = passwordError(password);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const user = await User.findOne({ email });
+    const pending = user ? await PasswordReset.findOne({ userId: user._id }) : null;
+
+    // Past this point the caller has produced a code, so they are no longer a
+    // blind enumerator — but the message still says nothing about whether the
+    // address exists, only that this attempt cannot proceed.
+    if (!user || !pending) {
+      return res.status(400).json({
+        error: "that reset request is no longer valid — start again to get a new code",
+        restart: true,
+      });
+    }
+
+    if (pending.expiresAt.getTime() < Date.now()) {
+      await pending.deleteOne();
+      return res.status(400).json({
+        error: "that code has expired — start again to get a new one",
+        restart: true,
+      });
+    }
+
+    const ok = await bcrypt.compare(code, pending.codeHash);
+    if (!ok) {
+      pending.attempts += 1;
+      if (pending.attempts >= OTP_MAX_ATTEMPTS) {
+        await pending.deleteOne();
+        return res.status(429).json({
+          error: "too many incorrect codes — start again to get a new one",
+          restart: true,
+        });
+      }
+      await pending.save();
+      return res.status(400).json({
+        error: "that code isn't right",
+        attemptsLeft: OTP_MAX_ATTEMPTS - pending.attempts,
+      });
+    }
+
+    user.passwordHash = await bcrypt.hash(password, 10);
+    await user.save();
+    await pending.deleteOne();
+
+    // The one thing that turns a silent takeover into a noticed one. Not
+    // awaited into the response: the password is already changed, and a mail
+    // outage must not read as a failed reset the user would repeat.
+    sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
+      console.error("[reset] change notice failed:", (e as Error)?.message)
+    );
+
+    // Signed straight in. They have just proved control of the inbox and set
+    // the password; sending them to a login form to type it again is friction
+    // with no security value.
+    const token = signToken(user.id);
+    res.json({ token, user: await publicUser(user) });
+  } catch {
+    res.status(500).json({ error: "could not reset the password" });
+  }
+});
+
+/**
+ * Send a fresh reset code.
+ *
+ * Same shape as the signup resend, and the same anti-enumeration rule as
+ * `/forgot-password` — which is why it answers 202 rather than 404 for an
+ * address with no reset in progress.
+ */
+router.post("/forgot-password/resend", async (req, res) => {
+  const accepted = { pending: true, expiresInMinutes: OTP_TTL_MINUTES };
+
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "email required" });
+
+    const user = await User.findOne({ email });
+    const pending = user ? await PasswordReset.findOne({ userId: user._id }) : null;
+    if (!user || !pending) return res.status(202).json(accepted);
+
+    const since = Date.now() - new Date(pending.lastSentAt).getTime();
+    if (since < OTP_RESEND_GAP_MS) {
+      const seconds = Math.ceil((OTP_RESEND_GAP_MS - since) / 1000);
+      res.set("Retry-After", String(seconds));
+      return res.status(429).json({
+        error: `please wait ${seconds}s before asking for another code`,
+        retryInSeconds: seconds,
+      });
+    }
+
+    if (pending.sends >= OTP_MAX_SENDS) {
+      await pending.deleteOne();
+      return res.status(429).json({
+        error: "too many codes requested — start again in a little while",
+        restart: true,
+      });
+    }
+
+    const code = generateOtp();
+    pending.codeHash = await bcrypt.hash(code, 10);
+    pending.expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+    // A resend inherits a fresh attempt budget; otherwise the new code would
+    // fail for a reason the user cannot see.
+    pending.attempts = 0;
+    pending.sends += 1;
+    pending.lastSentAt = new Date();
+    await pending.save();
+
+    try {
+      await sendResetEmail({ email, name: user.name }, code, OTP_TTL_MINUTES);
+    } catch (e) {
+      console.error("[reset] resend failed:", e instanceof Error ? e.message : e);
+    }
+
+    res.status(202).json(accepted);
+  } catch {
+    res.status(202).json(accepted);
   }
 });
 
