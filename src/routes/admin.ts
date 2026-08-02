@@ -6,6 +6,7 @@ import { Event } from "../models/Event.js";
 import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
+import { ContactMessage } from "../models/ContactMessage.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../models/AppSetting.js";
 import { demoUsageSnapshot } from "../lib/demo-limit.js";
 import { Plan } from "../models/Plan.js";
@@ -802,5 +803,98 @@ function couponErrorMessage(e: unknown): string {
   if (message.includes("E11000")) return "a coupon with that code already exists";
   return message || "could not save the coupon";
 }
+
+/* ------------------------------ contact inbox ----------------------------- */
+
+/**
+ * Messages from the marketing site's contact form.
+ *
+ * Admin-only, like everything else on this router — the form is open to anyone
+ * but what it collects is correspondence, and the sender's address is personal
+ * data that has no business on a public surface.
+ *
+ * `ipHash` is never returned. It exists to rate-limit a flood, not to be looked
+ * at, and shipping it to a browser would be leaking a stable per-person
+ * identifier for no operational gain.
+ */
+const CONTACT_STATUSES = ["new", "read", "replied", "spam"] as const;
+type ContactStatus = (typeof CONTACT_STATUSES)[number];
+
+router.get("/contact", async (req: AuthedRequest, res: Response) => {
+  const status = String(req.query.status ?? "").trim();
+  const q = String(req.query.q ?? "").trim();
+  const page = Math.max(1, Number(req.query.page) || 1);
+
+  const filter: Record<string, unknown> = {};
+  if (CONTACT_STATUSES.includes(status as ContactStatus)) filter.status = status;
+  if (q) {
+    filter.$or = [
+      { name: { $regex: escapeRegex(q), $options: "i" } },
+      { email: { $regex: escapeRegex(q), $options: "i" } },
+      { company: { $regex: escapeRegex(q), $options: "i" } },
+      { message: { $regex: escapeRegex(q), $options: "i" } },
+    ];
+  }
+
+  const [messages, total, unread] = await Promise.all([
+    ContactMessage.find(filter)
+      .select("-ipHash")
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * PAGE_SIZE)
+      .limit(PAGE_SIZE)
+      .lean(),
+    ContactMessage.countDocuments(filter),
+    ContactMessage.countDocuments({ status: "new" }),
+  ]);
+
+  res.json({
+    messages,
+    total,
+    unread,
+    page,
+    pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+  });
+});
+
+/** Unread count on its own, for the nav badge — the list query is too heavy to poll. */
+router.get("/contact/unread", async (_req: AuthedRequest, res: Response) => {
+  res.json({ unread: await ContactMessage.countDocuments({ status: "new" }) });
+});
+
+router.patch("/contact/:id", async (req: AuthedRequest, res: Response) => {
+  const update: Record<string, unknown> = {};
+
+  const status = String(req.body?.status ?? "").trim();
+  if (status) {
+    if (!CONTACT_STATUSES.includes(status as ContactStatus)) {
+      return res.status(400).json({ error: "unknown status" });
+    }
+    update.status = status;
+    // Stamped once, on the move out of "new", so it records when someone first
+    // looked rather than the last time anything was edited.
+    if (status !== "new") update.readAt = new Date();
+  }
+
+  if (typeof req.body?.adminNote === "string") {
+    update.adminNote = req.body.adminNote.trim().slice(0, 2000);
+  }
+
+  if (!Object.keys(update).length) {
+    return res.status(400).json({ error: "nothing to update" });
+  }
+
+  const message = await ContactMessage.findByIdAndUpdate(req.params.id, update, { new: true })
+    .select("-ipHash")
+    .lean();
+
+  if (!message) return res.status(404).json({ error: "message not found" });
+  res.json(message);
+});
+
+router.delete("/contact/:id", async (req: AuthedRequest, res: Response) => {
+  const deleted = await ContactMessage.findByIdAndDelete(req.params.id);
+  if (!deleted) return res.status(404).json({ error: "message not found" });
+  res.status(204).end();
+});
 
 export default router;

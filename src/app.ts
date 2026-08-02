@@ -17,6 +17,7 @@ import webhookRoutes from "./routes/webhooks.js";
 import cronRoutes from "./routes/cron.js";
 import reportRoutes from "./routes/reports.js";
 import reportsPublicRoutes from "./routes/reports-public.js";
+import contactPublicRoutes from "./routes/contact-public.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -84,6 +85,10 @@ app.use("/api/public/plans", openCors, plansPublicRoutes);
 // links above — most recipients have no account, and requiring one to stop
 // receiving mail is how a report turns into a spam complaint.
 app.use("/api/public/reports", openCors, reportsPublicRoutes);
+// The marketing site's contact form. Open CORS because the landing page is a
+// different origin from the dashboard and is deliberately not in that
+// allowlist; the route only writes, and reading messages back is admin-only.
+app.use("/api/public/contact", openCors, contactPublicRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
