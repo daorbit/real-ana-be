@@ -42,12 +42,40 @@ const contactMessageSchema = new Schema(
     /** Free-text note an admin adds after handling it. Never shown to the sender. */
     adminNote: { type: String, trim: true, maxlength: 2000, default: "" },
 
+    /**
+     * Replies sent from the dashboard, oldest first.
+     *
+     * Kept on the message rather than in a separate collection because a reply
+     * has no meaning apart from the thing it answers, and the whole exchange is
+     * always read together. Storing what was actually sent also means the next
+     * admin can see the reply rather than guessing from a "replied" badge.
+     */
+    replies: {
+      type: [
+        {
+          _id: false,
+          subject: { type: String, required: true, maxlength: 200 },
+          body: { type: String, required: true, maxlength: 10000 },
+          /** Email of the admin who sent it, for accountability. */
+          sentBy: { type: String, required: true, maxlength: 200 },
+          sentAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+
     ipHash: { type: String, required: true },
     /** Trimmed hard: a user agent is unbounded and we only want the rough client. */
     userAgent: { type: String, maxlength: 300, default: "" },
 
     createdAt: { type: Date, default: Date.now },
     readAt: { type: Date, default: null },
+    /**
+     * When the automatic "we got your message" receipt went out. Null means it
+     * never did — mail was unconfigured or the send failed — which is worth
+     * seeing in the inbox, because the sender is still waiting on silence.
+     */
+    ackSentAt: { type: Date, default: null },
   },
   { versionKey: false }
 );

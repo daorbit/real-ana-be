@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import crypto from "crypto";
 import { ContactMessage } from "../models/ContactMessage.js";
 import { clientIp } from "../enrich.js";
+import { mailConfigured, sendOne, contactAckHtml, contactAckText } from "../lib/mail.js";
 
 /**
  * The contact form on the marketing site.
@@ -23,6 +24,16 @@ const WINDOW_MS = 60 * 60 * 1000;
 
 const SUBJECTS = ["general", "sales", "support", "platform-api", "privacy", "other"] as const;
 type Subject = (typeof SUBJECTS)[number];
+
+/** Readable form of the subject, for the acknowledgement email. */
+const SUBJECT_LABELS: Record<Subject, string> = {
+  general: "General enquiry",
+  sales: "Pricing and plans",
+  support: "Help with my account",
+  "platform-api": "Platform API / white label",
+  privacy: "Privacy and compliance",
+  other: "Something else",
+};
 
 /**
  * Key the hash with the server secret so a leaked database cannot be walked
@@ -82,7 +93,7 @@ router.post("/", async (req: Request, res: Response) => {
       .json({ error: "Too many messages from here. Try again in a little while." });
   }
 
-  await ContactMessage.create({
+  const saved = await ContactMessage.create({
     name,
     email,
     company,
@@ -92,6 +103,22 @@ router.post("/", async (req: Request, res: Response) => {
     ipHash,
     userAgent: str(req.headers["user-agent"], 300),
   });
+
+  // Close the loop with the sender. Deliberately not awaited into the response:
+  // the message is already stored, and a mail outage must not turn a successful
+  // submission into an error the visitor sees — they would just send it again.
+  if (mailConfigured()) {
+    const label = SUBJECT_LABELS[subject];
+    sendOne(
+      { email, name },
+      "We got your message — Quantalog",
+      contactAckText(name, label, message),
+      contactAckHtml(name, label, message)
+    ).then(
+      () => ContactMessage.updateOne({ _id: saved._id }, { ackSentAt: new Date() }).exec(),
+      (e) => console.error("[contact] acknowledgement failed:", (e as Error)?.message)
+    );
+  }
 
   res.status(201).json({ ok: true });
 });

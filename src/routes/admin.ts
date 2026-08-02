@@ -18,7 +18,7 @@ import { quotaSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
 import { CURRENCIES } from "../lib/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../lib/fx.js";
-import { mailConfigured, mailFrom, sendBulk, broadcastHtml, inviteHtml, personalize, forBrowser } from "../lib/mail.js";
+import { mailConfigured, mailFrom, sendBulk, sendOne, broadcastHtml, inviteHtml, personalize, forBrowser, contactReplyHtml } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
@@ -889,6 +889,58 @@ router.patch("/contact/:id", async (req: AuthedRequest, res: Response) => {
 
   if (!message) return res.status(404).json({ error: "message not found" });
   res.json(message);
+});
+
+/**
+ * Reply to a message, from the dashboard.
+ *
+ * The reply is sent and then recorded on the message, in that order: a stored
+ * reply that never left would tell the next admin the sender had been answered
+ * when they had not, which is worse than no record at all.
+ *
+ * The body is sent as plain text through the standard branded shell. Admins do
+ * not write HTML here — the sender is a member of the public, and an admin-
+ * authored HTML body is an injection surface with no upside.
+ */
+router.post("/contact/:id/reply", async (req: AuthedRequest, res: Response) => {
+  if (!mailConfigured()) {
+    return res.status(503).json({ error: "email is not configured on the server" });
+  }
+
+  const message = await ContactMessage.findById(req.params.id);
+  if (!message) return res.status(404).json({ error: "message not found" });
+
+  const subject = String(req.body?.subject ?? "").trim().slice(0, 200);
+  const body = String(req.body?.body ?? "").trim().slice(0, 10000);
+
+  if (!subject) return res.status(400).json({ error: "a subject is required" });
+  if (body.length < 10) return res.status(400).json({ error: "the reply is too short" });
+
+  // Recorded so the next admin can see who answered, not just that someone did.
+  const sender = await User.findById(req.userId).select("email");
+  const sentBy = sender?.email ?? "unknown";
+
+  try {
+    await sendOne(
+      { email: message.email, name: message.name },
+      subject,
+      body,
+      contactReplyHtml(body, message.message)
+    );
+  } catch (e) {
+    return res
+      .status(502)
+      .json({ error: (e as Error)?.message || "the email could not be sent" });
+  }
+
+  message.replies.push({ subject, body, sentBy, sentAt: new Date() });
+  message.status = "replied";
+  if (!message.readAt) message.readAt = new Date();
+  await message.save();
+
+  const saved = message.toObject();
+  delete (saved as Record<string, unknown>).ipHash;
+  res.json(saved);
 });
 
 router.delete("/contact/:id", async (req: AuthedRequest, res: Response) => {

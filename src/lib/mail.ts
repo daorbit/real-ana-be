@@ -618,6 +618,106 @@ export function forBrowser(html: string): string {
   return html.replace(`cid:${LOGO_CID}`, LOGO_DATA_URI);
 }
 
+/* ----------------------------- contact form ------------------------------- */
+
+/**
+ * Sent to whoever fills in the contact form, immediately.
+ *
+ * The point is to close the loop: a form that swallows a message and says
+ * nothing leaves the sender wondering whether it arrived, and the usual next
+ * move is to send it again. Quoting their own message back is what makes it
+ * read as a receipt rather than an autoresponder.
+ *
+ * The footer reason is overridden because the default one claims the recipient
+ * has an account — the whole premise of this form is that they may not.
+ */
+export function contactAckHtml(name: string, subject: string, message: string): string {
+  const quoted = escapeHtml(message).replace(/\n/g, "<br>");
+
+  return shell(
+    `<p style="margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px">
+      Thanks, ${escapeHtml(name)} — we have your message.
+    </p>
+
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad">
+      A person reads every message that comes through this form. You should hear
+      back at this address within one working day.
+    </p>
+
+    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
+
+    <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
+      What you sent
+    </p>
+
+    <p style="margin:0 0 10px;font-size:13px;color:#6b7280">
+      Subject: <span style="color:#9aa1ad">${escapeHtml(subject)}</span>
+    </p>
+
+    <div style="padding:14px 16px;background:#131519;border:1px solid #22252c;border-radius:10px">
+      <p style="margin:0;font-size:14px;line-height:1.7;color:#9aa1ad">${quoted}</p>
+    </div>
+
+    <p style="margin:22px 0 0;font-size:14px;line-height:1.7;color:#9aa1ad">
+      No need to reply to this — it is just a receipt. If you remember something
+      you left out, reply to this email and it will reach the same place.
+    </p>`,
+    "You're receiving this because you sent a message through the contact form on quantalog.daorbit.in."
+  );
+}
+
+/** The plain-text half of the acknowledgement, for clients that refuse HTML. */
+export function contactAckText(name: string, subject: string, message: string): string {
+  return [
+    `Thanks, ${name} — we have your message.`,
+    "",
+    "A person reads every message that comes through this form. You should hear back at this address within one working day.",
+    "",
+    `Subject: ${subject}`,
+    "",
+    message,
+    "",
+    "No need to reply to this — it is just a receipt.",
+  ].join("\n");
+}
+
+/**
+ * An admin's reply, as the sender sees it.
+ *
+ * Their original message is quoted underneath so the reply stands on its own —
+ * they may have written days ago, and a bare answer to a forgotten question is
+ * a second round trip.
+ */
+export function contactReplyHtml(body: string, original: string): string {
+  const paragraphs = escapeHtml(body)
+    .split(/\n{2,}/)
+    .map(
+      (block) =>
+        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#d6dae1">${block.replace(
+          /\n/g,
+          "<br>"
+        )}</p>`
+    )
+    .join("");
+
+  return shell(
+    `${paragraphs}
+
+    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
+
+    <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
+      Your original message
+    </p>
+
+    <div style="padding:14px 16px;background:#131519;border:1px solid #22252c;border-radius:10px">
+      <p style="margin:0;font-size:14px;line-height:1.7;color:#6b7280">${escapeHtml(
+        original
+      ).replace(/\n/g, "<br>")}</p>
+    </div>`,
+    "You're receiving this because you contacted Quantalog. Reply to this email to continue the conversation."
+  );
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
