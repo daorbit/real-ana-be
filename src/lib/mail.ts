@@ -808,6 +808,54 @@ export function contactReplyHtml(body: string, original: string): string {
   );
 }
 
+/* ------------------------------ newsletter -------------------------------- */
+
+/**
+ * Sent when someone subscribes from the marketing site.
+ *
+ * Deliberately short. The visitor gave one field and expects one thing back —
+ * confirmation that it worked — so anything beyond that is a cold email to
+ * someone who has not agreed to one yet.
+ *
+ * The footer reason is overridden for the same reason the contact receipt
+ * overrides it: a subscriber has no account, and the default line would say
+ * they do.
+ */
+export function newsletterAckHtml(): string {
+  return shell(
+    `<p style="margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px">
+      You're on the list.
+    </p>
+
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad">
+      We write when there is something worth reading — new features, and what we
+      learn building analytics that runs without cookies. A few times a month at
+      most, and never a sales sequence.
+    </p>
+
+    <p style="margin:0;font-size:15px;line-height:1.7;color:#9aa1ad">
+      Nothing to do from here. To stop, reply with "unsubscribe" and you're off
+      the list.
+    </p>
+
+    ${button("Try the live demo", LINKS.site)}`,
+    "You're receiving this because you subscribed to the Quantalog newsletter on quantalog.daorbit.in."
+  );
+}
+
+/** The plain-text half, for clients that refuse HTML. */
+export function newsletterAckText(): string {
+  return [
+    "You're on the list.",
+    "",
+    "We write when there is something worth reading — new features, and what we learn building analytics that runs without cookies. A few times a month at most, and never a sales sequence.",
+    "",
+    "Nothing to do from here. To stop, reply with \"unsubscribe\" and you're off the list.",
+    "",
+    `Try the live demo: ${LINKS.site}`,
+  ].join("\n");
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

@@ -18,6 +18,7 @@ import cronRoutes from "./routes/cron.js";
 import reportRoutes from "./routes/reports.js";
 import reportsPublicRoutes from "./routes/reports-public.js";
 import contactPublicRoutes from "./routes/contact-public.js";
+import newsletterPublicRoutes from "./routes/newsletter-public.js";
 import supportRoutes from "./routes/support.js";
 
 const app = express();
@@ -90,6 +91,8 @@ app.use("/api/public/reports", openCors, reportsPublicRoutes);
 // different origin from the dashboard and is deliberately not in that
 // allowlist; the route only writes, and reading messages back is admin-only.
 app.use("/api/public/contact", openCors, contactPublicRoutes);
+// The newsletter dialog on the same site. Same origin story, same write-only shape.
+app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);

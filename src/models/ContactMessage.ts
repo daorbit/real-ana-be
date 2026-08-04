@@ -35,6 +35,10 @@ const contactMessageSchema = new Schema(
         // Raised from inside the dashboard rather than the marketing site.
         "bug",
         "feedback",
+        // A newsletter signup. Not correspondence — nobody is waiting on a
+        // reply — but it belongs in the same inbox because it is the same
+        // question every time: who is interested, and how do we reach them.
+        "newsletter",
       ],
       default: "general",
     },
@@ -50,7 +54,7 @@ const contactMessageSchema = new Schema(
      */
     source: {
       type: String,
-      enum: ["marketing", "app"],
+      enum: ["marketing", "app", "newsletter"],
       default: "marketing",
       index: true,
     },
