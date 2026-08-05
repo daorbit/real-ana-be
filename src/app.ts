@@ -16,6 +16,8 @@ import billingRoutes from "./routes/billing.js";
 import webhookRoutes from "./routes/webhooks.js";
 import cronRoutes from "./routes/cron.js";
 import reportRoutes from "./routes/reports.js";
+import segmentRoutes from "./routes/segments.js";
+import markerRoutes from "./routes/markers.js";
 import reportsPublicRoutes from "./routes/reports-public.js";
 import contactPublicRoutes from "./routes/contact-public.js";
 import newsletterPublicRoutes from "./routes/newsletter-public.js";
@@ -102,6 +104,9 @@ app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 app.use("/api/workspaces", dashboardCors, seoRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
+// Saved dashboard filters and timeline markers, same prefix and ownership rule.
+app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
+app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
 app.use("/api/support", dashboardCors, supportRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
