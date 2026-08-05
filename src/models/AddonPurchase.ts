@@ -19,6 +19,9 @@ const addonPurchaseSchema = new Schema(
     /** The code applied, if any — kept for the order history even after the coupon itself is deactivated. */
     couponCode: { type: String, default: "" },
     status: { type: String, enum: ["created", "paid", "failed"], default: "created" },
+    /** See `PlanPurchase` — assigned at credit time, not at checkout start. */
+    invoiceNumber: { type: String, default: "", index: true },
+    invoicedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

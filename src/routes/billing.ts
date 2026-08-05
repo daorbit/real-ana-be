@@ -9,6 +9,15 @@ import { activatePlanPeriod } from "../lib/quota.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
 import { resolveCurrency } from "../lib/currency.js";
+import { User } from "../models/User.js";
+import {
+  buildInvoice,
+  nextInvoiceNumber,
+  renderInvoicePdf,
+  formatAmount,
+  type InvoiceKind,
+} from "../lib/invoice.js";
+import { sendInvoiceEmail, mailConfigured } from "../lib/mail.js";
 
 /**
  * Subscription plans, addon packs, and the checkout flow that sells both
@@ -240,6 +249,8 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
     { userId: purchase.userId },
     { $inc: { [field]: pack.quantity } }
   );
+
+  await issueReceipt("addon", purchase.id, String(purchase.userId));
 }
 
 /**
@@ -263,6 +274,161 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
     purchase.planSlug as string,
     purchase.cycle as BillingCycle
   );
+
+  await issueReceipt("plan", purchase.id, String(purchase.userId));
 }
+
+/* -------------------------------- receipts ---------------------------------- */
+
+/**
+ * Assign a receipt number to a freshly credited purchase and email the PDF.
+ *
+ * Called from inside the credit functions, after the credit itself has landed,
+ * and swallows every failure: the money has already moved and the account has
+ * already been upgraded by this point, so a bounced email or a PDF that failed
+ * to render must not propagate into the webhook or the verify response and
+ * suggest the purchase didn't work. The receipt is regenerable from the
+ * dashboard, an unactivated paid plan is not.
+ *
+ * Reached only through the credit path's atomic status claim, so it runs once
+ * per purchase even when the webhook and the client-side verify call race.
+ */
+async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: string) {
+  try {
+    const issuedAt = new Date();
+    const number = await nextInvoiceNumber(issuedAt);
+
+    // Guard on the number being unset so a re-credit attempt can't renumber a
+    // receipt the buyer already has in their inbox.
+    const filter = { _id: purchaseId, $or: [{ invoiceNumber: "" }, { invoiceNumber: null }] };
+    const update = { $set: { invoiceNumber: number, invoicedAt: issuedAt } };
+
+    // Branching on the model rather than holding one in a variable: the two
+    // schemas give `findOneAndUpdate` incompatible signatures, so a union-typed
+    // handle isn't callable.
+    const claimed =
+      kind === "plan"
+        ? await PlanPurchase.findOneAndUpdate(filter, update)
+        : await AddonPurchase.findOneAndUpdate(filter, update);
+    if (!claimed) return;
+
+    if (!mailConfigured()) return;
+
+    const user = await User.findById(userId).select("name email");
+    if (!user?.email) return;
+
+    const invoice = await buildInvoice(kind, purchaseId, userId, {
+      name: (user.name as string) ?? "",
+      email: user.email as string,
+    });
+    if (!invoice) return;
+
+    const pdf = await renderInvoicePdf(invoice);
+
+    await sendInvoiceEmail(
+      { email: invoice.buyer.email, name: invoice.buyer.name },
+      {
+        number: invoice.number,
+        description: invoice.description,
+        amountLabel: formatAmount(invoice.amount, invoice.currency),
+        paymentId: invoice.paymentId,
+        dateLabel: invoice.issuedAt.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          timeZone: "UTC",
+        }),
+      },
+      pdf,
+    );
+  } catch (e) {
+    console.error("Receipt issuance failed:", kind, purchaseId, (e as Error).message);
+  }
+}
+
+/**
+ * The buyer's own receipts, newest first.
+ *
+ * Plans and addons live in separate collections but are one history to the
+ * person reading it, so they're merged here rather than exposed as two lists
+ * the client would have to interleave itself. Only paid rows with a number
+ * appear — an abandoned checkout is not a purchase.
+ */
+router.get("/invoices", async (req: AuthedRequest, res: Response) => {
+  const query = {
+    userId: req.userId,
+    status: "paid" as const,
+    invoiceNumber: { $nin: ["", null] },
+  };
+
+  const [plans, addons] = await Promise.all([
+    PlanPurchase.find(query).sort({ invoicedAt: -1 }).limit(100).lean(),
+    AddonPurchase.find(query).sort({ invoicedAt: -1 }).limit(100).lean(),
+  ]);
+
+  const packs = await AddonPack.find({
+    _id: { $in: addons.map((a) => a.addonPackId) },
+  }).lean();
+  const packById = new Map(packs.map((p) => [String(p._id), p]));
+
+  const items = [
+    ...plans.map((p) => ({
+      id: String(p._id),
+      kind: "plan" as const,
+      number: p.invoiceNumber as string,
+      issuedAt: p.invoicedAt,
+      description: `${p.planSlug} plan — ${p.cycle === "yearly" ? "12 months" : "1 month"}`,
+      amount: p.amount,
+      currency: p.currency,
+      paymentId: p.razorpayPaymentId ?? "",
+    })),
+    ...addons.map((a) => {
+      const pack = packById.get(String(a.addonPackId));
+      return {
+        id: String(a._id),
+        kind: "addon" as const,
+        number: a.invoiceNumber as string,
+        issuedAt: a.invoicedAt,
+        description: pack
+          ? `${pack.name} — ${pack.quantity} ${pack.type === "audit" ? "audit" : "crawl"} credits`
+          : "Add-on credit pack",
+        amount: a.amount,
+        currency: a.currency,
+        paymentId: a.razorpayPaymentId ?? "",
+      };
+    }),
+  ].sort((a, b) => Number(new Date(b.issuedAt as Date)) - Number(new Date(a.issuedAt as Date)));
+
+  res.json(items);
+});
+
+/**
+ * Download one receipt as a PDF.
+ *
+ * Regenerated on each request rather than stored: the document is a pure
+ * function of a row that never changes after it is paid, so there is nothing
+ * to keep in sync and no blob storage to pay for. `buildInvoice` scopes the
+ * lookup by `userId`, so one account cannot fetch another's receipt by id.
+ */
+router.get("/invoices/:kind/:id/pdf", async (req: AuthedRequest, res: Response) => {
+  const kind = req.params.kind === "plan" ? "plan" : req.params.kind === "addon" ? "addon" : null;
+  if (!kind) return res.status(400).json({ error: "unknown receipt type" });
+
+  const user = await User.findById(req.userId).select("name email");
+  if (!user) return res.status(404).json({ error: "user not found" });
+
+  const invoice = await buildInvoice(kind, String(req.params.id), String(req.userId), {
+    name: (user.name as string) ?? "",
+    email: user.email as string,
+  });
+  if (!invoice) return res.status(404).json({ error: "receipt not found" });
+
+  const pdf = await renderInvoicePdf(invoice);
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Length", pdf.length);
+  res.setHeader("Content-Disposition", `attachment; filename="${invoice.number}.pdf"`);
+  res.send(pdf);
+});
 
 export default router;

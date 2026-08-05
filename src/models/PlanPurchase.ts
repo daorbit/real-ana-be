@@ -22,6 +22,14 @@ const planPurchaseSchema = new Schema(
     /** The code applied, if any — kept for the order history even after the coupon itself is deactivated. */
     couponCode: { type: String, default: "" },
     status: { type: String, enum: ["created", "paid", "failed"], default: "created" },
+    /**
+     * The receipt's number, assigned when the payment is credited — never at
+     * order creation, so an abandoned checkout doesn't consume one and leave a
+     * gap in the monthly sequence. Empty until then.
+     */
+    invoiceNumber: { type: String, default: "", index: true },
+    /** When the receipt was issued. Distinct from `createdAt`, which is when checkout started. */
+    invoicedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -808,6 +808,107 @@ export function contactReplyHtml(body: string, original: string): string {
   );
 }
 
+/* -------------------------------- receipts -------------------------------- */
+
+/**
+ * The payment receipt, sent once a purchase is credited.
+ *
+ * The PDF rides along as an attachment rather than being left behind a link:
+ * the common reason someone wants this document is to hand it to an accountant
+ * or file an expense, and a login wall between them and the file is friction at
+ * exactly the wrong moment. The dashboard link is still offered for the copy
+ * they'll want in six months, when the email is buried.
+ *
+ * Amounts arrive pre-formatted — the caller owns the smallest-unit division, so
+ * the template can't get it wrong on its own.
+ */
+export async function sendInvoiceEmail(
+  to: Recipient,
+  invoice: {
+    number: string;
+    description: string;
+    amountLabel: string;
+    paymentId: string;
+    dateLabel: string;
+  },
+  pdf: Buffer,
+): Promise<void> {
+  const text = [
+    `Payment received — thank you.`,
+    "",
+    `Receipt ${invoice.number}`,
+    `${invoice.description}`,
+    `Amount paid: ${invoice.amountLabel}`,
+    `Date: ${invoice.dateLabel}`,
+    `Payment reference: ${invoice.paymentId}`,
+    "",
+    "Your receipt is attached as a PDF. You can also download it any time from Billing in your dashboard:",
+    `${LINKS.app}/billing`,
+    "",
+    "This is a payment receipt, not a tax invoice — no GST has been charged or collected.",
+  ].join("\n");
+
+  await sendOne(
+    to,
+    `Receipt ${invoice.number} — payment received`,
+    text,
+    invoiceHtml(invoice),
+    [
+      {
+        filename: `${invoice.number}.pdf`,
+        content: pdf,
+        contentType: "application/pdf",
+      },
+    ],
+  );
+}
+
+/** One label/value line in the receipt summary panel. */
+function invoiceRow(label: string, value: string, strong = false): string {
+  return `<tr>
+    <td style="padding:7px 0;font-size:13px;color:${C.faint};white-space:nowrap">${escapeHtml(label)}</td>
+    <td style="padding:7px 0;font-size:${strong ? "15px" : "13px"};font-weight:${strong ? "700" : "500"};color:${strong ? C.accent : C.text};text-align:right">${escapeHtml(value)}</td>
+  </tr>`;
+}
+
+function invoiceHtml(invoice: {
+  number: string;
+  description: string;
+  amountLabel: string;
+  paymentId: string;
+  dateLabel: string;
+}): string {
+  return shell(`
+      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Payment received</p>
+      <p style="margin:10px 0 0;font-size:15px;line-height:1.7;color:${C.dim}">
+        Thanks — your payment went through and your account has already been
+        updated. Your receipt is attached to this email as a PDF.
+      </p>
+
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:22px 0 0">
+        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.line};border-radius:12px;padding:18px 20px">
+          <p style="margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">
+            Receipt ${escapeHtml(invoice.number)}
+          </p>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+            ${invoiceRow("Item", invoice.description)}
+            ${invoiceRow("Date", invoice.dateLabel)}
+            ${invoiceRow("Payment reference", invoice.paymentId || "—")}
+            <tr><td colspan="2" style="padding:4px 0"><div style="height:1px;background:${C.line}"></div></td></tr>
+            ${invoiceRow("Total paid", invoice.amountLabel, true)}
+          </table>
+        </td></tr>
+      </table>
+
+      <p style="margin:20px 0 0;font-size:12.5px;line-height:1.65;color:${C.faint}">
+        This is a payment receipt, not a tax invoice — no GST has been charged
+        or collected. Every receipt stays available under Billing in your
+        dashboard.
+      </p>
+
+      ${button("View billing", `${LINKS.app}/billing`)}`);
+}
+
 /* ------------------------------ newsletter -------------------------------- */
 
 /**
