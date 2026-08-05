@@ -50,8 +50,16 @@ export type InvoiceData = {
   couponCode: string;
   paymentId: string;
   orderId: string;
-  /** One line: what was bought. */
+  /** One line summarising the purchase, for lists and the email subject. */
   description: string;
+  /**
+   * The itemised breakdown.
+   *
+   * A plan bought with addon packs in one checkout is several lines on one
+   * receipt — a single "Pro plan" line for a payment that also bought 200
+   * credits would be an incomplete record of what the money went on.
+   */
+  lines: { description: string; amount: number }[];
   buyer: { name: string; email: string };
 };
 
@@ -135,6 +143,30 @@ export async function buildInvoice(
     // line item would be worse than an unpolished one.
     const plan = await getResolvedPlan(p.planSlug as string);
     const name = plan?.name ?? (p.planSlug as string);
+    const planLine = `${name} plan — ${p.cycle === "yearly" ? "12 months" : "1 month"}`;
+
+    const addons = (p.addons ?? []) as unknown as {
+      name: string;
+      quantity: number;
+      packs: number;
+      unitAmount: number;
+      type: string;
+    }[];
+
+    // The plan's own price is recorded separately from the order total, so a
+    // receipt can show what each part cost. Rows written before combined
+    // checkout have no `planAmount` and no addons — for those the plan line is
+    // the whole charge.
+    const planAmount = (p.planAmount as number) || (addons.length ? 0 : (p.amount as number));
+
+    const lines = [
+      { description: planLine, amount: planAmount },
+      ...addons.map((a) => ({
+        description:
+          `${a.name} × ${a.packs} — ${a.quantity * a.packs} ${a.type === "audit" ? "audit" : "crawl"} credits`,
+        amount: a.unitAmount * a.packs,
+      })),
+    ];
 
     return {
       id: p.id,
@@ -146,7 +178,8 @@ export async function buildInvoice(
       couponCode: (p.couponCode as string) ?? "",
       paymentId: (p.razorpayPaymentId as string) ?? "",
       orderId: p.razorpayOrderId as string,
-      description: `${name} plan — ${p.cycle === "yearly" ? "12 months" : "1 month"}`,
+      description: addons.length ? `${planLine}, plus ${addons.length} add-on pack${addons.length === 1 ? "" : "s"}` : planLine,
+      lines,
       buyer,
     };
   }
@@ -155,8 +188,9 @@ export async function buildInvoice(
   if (!p || !p.invoiceNumber) return null;
 
   const pack = await AddonPack.findById(p.addonPackId);
+  const packs = (p.packs as number) ?? 1;
   const description = pack
-    ? `${pack.name} — ${pack.quantity} ${pack.type === "audit" ? "audit" : "crawl"} credits`
+    ? `${pack.name}${packs > 1 ? ` × ${packs}` : ""} — ${(pack.quantity as number) * packs} ${pack.type === "audit" ? "audit" : "crawl"} credits`
     : "Add-on credit pack";
 
   return {
@@ -170,6 +204,7 @@ export async function buildInvoice(
     paymentId: (p.razorpayPaymentId as string) ?? "",
     orderId: p.razorpayOrderId as string,
     description,
+    lines: [{ description, amount: p.amount as number }],
     buyer,
   };
 }
@@ -245,33 +280,53 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
 
     y = doc.y + 34;
 
-    // Line items. One row today, laid out as a table anyway so a future
-    // multi-item purchase doesn't need the page redesigned around it.
+    // Line items. A plan bought together with addon packs is several rows on
+    // one receipt — one summary line for a payment that covered both would be
+    // an incomplete record of where the money went.
     doc.rect(left, y, width, 26).fill("#f3f4f6");
     doc.fillColor(MUTED).fontSize(8).font("Helvetica-Bold")
       .text("DESCRIPTION", left + 12, y + 9)
       .text("AMOUNT", left, y + 9, { width: width - 12, align: "right" });
 
     y += 26;
-    doc.fillColor(INK).fontSize(10).font("Helvetica")
-      .text(inv.description, left + 12, y + 12, { width: width * 0.65 });
-    doc.font("Helvetica-Bold")
-      .text(formatAmount(inv.amount, inv.currency), left, y + 12, {
-        width: width - 12,
-        align: "right",
-      });
 
-    y = doc.y + 14;
+    for (const line of inv.lines) {
+      doc.fillColor(INK).fontSize(10).font("Helvetica")
+        .text(line.description, left + 12, y + 12, { width: width * 0.62 });
+      // The amount is drawn at the row's own top rather than after the
+      // description, so a description that wraps to two lines doesn't push its
+      // price out of alignment with the row it belongs to.
+      doc.font("Helvetica-Bold")
+        .text(formatAmount(line.amount, inv.currency), left, y + 12, {
+          width: width - 12,
+          align: "right",
+        });
+      y = doc.y + 6;
+    }
+
+    y += 8;
     doc.moveTo(left, y).lineTo(right, y).strokeColor(LINE).stroke();
     y += 14;
 
-    if (inv.couponCode) {
+    // The subtotal and discount only appear when a coupon actually moved the
+    // figure. On a receipt with no coupon they would be two rows of noise
+    // restating the total.
+    const subtotal = inv.lines.reduce((sum, line) => sum + line.amount, 0);
+    const discount = subtotal - inv.amount;
+
+    if (inv.couponCode && discount > 0) {
       doc.fontSize(9).font("Helvetica").fillColor(MUTED)
-        .text(`Coupon applied: ${inv.couponCode}`, left + 12, y);
+        .text("Subtotal", left + width * 0.5, y, { width: width * 0.5 - 90, align: "right" })
+        .text(formatAmount(subtotal, inv.currency), left, y, { width: width - 12, align: "right" });
+      y += 16;
+
+      doc.fillColor(MUTED)
+        .text(`Coupon ${inv.couponCode}`, left + width * 0.5, y, { width: width * 0.5 - 90, align: "right" })
+        .fillColor(ACCENT)
+        .text(`− ${formatAmount(discount, inv.currency)}`, left, y, { width: width - 12, align: "right" });
+      y += 20;
     }
 
-    // The total. Same figure as the line item — there is no tax to add and no
-    // discount to subtract here, the amount stored is already what was charged.
     doc.fontSize(9).font("Helvetica-Bold").fillColor(MUTED)
       .text("TOTAL PAID", left + width * 0.5, y, { width: width * 0.5 - 90, align: "right" });
     doc.fontSize(15).font("Helvetica-Bold").fillColor(ACCENT)

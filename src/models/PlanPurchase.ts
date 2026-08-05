@@ -9,11 +9,45 @@ import { CURRENCIES, DEFAULT_CURRENCY } from "../lib/currency.js";
  * activated once, guarded by this row's `status`, so a retried webhook can't
  * double-apply a renewal.
  */
+/**
+ * An addon pack bought in the same checkout as the plan.
+ *
+ * The pack's name, credit quantity and unit price are copied in rather than
+ * referenced, because this row is what a receipt is rendered from months later
+ * — by which time the pack may have been renamed, repriced, or deactivated. A
+ * receipt has to say what was actually sold on the day.
+ */
+const purchasedPackSchema = new Schema(
+  {
+    addonPackId: { type: Schema.Types.ObjectId, ref: "AddonPack", required: true },
+    name: { type: String, required: true },
+    type: { type: String, required: true },
+    /** Credits in one pack. Total credited is this times `packs`. */
+    quantity: { type: Number, required: true },
+    /** How many of this pack were bought. */
+    packs: { type: Number, required: true, min: 1 },
+    /** Price of a single pack at purchase time, before any coupon. */
+    unitAmount: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
 const planPurchaseSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     planSlug: { type: String, required: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
+
+    /**
+     * Addon packs bought alongside the plan in one checkout.
+     *
+     * Empty for a plain plan purchase. Credited by the same idempotent claim
+     * that activates the plan period, so a webhook racing the client-side
+     * verify call cannot credit the packs twice.
+     */
+    addons: { type: [purchasedPackSchema], default: [] },
+    /** The plan's own share of `amount`, before any coupon. Kept so a receipt can itemise. */
+    planAmount: { type: Number, default: 0 },
     razorpayOrderId: { type: String, required: true, unique: true },
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */

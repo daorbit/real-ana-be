@@ -74,7 +74,15 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const plan = await getResolvedPlan(planSlug);
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
-  const listPrice = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
+  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
+
+  // Addon packs bought in the same checkout. Priced server-side from the
+  // catalogue — the client sends slugs and counts, never amounts, so a tampered
+  // request can't buy credits at a price of its own choosing.
+  const resolvedAddons = await resolveAddonSelection(req.body?.addons, currency);
+  if ("error" in resolvedAddons) return res.status(400).json({ error: resolvedAddons.error });
+
+  const listPrice = planAmount + resolvedAddons.total;
   const discounted = await applyCoupon(listPrice, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
   const amount = discounted.amount;
@@ -82,7 +90,10 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   // Free has no charge to make — assign it directly rather than round-tripping
   // through Razorpay for a ₹0/$0/€0 order. A coupon can also discount a paid
   // plan to 0, which takes the same free path.
-  if (amount === 0) {
+  //
+  // Only when nothing else is being bought: a free plan with paid addons is a
+  // real charge, and must go through checkout like any other.
+  if (amount === 0 && !resolvedAddons.items.length) {
     await activatePlanPeriod(req.userId as string, plan.slug, cycle);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
   }
@@ -91,18 +102,30 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     return res.status(503).json({ error: "payments are not configured" });
 
   try {
+    // Razorpay rejects a zero-amount order, so a coupon generous enough to
+    // wipe out a plan-plus-addons total still has to charge something. Same
+    // floor the standalone addon route uses.
+    const chargeable = Math.max(amount, 100);
+
     const order = await razorpay().orders.create({
-      amount,
+      amount: chargeable,
       currency,
-      notes: { userId: String(req.userId), planSlug: plan.slug, cycle },
+      notes: {
+        userId: String(req.userId),
+        planSlug: plan.slug,
+        cycle,
+        addonPacks: String(resolvedAddons.items.length),
+      },
     });
 
     await PlanPurchase.create({
       userId: req.userId,
       planSlug: plan.slug,
       cycle,
+      addons: resolvedAddons.items,
+      planAmount,
       razorpayOrderId: order.id,
-      amount,
+      amount: chargeable,
       currency,
       couponCode: discounted.coupon?.code ?? "",
       status: "created",
@@ -114,12 +137,83 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       currency: order.currency,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID,
       plan: { name: plan.name, cycle },
+      addons: resolvedAddons.items.map((a) => ({
+        name: a.name,
+        type: a.type,
+        packs: a.packs,
+        credits: a.quantity * a.packs,
+      })),
     });
   } catch (e) {
     console.error("Razorpay order failed:", (e as Error).message);
     res.status(502).json({ error: "could not start checkout with Razorpay" });
   }
 });
+
+/** One addon line as it is stored on a purchase and credited on payment. */
+type ResolvedAddon = {
+  addonPackId: string;
+  name: string;
+  type: string;
+  quantity: number;
+  packs: number;
+  unitAmount: number;
+};
+
+/** How many of one pack a single checkout may include. */
+const MAX_PACKS_PER_ADDON = 50;
+
+/**
+ * Turn a client's `[{slug, packs}]` selection into priced line items.
+ *
+ * Every figure comes from the catalogue, not the request: the client chooses
+ * *what* and *how many*, never *for how much*. Bounded per line because an
+ * unbounded quantity is an integer-overflow-shaped hole in the order total, and
+ * nobody legitimately buys fifty-one packs in one go.
+ */
+async function resolveAddonSelection(
+  input: unknown,
+  currency: ReturnType<typeof resolveCurrency>,
+): Promise<{ items: ResolvedAddon[]; total: number } | { error: string }> {
+  if (!Array.isArray(input) || !input.length) return { items: [], total: 0 };
+
+  const items: ResolvedAddon[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+
+  for (const entry of input) {
+    const slug = String((entry as { slug?: unknown })?.slug ?? "");
+    const packs = Number((entry as { packs?: unknown })?.packs ?? 0);
+
+    if (!slug) return { error: "each addon needs a slug" };
+    if (!Number.isInteger(packs) || packs < 1)
+      return { error: `addon "${slug}": packs must be a whole number of at least 1` };
+    if (packs > MAX_PACKS_PER_ADDON)
+      return { error: `addon "${slug}": at most ${MAX_PACKS_PER_ADDON} packs per purchase` };
+    // A repeated slug would be credited twice while showing as one line on the
+    // receipt — reject it rather than silently merging, since the client should
+    // not be sending it and quietly "fixing" it hides a bug there.
+    if (seen.has(slug)) return { error: `addon "${slug}" listed more than once` };
+    seen.add(slug);
+
+    const pack = await AddonPack.findOne({ slug, active: true });
+    if (!pack) return { error: `addon "${slug}" not found` };
+
+    const unitAmount = (pack.price as unknown as Record<string, number>)[currency] ?? 0;
+
+    items.push({
+      addonPackId: pack.id,
+      name: pack.name as string,
+      type: pack.type as string,
+      quantity: pack.quantity as number,
+      packs,
+      unitAmount,
+    });
+    total += unitAmount * packs;
+  }
+
+  return { items, total };
+}
 
 /** Confirm a plan purchase client-side; the webhook also activates it independently and idempotently. */
 router.post("/subscribe/verify", async (req: AuthedRequest, res: Response) => {
@@ -155,7 +249,16 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   if (!pack) return res.status(404).json({ error: "addon not found" });
 
   const currency = resolveCurrency(req.body?.currency);
-  const price = (pack.price as unknown as Record<string, number>)[currency] ?? 0;
+
+  const packs = Number(req.body?.packs ?? 1);
+  if (!Number.isInteger(packs) || packs < 1)
+    return res.status(400).json({ error: "packs must be a whole number of at least 1" });
+  if (packs > MAX_PACKS_PER_ADDON)
+    return res.status(400).json({ error: `at most ${MAX_PACKS_PER_ADDON} packs per purchase` });
+
+  // Priced from the catalogue and multiplied here — the client sends a count,
+  // never an amount.
+  const price = ((pack.price as unknown as Record<string, number>)[currency] ?? 0) * packs;
   const discounted = await applyCoupon(price, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
 
@@ -171,12 +274,13 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
     const order = await razorpay().orders.create({
       amount,
       currency,
-      notes: { userId: String(req.userId), addonPackId: String(pack.id) },
+      notes: { userId: String(req.userId), addonPackId: String(pack.id), packs: String(packs) },
     });
 
     await AddonPurchase.create({
       userId: req.userId,
       addonPackId: pack.id,
+      packs,
       razorpayOrderId: order.id,
       amount,
       currency,
@@ -189,7 +293,13 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
       amount: order.amount,
       currency: order.currency,
       razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-      addon: { name: pack.name, type: pack.type, quantity: pack.quantity },
+      addon: {
+        name: pack.name,
+        type: pack.type,
+        quantity: pack.quantity,
+        packs,
+        credits: (pack.quantity as number) * packs,
+      },
     });
   } catch (e) {
     console.error("Razorpay order failed:", (e as Error).message);
@@ -245,9 +355,12 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   if (!pack) return;
 
   const field = pack.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
+  // `packs` defaults to 1, so rows written before multi-pack checkout credit
+  // exactly as they always did.
+  const packs = (purchase.packs as number) ?? 1;
   await Subscription.updateOne(
     { userId: purchase.userId },
-    { $inc: { [field]: pack.quantity } }
+    { $inc: { [field]: (pack.quantity as number) * packs } }
   );
 
   await issueReceipt("addon", purchase.id, String(purchase.userId));
@@ -274,6 +387,25 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
     purchase.planSlug as string,
     purchase.cycle as BillingCycle
   );
+
+  // Packs bought in the same checkout. Credited after the period is activated,
+  // because activation resets the cycle's usage counters — crediting first
+  // would be undone by it. Addon credits themselves survive the reset; they
+  // live in separate fields precisely so a new period can't clear them.
+  const addons = (purchase.addons ?? []) as unknown as {
+    type: string;
+    quantity: number;
+    packs: number;
+  }[];
+
+  if (addons.length) {
+    const increments: Record<string, number> = {};
+    for (const addon of addons) {
+      const field = addon.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
+      increments[field] = (increments[field] ?? 0) + addon.quantity * addon.packs;
+    }
+    await Subscription.updateOne({ userId: purchase.userId }, { $inc: increments });
+  }
 
   await issueReceipt("plan", purchase.id, String(purchase.userId));
 }
@@ -372,25 +504,32 @@ router.get("/invoices", async (req: AuthedRequest, res: Response) => {
   const packById = new Map(packs.map((p) => [String(p._id), p]));
 
   const items = [
-    ...plans.map((p) => ({
-      id: String(p._id),
-      kind: "plan" as const,
-      number: p.invoiceNumber as string,
-      issuedAt: p.invoicedAt,
-      description: `${p.planSlug} plan — ${p.cycle === "yearly" ? "12 months" : "1 month"}`,
-      amount: p.amount,
-      currency: p.currency,
-      paymentId: p.razorpayPaymentId ?? "",
-    })),
+    ...plans.map((p) => {
+      const packCount = (p.addons ?? []).length;
+      const planLine = `${p.planSlug} plan — ${p.cycle === "yearly" ? "12 months" : "1 month"}`;
+      return {
+        id: String(p._id),
+        kind: "plan" as const,
+        number: p.invoiceNumber as string,
+        issuedAt: p.invoicedAt,
+        description: packCount
+          ? `${planLine}, plus ${packCount} add-on pack${packCount === 1 ? "" : "s"}`
+          : planLine,
+        amount: p.amount,
+        currency: p.currency,
+        paymentId: p.razorpayPaymentId ?? "",
+      };
+    }),
     ...addons.map((a) => {
       const pack = packById.get(String(a.addonPackId));
+      const packs = (a.packs as number) ?? 1;
       return {
         id: String(a._id),
         kind: "addon" as const,
         number: a.invoiceNumber as string,
         issuedAt: a.invoicedAt,
         description: pack
-          ? `${pack.name} — ${pack.quantity} ${pack.type === "audit" ? "audit" : "crawl"} credits`
+          ? `${pack.name}${packs > 1 ? ` × ${packs}` : ""} — ${pack.quantity * packs} ${pack.type === "audit" ? "audit" : "crawl"} credits`
           : "Add-on credit pack",
         amount: a.amount,
         currency: a.currency,

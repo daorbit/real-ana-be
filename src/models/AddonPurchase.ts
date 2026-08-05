@@ -11,6 +11,11 @@ const addonPurchaseSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     addonPackId: { type: Schema.Types.ObjectId, ref: "AddonPack", required: true },
+    /**
+     * How many of the pack were bought. Defaults to 1 so rows written before
+     * multi-pack checkout existed still credit correctly.
+     */
+    packs: { type: Number, default: 1, min: 1 },
     razorpayOrderId: { type: String, required: true, unique: true },
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */
