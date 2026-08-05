@@ -95,7 +95,20 @@ export async function nextInvoiceNumber(at: Date = new Date()): Promise<string> 
 
 /* ------------------------------- formatting ------------------------------- */
 
-const SYMBOL: Record<string, string> = { INR: "₹", USD: "$" };
+/**
+ * Currency symbols for the PDF.
+ *
+ * INR is written "Rs." rather than "₹" on purpose. The built-in PDF fonts use
+ * WinAnsi encoding, which has no rupee glyph — pdfkit emits an apostrophe in
+ * its place, so "₹999.00" reaches the customer as "'999.00" on a document
+ * about money. Embedding a Unicode font would fix the glyph at the cost of
+ * bundling a font file into a serverless deploy; "Rs." is unambiguous, needs
+ * nothing, and cannot render as the wrong character.
+ *
+ * The HTML email and the dashboard both use real symbols — this constraint is
+ * the PDF's alone.
+ */
+const SYMBOL: Record<string, string> = { INR: "Rs. ", USD: "$" };
 
 /**
  * Smallest unit to a display string.
@@ -103,10 +116,43 @@ const SYMBOL: Record<string, string> = { INR: "₹", USD: "$" };
  * Amounts are stored the way Razorpay takes them — paise and cents — so every
  * display has to divide by 100. Doing it here rather than at each call site is
  * what keeps a receipt from ever quoting a figure a hundred times the charge.
+ *
+ * Thousands separators because these are read by people checking a charge
+ * against a bank statement, and "119600.00" is meaningfully harder to verify
+ * at a glance than "1,196.00".
  */
 export function formatAmount(amount: number, currency: string): string {
-  const value = (amount / 100).toFixed(2);
-  return `${SYMBOL[currency] ?? ""}${value}${SYMBOL[currency] ? "" : ` ${currency}`}`;
+  // Grouped in the convention of the currency being charged: INR groups as
+  // 1,19,600 and USD as 119,600. A receipt in rupees that groups the American
+  // way looks foreign to the person reconciling it.
+  const value = (amount / 100).toLocaleString(currency === "INR" ? "en-IN" : "en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const symbol = SYMBOL[currency];
+  return symbol ? `${symbol}${value}` : `${value} ${currency}`;
+}
+
+/**
+ * Replace characters the built-in PDF fonts cannot draw.
+ *
+ * WinAnsi covers most of what a receipt needs — em dashes, `×`, curly quotes
+ * all render — but a handful of characters have no glyph and come out as an
+ * unrelated symbol rather than as nothing, which is how "₹999" became "'999".
+ * Applied to every string that reaches the page, so a description typed into
+ * the admin panel can't reintroduce the problem.
+ *
+ * Verified by width: pdfkit reports zero for a character the font cannot
+ * represent.
+ */
+const GLYPH_FALLBACKS: [RegExp, string][] = [
+  [/−/g, "-"],      // minus sign
+  [/₹/g, "Rs. "],   // rupee
+  [/[  ]/g, " "], // narrow / non-breaking space
+];
+
+function pdfSafe(text: string): string {
+  return GLYPH_FALLBACKS.reduce((s, [pattern, replacement]) => s.replace(pattern, replacement), String(text));
 }
 
 function formatDate(d: Date): string {
@@ -282,17 +328,17 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
     }
 
     doc.fillColor(INK).fontSize(17).font("Helvetica-Bold")
-      .text(s.name, nameX, 45, { width: width * 0.55, lineBreak: false });
+      .text(pdfSafe(s.name), nameX, 45, { width: width * 0.55, lineBreak: false });
 
     let sellerY = 38 + logoSize + 8;
     if (s.address) {
       doc.fontSize(8.5).font("Helvetica").fillColor(MUTED)
-        .text(s.address, left, sellerY, { width: width * 0.5 });
+        .text(pdfSafe(s.address), left, sellerY, { width: width * 0.5 });
       sellerY = doc.y;
     }
     if (s.email) {
       doc.fontSize(8.5).font("Helvetica").fillColor(MUTED)
-        .text(s.email, left, sellerY + 1, { width: width * 0.5 });
+        .text(pdfSafe(s.email), left, sellerY + 1, { width: width * 0.5 });
     }
 
     // Header right: what this document is, then its identifiers as a small
@@ -319,9 +365,9 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
     doc.fontSize(7.5).font("Helvetica-Bold").fillColor(MUTED)
       .text("BILLED TO", left, y, { characterSpacing: 0.5 });
     doc.fontSize(11.5).font("Helvetica-Bold").fillColor(INK)
-      .text(inv.buyer.name || inv.buyer.email, left, y + 13, { width: width * 0.5 });
+      .text(pdfSafe(inv.buyer.name || inv.buyer.email), left, y + 13, { width: width * 0.5 });
     doc.fontSize(9).font("Helvetica").fillColor(MUTED)
-      .text(inv.buyer.email, left, doc.y + 2, { width: width * 0.5 });
+      .text(pdfSafe(inv.buyer.email), left, doc.y + 2, { width: width * 0.5 });
 
     const buyerBottom = doc.y;
 
@@ -356,7 +402,7 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
       const rowTop = y;
 
       doc.fillColor(INK).fontSize(10).font("Helvetica")
-        .text(line.description, left + 12, rowTop + 11, { width: descWidth });
+        .text(pdfSafe(line.description), left + 12, rowTop + 11, { width: descWidth });
 
       // Drawn from the row's own top rather than after the description, so a
       // description that wraps to two lines keeps its price on the first.
@@ -388,9 +434,9 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
 
     const totalRow = (label: string, value: string, opts: { bold?: boolean; color?: string } = {}) => {
       doc.fontSize(9.5).font(opts.bold ? "Helvetica-Bold" : "Helvetica").fillColor(MUTED)
-        .text(label, totalsX, y, { width: labelW, align: "right" });
+        .text(pdfSafe(label), totalsX, y, { width: labelW, align: "right" });
       doc.font("Helvetica-Bold").fillColor(opts.color ?? INK)
-        .text(value, totalsX + labelW + 10, y, { width: valueW, align: "right" });
+        .text(pdfSafe(value), totalsX + labelW + 10, y, { width: valueW, align: "right" });
       y += 17;
     };
 
@@ -402,7 +448,10 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
 
     if (inv.couponCode && discount > 0) {
       totalRow("Subtotal", formatAmount(subtotal, inv.currency));
-      totalRow(`Coupon ${inv.couponCode}`, `− ${formatAmount(discount, inv.currency)}`, {
+      // A hyphen, not a minus sign (U+2212): the built-in PDF fonts have no
+      // glyph for the latter and substitute a quote mark, which on a discount
+      // line reads as nonsense.
+      totalRow(`Coupon ${inv.couponCode}`, `- ${formatAmount(discount, inv.currency)}`, {
         color: ACCENT,
       });
       y += 2;
