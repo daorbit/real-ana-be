@@ -50,7 +50,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
 
   const [users, total] = await Promise.all([
     User.find(filter)
-      .select("email name role createdAt")
+      .select("email name role avatarUrl createdAt")
       .sort({ createdAt: -1 })
       .skip((page - 1) * PAGE_SIZE)
       .limit(PAGE_SIZE),
@@ -113,6 +113,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
         email: u.email,
         name: u.name,
         role: u.role,
+        avatarUrl: u.avatarUrl ?? "",
         createdAt: u.get("createdAt"),
         workspaceCount: wsByUser.get(u.id) ?? 0,
         siteCount: sitesByUser.get(u.id) ?? 0,
