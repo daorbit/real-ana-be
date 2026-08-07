@@ -18,6 +18,8 @@ import cronRoutes from "./routes/cron.js";
 import reportRoutes from "./routes/reports.js";
 import segmentRoutes from "./routes/segments.js";
 import markerRoutes from "./routes/markers.js";
+import memberRoutes from "./routes/members.js";
+import inviteRoutes from "./routes/invites.js";
 import reportsPublicRoutes from "./routes/reports-public.js";
 import contactPublicRoutes from "./routes/contact-public.js";
 import newsletterPublicRoutes from "./routes/newsletter-public.js";
@@ -107,6 +109,11 @@ app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
+// Who else can reach this workspace, and pending invitations to it.
+app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);
+// Accepting an invitation. Not under /workspaces: the recipient has no access
+// to the workspace yet, which is the whole point of the link.
+app.use("/api/invites", dashboardCors, inviteRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
 app.use("/api/support", dashboardCors, supportRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);

@@ -3,6 +3,7 @@ import { Marker, MARKER_KINDS } from "../models/Marker.js";
 import { Workspace } from "../models/Workspace.js";
 import { Site } from "../models/Site.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
+import { requireWorkspace } from "../lib/access.js";
 
 /**
  * Timeline markers — deploys, campaigns, incidents — drawn over the charts.
@@ -14,10 +15,6 @@ const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
 
-/** The caller's workspace, or null — never "someone else's workspace". */
-async function ownedWorkspace(req: AuthedRequest) {
-  return Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-}
 
 function present(marker: InstanceType<typeof Marker>) {
   return {
@@ -53,8 +50,8 @@ async function ownedSiteIds(workspaceId: string, requested: unknown): Promise<st
  * markers outside the visible window would be fetched and thrown away.
  */
 router.get("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
 
   const filter: Record<string, unknown> = { workspaceId: ws.id };
 
@@ -70,8 +67,8 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const label = String(req.body?.label ?? "").trim();
   if (!label) return res.status(400).json({ error: "label is required" });
@@ -99,8 +96,8 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
 });
 
 router.patch("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const update: Record<string, unknown> = {};
 
@@ -144,8 +141,8 @@ router.patch("/:id", async (req: AuthedRequest, res: Response) => {
 });
 
 router.delete("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const result = await Marker.deleteOne({ _id: req.params.id, workspaceId: ws.id });
   if (!result.deletedCount) return res.status(404).json({ error: "marker not found" });

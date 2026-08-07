@@ -14,6 +14,8 @@ import { crawlSite } from "../lib/crawl.js";
 import { CrawlReport } from "../models/CrawlReport.js";
 import { TRACKER_VERSION } from "../stats-core.js";
 import { hasQuota, spendQuota } from "../lib/quota.js";
+import { resolveAccess, isDenied, type Access } from "../lib/access.js";
+import type { WorkspaceRole } from "../models/Membership.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -37,12 +39,36 @@ const FRESH_MS = 60 * 60 * 1000; // 1 hour
 /** One analysis at a time per site — PageSpeed is slow and quota-limited. */
 const running = new Set<string>();
 
-async function resolveSite(req: AuthedRequest) {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return { error: "workspace not found" as const };
-  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
-  if (!site) return { error: "site not found" as const };
-  return { ws, site };
+// Taken from `Access` rather than from the model's own query return type: the
+// latter widens to `{}` here, which silently loses `.id` at every call site.
+type WorkspaceDoc = Access["workspace"];
+type SiteDoc = NonNullable<Awaited<ReturnType<typeof Site.findOne>>>;
+
+/** Either the site and its workspace, or a refusal carrying the status to send. */
+type SiteRefused = { error: string; status: 403 | 404 };
+type SiteResult = { ws: WorkspaceDoc; site: SiteDoc } | SiteRefused;
+
+/**
+ * Narrowing helper. A plain `"error" in found` cannot discriminate here —
+ * the refusal and the success branch are structurally unrelated, so the check
+ * has to be a real type guard for the success branch's fields to survive it.
+ */
+function siteRefused(result: SiteResult): result is SiteRefused {
+  return "error" in result;
+}
+
+async function resolveSite(
+  req: AuthedRequest,
+  minimum: WorkspaceRole = "viewer",
+): Promise<SiteResult> {
+  const access = await resolveAccess(req, minimum);
+  // Carries the access layer's own status: a role refusal is a 403, while a
+  // workspace the caller cannot see stays a 404. Collapsing both to 404 here
+  // would tell an editor their own workspace had vanished.
+  if (isDenied(access)) return { error: access.error, status: access.status as 403 | 404 };
+  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: access.workspace.id });
+  if (!site) return { error: "site not found", status: 404 as 403 | 404 };
+  return { ws: access.workspace, site };
 }
 
 /**
@@ -53,8 +79,8 @@ async function resolveSite(req: AuthedRequest) {
 router.post(
   "/:wid/sites/:siteId/seo/analyze",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
     const { ws, site } = found;
 
     // Default to the site's own root when no path is given.
@@ -137,7 +163,7 @@ router.get(
   "/:wid/sites/:siteId/seo/reports",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const limit = Math.min(Number(req.query.limit ?? 20) || 20, 100);
     // A full report is tens of kilobytes; the history list only renders the
@@ -156,7 +182,7 @@ router.get(
   "/:wid/sites/:siteId/seo/latest",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const url = req.query.url ? normalizeUrl(String(req.query.url)) : null;
     const report = await SeoReport.findOne({
@@ -174,7 +200,7 @@ router.get(
   "/:wid/sites/:siteId/seo/reports/:id",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const report = await SeoReport.findOne({
       _id: req.params.id,
@@ -188,8 +214,8 @@ router.get(
 router.delete(
   "/:wid/sites/:siteId/seo/reports/:id",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const deleted = await SeoReport.findOneAndDelete({
       _id: req.params.id,
@@ -210,7 +236,7 @@ router.get(
   "/:wid/sites/:siteId/seo/search-traffic",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -230,7 +256,7 @@ router.get(
   "/:wid/sites/:siteId/seo/vitals",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -254,8 +280,8 @@ const crawling = new Set<string>();
 router.post(
   "/:wid/sites/:siteId/seo/crawl",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
     const { ws, site } = found;
 
     const origin = (() => {
@@ -326,7 +352,7 @@ router.get(
   "/:wid/sites/:siteId/seo/crawl/latest",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const report = await CrawlReport.findOne({ siteId: found.site.siteId }).sort({
       createdAt: -1,
@@ -352,7 +378,7 @@ router.get(
   "/:wid/sites/:siteId/seo/competitors",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const list = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
     res.json(list);
@@ -362,8 +388,8 @@ router.get(
 router.post(
   "/:wid/sites/:siteId/seo/competitors",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
     const { ws, site } = found;
 
     const url = normalizeUrl(String(req.body?.url ?? ""));
@@ -421,8 +447,8 @@ router.post(
 router.post(
   "/:wid/sites/:siteId/seo/competitors/:id/refresh",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const competitor = await Competitor.findOne({
       _id: req.params.id,
@@ -458,8 +484,8 @@ router.post(
 router.delete(
   "/:wid/sites/:siteId/seo/competitors/:id",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const deleted = await Competitor.findOneAndDelete({
       _id: req.params.id,
@@ -506,15 +532,24 @@ export function readSeoPanels(raw: unknown): Record<string, boolean> {
 }
 
 /** Load a report the caller owns, or return a typed error. */
-async function resolveReport(req: AuthedRequest) {
+type ReportDoc = NonNullable<Awaited<ReturnType<typeof SeoReport.findOne>>>;
+type ReportResult = { report: ReportDoc } | SiteRefused;
+
+/** Same discrimination problem as `siteRefused` — see its comment. */
+function reportRefused(result: ReportResult): result is SiteRefused {
+  return "error" in result;
+}
+
+async function resolveReport(req: AuthedRequest): Promise<ReportResult> {
   const found = await resolveSite(req);
-  if ("error" in found) return { error: found.error };
+  // Status carried through, so a role refusal stays a 403 here too.
+  if (siteRefused(found)) return { error: found.error, status: found.status };
   const report = await SeoReport.findOne({
     _id: req.params.id,
     workspaceId: found.ws.id,
     siteId: found.site.siteId,
   });
-  if (!report) return { error: "report not found" as const };
+  if (!report) return { error: "report not found", status: 404 };
   return { report };
 }
 
@@ -533,7 +568,7 @@ router.get(
   "/:wid/sites/:siteId/seo/reports/:id/share",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveReport(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (reportRefused(found)) return res.status(found.status).json({ error: found.error });
     res.json(shareState(found.report));
   }
 );
@@ -548,7 +583,7 @@ router.put(
   "/:wid/sites/:siteId/seo/reports/:id/share",
   async (req: AuthedRequest, res: Response) => {
     const found = await resolveReport(req);
-    if ("error" in found) return res.status(404).json({ error: found.error });
+    if (reportRefused(found)) return res.status(found.status).json({ error: found.error });
     const { report } = found;
 
     const enabled = Boolean(req.body?.enabled);

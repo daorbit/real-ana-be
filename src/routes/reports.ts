@@ -8,6 +8,7 @@ import { runSchedule, testWhatsApp } from "../lib/report-runner.js";
 import { normalizePhone, whatsappConfigured, sessionStatus } from "../lib/whatsapp.js";
 import { mailConfigured } from "../lib/mail.js";
 import { requireAuth, AuthedRequest } from "../auth.js";
+import { requireWorkspace } from "../lib/access.js";
 
 /**
  * Scheduled email reports, owned by the workspace owner.
@@ -21,10 +22,6 @@ router.use(requireAuth);
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-/** The caller's workspace, or null — never "someone else's workspace". */
-async function ownedWorkspace(req: AuthedRequest) {
-  return Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-}
 
 /** The shape the client sees. `unsubToken` never leaves the server — it's a credential. */
 function present(schedule: InstanceType<typeof ReportSchedule>) {
@@ -136,16 +133,16 @@ async function readBody(req: AuthedRequest): Promise<
 }
 
 router.get("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
 
   const schedules = await ReportSchedule.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
   res.json({ schedules: schedules.map(present), mailConfigured: mailConfigured() });
 });
 
 router.post("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const parsed = await readBody(req);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
@@ -173,8 +170,8 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
 });
 
 router.put("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
   if (!schedule) return res.status(404).json({ error: "schedule not found" });
@@ -224,8 +221,8 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
 });
 
 router.delete("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
   if (!schedule) return res.status(404).json({ error: "schedule not found" });
@@ -242,8 +239,8 @@ router.delete("/:id", async (req: AuthedRequest, res: Response) => {
  * see the result.
  */
 router.post("/:id/test", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   if (!mailConfigured()) return res.status(503).json({ error: "outbound email is not configured" });
 
@@ -294,8 +291,8 @@ router.get("/whatsapp/status", async (_req: AuthedRequest, res: Response) => {
  * message an arbitrary phone through someone else's paired account.
  */
 router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   if (!whatsappConfigured()) return res.status(503).json({ error: "WhatsApp is not configured" });
 

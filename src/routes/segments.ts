@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { Segment } from "../models/Segment.js";
 import { Workspace } from "../models/Workspace.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
+import { requireWorkspace } from "../lib/access.js";
 
 /**
  * Saved dashboard filters, owned by the workspace owner.
@@ -38,10 +39,6 @@ const ALLOWED_KEYS = [
 /** A single filter value can't be unbounded — it ends up in a query. */
 const MAX_VALUE_LENGTH = 200;
 
-/** The caller's workspace, or null — never "someone else's workspace". */
-async function ownedWorkspace(req: AuthedRequest) {
-  return Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-}
 
 function present(segment: InstanceType<typeof Segment>) {
   return {
@@ -91,8 +88,8 @@ function cleanFilter(
 
 /** Pinned first, then newest — the order they're offered in the UI. */
 router.get("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
 
   const segments = await Segment.find({ workspaceId: ws.id }).sort({
     pinned: -1,
@@ -103,8 +100,8 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const name = String(req.body?.name ?? "").trim();
   if (!name) return res.status(400).json({ error: "name is required" });
@@ -133,8 +130,8 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
 
 /** Rename, re-filter, or pin. Every field is optional — this backs both a rename and a pin toggle. */
 router.patch("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const update: Record<string, unknown> = {};
 
@@ -174,8 +171,8 @@ router.patch("/:id", async (req: AuthedRequest, res: Response) => {
 });
 
 router.delete("/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await ownedWorkspace(req);
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const result = await Segment.deleteOne({ _id: req.params.id, workspaceId: ws.id });
   if (!result.deletedCount) return res.status(404).json({ error: "segment not found" });

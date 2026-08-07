@@ -7,6 +7,7 @@ import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
 import { activatePlanPeriod } from "../lib/quota.js";
+import { resolveAccess, isDenied } from "../lib/access.js";
 import { Workspace } from "../models/Workspace.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
@@ -38,24 +39,28 @@ router.use(requireAuth);
 router.use(blockDemoWrites);
 
 /**
- * Resolve the target workspace of a purchase, scoped to the caller.
+ * Resolve the target workspace of a purchase, scoped to the caller's access.
  *
- * Scoped rather than looked up by id alone because this is the boundary that
- * decides whose subscription gets upgraded — an unscoped lookup would let any
- * signed-in account pay to upgrade (or, with a crafted id, examine) someone
- * else's workspace.
+ * Membership is the boundary that decides whose subscription gets upgraded — an
+ * unscoped lookup would let any signed-in account pay to upgrade (or, with a
+ * crafted id, examine) a workspace they have nothing to do with.
+ *
+ * Any member may buy, including a viewer: paying for a workspace only ever adds
+ * capacity to it, so there is nothing to protect against here that refusing
+ * would not simply make worse. Who is *charged* is never in doubt — the order
+ * is created against the caller's own account, and the receipt is theirs.
  */
-async function resolveOwnedWorkspace(
-  userId: string,
+async function resolveAccessibleWorkspace(
+  req: AuthedRequest,
   raw: unknown,
 ): Promise<{ id: string } | { error: string }> {
   const workspaceId = String(raw ?? "").trim();
   if (!workspaceId) return { error: "workspaceId required — plans are bought per workspace" };
   if (!mongoose.isValidObjectId(workspaceId)) return { error: "workspace not found" };
 
-  const ws = await Workspace.findOne({ _id: workspaceId, userId }).select("_id");
-  if (!ws) return { error: "workspace not found" };
-  return { id: ws.id };
+  const access = await resolveAccess(req, "viewer", workspaceId);
+  if (isDenied(access)) return { error: access.error };
+  return { id: access.workspace.id };
 }
 
 /* --------------------------------- catalogue -------------------------------- */
@@ -94,7 +99,7 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
  * switch plans) is how renewal works.
  */
 router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
-  const workspace = await resolveOwnedWorkspace(req.userId as string, req.body?.workspaceId);
+  const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
   if ("error" in workspace) return res.status(404).json({ error: workspace.error });
 
   const planSlug = String(req.body?.planSlug ?? "");
@@ -277,7 +282,7 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   if (!razorpayConfigured())
     return res.status(503).json({ error: "payments are not configured" });
 
-  const workspace = await resolveOwnedWorkspace(req.userId as string, req.body?.workspaceId);
+  const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
   if ("error" in workspace) return res.status(404).json({ error: workspace.error });
 
   const pack = await AddonPack.findOne({ slug: req.params.slug, active: true });

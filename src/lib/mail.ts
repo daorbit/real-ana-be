@@ -960,3 +960,79 @@ export function newsletterAckText(): string {
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+
+/**
+ * An invitation to join a workspace.
+ *
+ * The workspace name and who sent it carry the whole message: an invite that
+ * doesn't say what you're joining or who asked reads as phishing, which is
+ * exactly how a legitimate one gets deleted.
+ */
+export async function sendWorkspaceInviteEmail(
+  to: Recipient,
+  invite: {
+    workspaceName: string;
+    inviterName: string;
+    role: string;
+    token: string;
+    expiresInDays: number;
+    /** False when the address has no account yet, so the copy says "sign up". */
+    hasAccount: boolean;
+  },
+): Promise<void> {
+  const link = `${LINKS.app}/invite/${invite.token}`;
+  const what = invite.hasAccount
+    ? "Sign in to accept it."
+    : "You'll be asked to create an account first — use this address, and the workspace will be waiting.";
+
+  const roleLine =
+    invite.role === "viewer"
+      ? "You'll have view-only access: you can see everything, and nothing you do can change it."
+      : invite.role === "editor"
+        ? "You'll be able to add sites, run audits, and manage reports."
+        : "You'll be able to manage the workspace, including inviting other people.";
+
+  const text = `${invite.inviterName} invited you to the "${invite.workspaceName}" workspace on Quantalog.
+
+${roleLine}
+
+${what}
+
+${link}
+
+This invitation expires in ${invite.expiresInDays} days. If you weren't expecting it, you can ignore this email — nothing has been shared with you until you accept.`;
+
+  await sendOne(
+    to,
+    `${invite.inviterName} invited you to ${invite.workspaceName} on Quantalog`,
+    text,
+    workspaceInviteHtml(invite, link, roleLine, what),
+  );
+}
+
+function workspaceInviteHtml(
+  invite: { workspaceName: string; inviterName: string; expiresInDays: number },
+  link: string,
+  roleLine: string,
+  what: string,
+): string {
+  return shell(`
+      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">
+        You've been invited to a workspace
+      </p>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">
+        <strong style="color:${C.text}">${escapeHtml(invite.inviterName)}</strong> invited you to
+        <strong style="color:${C.text}">${escapeHtml(invite.workspaceName)}</strong> on Quantalog.
+      </p>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">${escapeHtml(roleLine)}</p>
+      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">${escapeHtml(what)}</p>
+
+      ${button("Accept invitation", link)}
+
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
+        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint}">
+          This invitation expires in ${invite.expiresInDays} days. If you weren't expecting it,
+          you can ignore this email — nothing has been shared with you until you accept.
+        </p>
+      </div>`);
+}

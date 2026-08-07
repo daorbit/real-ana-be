@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
 import { User } from "../models/User.js";
 import { PendingSignup } from "../models/PendingSignup.js";
+import { Membership } from "../models/Membership.js";
+import { Workspace } from "../models/Workspace.js";
+import { WorkspaceInvite } from "../models/WorkspaceInvite.js";
 import { PasswordReset } from "../models/PasswordReset.js";
 import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChangedEmail } from "../lib/mail.js";
 import { getDemoDailyLimit } from "../models/AppSetting.js";
@@ -72,6 +75,84 @@ async function publicUser(user: InstanceType<typeof User>) {
     // travels with the workspace (see `GET /api/workspaces`) — this endpoint
     // answers "who am I", and an account that can reach a workspace it does not
     // own has no account-level plan to report at all.
+    //
+    // Access, though, *is* a property of the person: which workspaces this
+    // account can open and what it may do in each. It rides along here so the
+    // client knows both before it has fetched anything workspace-shaped —
+    // deciding where to land, and whether to show the "you've been invited"
+    // prompt, are questions asked at sign-in.
+    ...(await accessSummary(user.id)),
+  };
+}
+
+/**
+ * The workspaces this account can reach, and the invitations still waiting for
+ * it.
+ *
+ * Two lists rather than one with a flag, because they are different things: a
+ * membership is access that exists, an invitation is an offer that has not been
+ * taken up and confers nothing until it is. Collapsing them into one array with
+ * `accepted: false` invites a client to treat a pending invite as a workspace
+ * it can open, which it cannot.
+ *
+ * Deliberately thin — id, name, role. The full workspace objects, with their
+ * plans and usage, come from `GET /api/workspaces`; duplicating them here would
+ * mean two copies of the same state going stale at different rates.
+ */
+async function accessSummary(userId: string) {
+  const memberships = await Membership.find({ userId }).select("workspaceId role").lean();
+
+  const workspaces = await Workspace.find({
+    _id: { $in: memberships.map((m) => m.workspaceId) },
+  })
+    .select("name slug")
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const roleByWorkspace = new Map(memberships.map((m) => [String(m.workspaceId), m.role]));
+
+  // Invitations addressed to this account's email that are still live. Expired
+  // ones are omitted rather than shown as actionable — the link behind them is
+  // already refused at accept time.
+  const user = await User.findById(userId).select("email").lean();
+  const pending = user?.email
+    ? await WorkspaceInvite.find({
+        email: String(user.email).toLowerCase(),
+        acceptedAt: null,
+        expiresAt: { $gt: new Date() },
+      })
+        .select("workspaceId role token expiresAt")
+        .lean()
+    : [];
+
+  const invitedWorkspaces = await Workspace.find({
+    _id: { $in: pending.map((i) => i.workspaceId) },
+  })
+    .select("name")
+    .lean();
+  const nameByWorkspace = new Map(invitedWorkspaces.map((w) => [String(w._id), w.name]));
+
+  return {
+    /** Workspaces this account is a member of — accepted access, usable now. */
+    workspaceAccess: workspaces.map((w) => ({
+      workspaceId: String(w._id),
+      name: w.name as string,
+      slug: w.slug as string,
+      role: roleByWorkspace.get(String(w._id)),
+    })),
+    /**
+     * Invitations waiting to be accepted. The token is included so the client
+     * can link straight to the accept page — it was already emailed to this
+     * address, so returning it to the account that owns that address reveals
+     * nothing it did not already have.
+     */
+    pendingInvites: pending.map((i) => ({
+      workspaceId: String(i.workspaceId),
+      workspaceName: nameByWorkspace.get(String(i.workspaceId)) ?? "",
+      role: i.role,
+      token: i.token,
+      expiresAt: i.expiresAt,
+    })),
   };
 }
 

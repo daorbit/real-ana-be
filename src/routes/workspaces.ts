@@ -27,6 +27,9 @@ import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
 import { canCreateSite, canUseRange, currentPlan, assignFreePlan, quotaSummary } from "../lib/quota.js";
 import { Subscription } from "../models/Subscription.js";
+import { Membership } from "../models/Membership.js";
+import { WorkspaceInvite } from "../models/WorkspaceInvite.js";
+import { resolveAccess, isDenied, accessibleWorkspaces } from "../lib/access.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -105,10 +108,18 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
       name,
       slug: slugify(name) || nanoid(6),
     });
+    // The creator's own membership. Written here rather than inferred from
+    // `Workspace.userId` so that access is one mechanism with one lookup — the
+    // owner is a member like everyone else, just the one who cannot be removed.
+    await Membership.create({ workspaceId: ws.id, userId: req.userId, role: "owner" });
     await assignFreePlan(ws.id, req.userId as string);
     // Same shape as the list route, so the client can drop it straight into
     // the cache without a second fetch to learn what plan it landed on.
-    res.status(201).json({ ...ws.toObject(), billing: await quotaSummary(ws.id) });
+    res.status(201).json({
+      ...ws.toObject(),
+      role: "owner",
+      billing: await quotaSummary(ws.id),
+    });
   } catch (err) {
     console.error("createWorkspace failed:", err);
     res.status(500).json({ error: "could not create workspace" });
@@ -120,19 +131,21 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
  *
  * Billing is attached here rather than to the profile because a plan belongs to
  * a workspace: whichever workspaces this route returns are exactly the ones the
- * caller may spend or upgrade, which stays true once a workspace can be shared
- * with someone who does not own it.
+ * caller may spend or upgrade.
+ *
+ * Driven by membership, so a workspace shared with the caller appears exactly
+ * like one they created — with `role` saying which it is, since that decides
+ * what the client offers them.
  */
 router.get("/", async (req: AuthedRequest, res: Response) => {
-  const list = await Workspace.find({ userId: req.userId }).sort({
-    createdAt: -1,
-  });
+  const accessible = await accessibleWorkspaces(req.userId as string);
 
   res.json(
     await Promise.all(
-      list.map(async (ws) => ({
-        ...ws.toObject(),
-        billing: await quotaSummary(ws.id),
+      accessible.map(async ({ workspace, role }) => ({
+        ...workspace.toObject(),
+        role,
+        billing: await quotaSummary(workspace.id),
       })),
     ),
   );
@@ -140,11 +153,9 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
 
 // Create site under workspace
 router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const { name, domain, framework, trackerOptions } = req.body ?? {};
   if (!name || !domain)
     return res.status(400).json({ error: "name, domain required" });
@@ -166,11 +177,9 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
 
 // List sites in workspace
 router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).sort({ createdAt: -1 });
   res.json(sites);
 });
@@ -185,14 +194,11 @@ router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
 router.patch(
   "/:wid/sites/:siteId/options",
   async (req: AuthedRequest, res: Response) => {
-    const ws = await Workspace.findOne({
-      _id: req.params.wid,
-      userId: req.userId,
-    });
-    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const access = await resolveAccess(req, "editor");
+    if (isDenied(access)) return res.status(access.status).json({ error: access.error });
     const site = await Site.findOne({
       siteId: req.params.siteId,
-      workspaceId: ws.id,
+      workspaceId: access.workspace.id,
     });
     if (!site) return res.status(404).json({ error: "site not found" });
 
@@ -254,9 +260,11 @@ function shareState(ws: NonNullable<Awaited<ReturnType<typeof Workspace.findOne>
 
 /** Current share state for a workspace. */
 router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-  res.json(shareState(ws));
+  // Admin to even see it: the token in this response *is* the public link, so
+  // reading it is equivalent to being handed one.
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  res.json(shareState(access.workspace));
 });
 
 /**
@@ -267,8 +275,11 @@ router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
  * back, which is what someone toggling visibility usually wants.
  */
 router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  // Publishing a workspace's traffic to anyone with a URL is not day-to-day
+  // editing — it needs someone trusted with the workspace itself.
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
 
   const enabled = Boolean(req.body?.enabled);
   const rotate = Boolean(req.body?.rotate);
@@ -299,11 +310,9 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
 router.get(
   "/:wid/sites/:siteId/status",
   async (req: AuthedRequest, res: Response) => {
-    const ws = await Workspace.findOne({
-      _id: req.params.wid,
-      userId: req.userId,
-    });
-    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const access = await resolveAccess(req);
+    if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+    const ws = access.workspace;
     const site = await Site.findOne({
       siteId: req.params.siteId,
       workspaceId: ws.id,
@@ -327,11 +336,9 @@ router.get(
 
 // Aggregate analytics across all sites in a workspace
 router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).select(
     "siteId name trackerVersion",
   );
@@ -402,8 +409,9 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
 
 // Export raw events as CSV or XLSX for the current window/scope.
 router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = selectSiteIds(sites, req.query.sites);
 
@@ -450,8 +458,9 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
 
 // --- goal definitions (conversions) -------------------------------------
 router.get("/:wid/goals", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const goals = await Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
   res.json(
     goals.map((g) => ({
@@ -464,8 +473,9 @@ router.get("/:wid/goals", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/:wid/goals", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
 
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
   const kind = req.body?.kind === "event" ? "event" : "page";
@@ -477,8 +487,9 @@ router.post("/:wid/goals", async (req: AuthedRequest, res: Response) => {
 });
 
 router.delete("/:wid/goals/:gid", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({ _id: req.params.wid, userId: req.userId });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const goal = await Goal.findOne({ _id: req.params.gid, workspaceId: ws.id });
   if (!goal) return res.status(404).json({ error: "goal not found" });
   await goal.deleteOne();
@@ -486,11 +497,9 @@ router.delete("/:wid/goals/:gid", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
 
   // Funnels are a Starter/Pro feature — Free can view the builder UI but not
   // spend compute on it.
@@ -530,11 +539,9 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
 
 // Weekly retention cohorts for the workspace.
 router.get("/:wid/retention", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
 
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = selectSiteIds(sites, req.query.sites);
@@ -549,22 +556,25 @@ router.get("/:wid/retention", async (req: AuthedRequest, res: Response) => {
 router.patch("/:wid", async (req: AuthedRequest, res: Response) => {
   const { name } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
-  const ws = await Workspace.findOneAndUpdate(
-    { _id: req.params.wid, userId: req.userId },
+
+  // Admin, not editor: the name is how every member identifies the workspace,
+  // so renaming it changes what everyone else is looking at.
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  const ws = await Workspace.findByIdAndUpdate(
+    access.workspace.id,
     { name, slug: slugify(name) || nanoid(6) },
     { new: true },
   );
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
   res.json(ws);
 });
 
 // Delete workspace + its sites + their events
 router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "owner");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = sites.map((s) => s.siteId as string);
   await Event.deleteMany({ siteId: { $in: ids } });
@@ -581,6 +591,11 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   // would hold the unique index on `workspaceId` against a dead id, and count
   // as an active plan in the account's billing summary.
   await Subscription.deleteOne({ workspaceId: ws.id });
+  // Everyone's access to it, and any invitations still outstanding — an
+  // unaccepted link must not resurrect a membership for a workspace that no
+  // longer exists.
+  await Membership.deleteMany({ workspaceId: ws.id });
+  await WorkspaceInvite.deleteMany({ workspaceId: ws.id });
   await ws.deleteOne();
   res.status(204).end();
 });
@@ -589,11 +604,9 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
 router.delete(
   "/:wid/sites/:siteId",
   async (req: AuthedRequest, res: Response) => {
-    const ws = await Workspace.findOne({
-      _id: req.params.wid,
-      userId: req.userId,
-    });
-    if (!ws) return res.status(404).json({ error: "workspace not found" });
+    const access = await resolveAccess(req, "editor");
+    if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+    const ws = access.workspace;
     const site = await Site.findOne({
       siteId: req.params.siteId,
       workspaceId: ws.id,
@@ -624,11 +637,9 @@ function parseLayout(body: unknown): Placed[] | null {
 }
 
 router.get("/:wid/layout", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   // null, not [], so the client can tell "never customised" from "emptied".
   res.json({ layout: ws.homeLayout ?? null });
 });
@@ -639,23 +650,23 @@ router.put("/:wid/layout", async (req: AuthedRequest, res: Response) => {
     return res
       .status(400)
       .json({ error: "layout must be an array of { id, span: 1|2|3|4 }" });
-  const ws = await Workspace.findOneAndUpdate(
-    { _id: req.params.wid, userId: req.userId },
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  const ws = await Workspace.findByIdAndUpdate(
+    access.workspace.id,
     { homeLayout: layout },
     { new: true },
   );
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-  res.json({ layout: ws.homeLayout ?? [] });
+  res.json({ layout: ws?.homeLayout ?? [] });
 });
 
 // ---- API keys (platform integration) ----
 // Create a key — returns the raw secret ONCE.
 router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const { name } = req.body ?? {};
   const { raw, keyHash, prefix } = generateKey();
   const key = await ApiKey.create({
@@ -676,11 +687,9 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
 
 // List keys (masked — never returns the raw secret again)
 router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false }).sort({
     createdAt: -1,
   });
@@ -697,11 +706,9 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
 
 // Revoke a key
 router.delete("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findOne({
-    _id: req.params.wid,
-    userId: req.userId,
-  });
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
   const key = await ApiKey.findOne({ _id: req.params.kid, workspaceId: ws.id });
   if (!key) return res.status(404).json({ error: "key not found" });
   key.set("revoked", true);
