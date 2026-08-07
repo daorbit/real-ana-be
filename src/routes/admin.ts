@@ -20,10 +20,25 @@ import { CURRENCIES } from "../lib/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../lib/fx.js";
 import { mailConfigured, mailFrom, sendBulk, sendOne, broadcastHtml, inviteHtml, personalize, forBrowser, contactReplyHtml } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
-import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
+import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
+/**
+ * The platform console is `super_admin` only.
+ *
+ * Nothing in this file is routine operation: impersonating a customer, mailing
+ * every user, and repricing the plan catalogue are all acts that should trace
+ * back to the one account that cannot be granted through the API.
+ *
+ * The plain `admin` role no longer opens any of it. It was a second key to the
+ * whole console that could be handed out from inside the console, and with
+ * customer access now managed per workspace there is nothing left that a
+ * platform-wide `admin` needs it for.
+ *
+ * Gated on the router rather than per-route so a new endpoint added here is
+ * locked down by default, instead of being open until someone remembers.
+ */
 const router = Router();
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requireSuperAdmin);
 
 const PAGE_SIZE = 20;
 
@@ -198,7 +213,7 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
  * being able to mint more admins (or demote a rival) is an escalation path
  * with no legitimate use — only the one hardcoded superadmin account may.
  */
-router.put("/users/:userId/role", requireSuperAdmin, async (req: AuthedRequest, res: Response) => {
+router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
   const role = req.body?.role === "admin" ? "admin" : req.body?.role === "user" ? "user" : null;
   if (!role) return res.status(400).json({ error: "role must be 'admin' or 'user'" });
 
@@ -231,7 +246,7 @@ router.put("/users/:userId/role", requireSuperAdmin, async (req: AuthedRequest, 
  * mid-cascade failure leaves the account still present and retryable rather
  * than an orphaned pile of data pointing at nothing.
  */
-router.delete("/users/:userId", requireSuperAdmin, async (req: AuthedRequest, res: Response) => {
+router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId).select("email role");
   if (!target) return res.status(404).json({ error: "user not found" });
 
