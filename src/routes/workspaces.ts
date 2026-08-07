@@ -25,7 +25,8 @@ import { ApiKey } from "../models/ApiKey.js";
 import { Goal } from "../models/Goal.js";
 import { Project } from "../models/Project.js";
 import { generateKey } from "../apikey.js";
-import { canCreateWorkspace, canCreateSite, canUseRange, currentPlan } from "../lib/quota.js";
+import { canCreateSite, canUseRange, currentPlan, assignFreePlan, quotaSummary } from "../lib/quota.js";
+import { Subscription } from "../models/Subscription.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -83,13 +84,20 @@ function selectSiteIds(
   return owned.filter((id) => wanted.has(id));
 }
 
-// Create workspace
+/**
+ * Create a workspace.
+ *
+ * Uncapped: a workspace is the billable unit, so there is no account-wide
+ * allowance to check — the account simply ends up with another workspace on the
+ * Free plan, which it can upgrade separately.
+ *
+ * The Free plan is assigned immediately rather than left for the first
+ * purchase, because every quota check reads the workspace's own subscription
+ * and a workspace without one would 402 on every route the moment it was made.
+ */
 router.post("/", async (req: AuthedRequest, res: Response) => {
   const { name } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
-
-  const allowed = await canCreateWorkspace(req.userId as string);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
   try {
     const ws = await Workspace.create({
@@ -97,19 +105,37 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
       name,
       slug: slugify(name) || nanoid(6),
     });
-    res.status(201).json(ws);
+    await assignFreePlan(ws.id, req.userId as string);
+    // Same shape as the list route, so the client can drop it straight into
+    // the cache without a second fetch to learn what plan it landed on.
+    res.status(201).json({ ...ws.toObject(), billing: await quotaSummary(ws.id) });
   } catch (err) {
     console.error("createWorkspace failed:", err);
     res.status(500).json({ error: "could not create workspace" });
   }
 });
 
-// List my workspaces
+/**
+ * The workspaces this account can reach, each with the plan it is on.
+ *
+ * Billing is attached here rather than to the profile because a plan belongs to
+ * a workspace: whichever workspaces this route returns are exactly the ones the
+ * caller may spend or upgrade, which stays true once a workspace can be shared
+ * with someone who does not own it.
+ */
 router.get("/", async (req: AuthedRequest, res: Response) => {
   const list = await Workspace.find({ userId: req.userId }).sort({
     createdAt: -1,
   });
-  res.json(list);
+
+  res.json(
+    await Promise.all(
+      list.map(async (ws) => ({
+        ...ws.toObject(),
+        billing: await quotaSummary(ws.id),
+      })),
+    ),
+  );
 });
 
 // Create site under workspace
@@ -123,7 +149,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   if (!name || !domain)
     return res.status(400).json({ error: "name, domain required" });
 
-  const allowed = await canCreateSite(req.userId as string, ws.id);
+  const allowed = await canCreateSite(ws.id);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
   const site = await Site.create({
@@ -338,7 +364,7 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
   const rangeKey = String(req.query.range ?? "24h");
-  const allowed = await canUseRange(req.userId as string, rangeKey);
+  const allowed = await canUseRange(ws.id, rangeKey);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
@@ -382,7 +408,7 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
   const ids = selectSiteIds(sites, req.query.sites);
 
   const rangeKey = String(req.query.range ?? "24h");
-  const allowed = await canUseRange(req.userId as string, rangeKey);
+  const allowed = await canUseRange(ws.id, rangeKey);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
@@ -468,10 +494,10 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
 
   // Funnels are a Starter/Pro feature — Free can view the builder UI but not
   // spend compute on it.
-  const plan = await currentPlan(req.userId as string);
+  const plan = await currentPlan(ws.id);
   if (!plan || plan.slug === "free") {
     return res.status(402).json({
-      error: "funnels need the Starter or Pro plan",
+      error: "funnels need this workspace on the Starter or Pro plan",
       code: "plan_required",
     });
   }
@@ -494,7 +520,7 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   if (ids.length === 0) return res.json({ steps: [] });
 
   const rangeKey = String(req.body?.range ?? "24h");
-  const allowed = await canUseRange(req.userId as string, rangeKey);
+  const allowed = await canUseRange(ws.id, rangeKey);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
@@ -551,6 +577,10 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   // authenticating against /v1 for a tenant that no longer exists.
   await ApiKey.deleteMany({ workspaceId: ws.id });
   await Project.deleteMany({ workspaceId: ws.id });
+  // The plan was bought for this workspace, so it goes with it. Left behind it
+  // would hold the unique index on `workspaceId` against a dead id, and count
+  // as an active plan in the account's billing summary.
+  await Subscription.deleteOne({ workspaceId: ws.id });
   await ws.deleteOne();
   res.status(204).end();
 });

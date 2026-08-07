@@ -10,6 +10,12 @@ import { CURRENCIES, DEFAULT_CURRENCY } from "../lib/currency.js";
 const addonPurchaseSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    /**
+     * The workspace whose credits these are. Credits live on a workspace's
+     * subscription, so a purchase has to name one. Null only on rows written
+     * before per-workspace billing — see `PlanPurchase.workspaceId`.
+     */
+    workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", default: null, index: true },
     addonPackId: { type: Schema.Types.ObjectId, ref: "AddonPack", required: true },
     /**
      * How many of the pack were bought. Defaults to 1 so rows written before

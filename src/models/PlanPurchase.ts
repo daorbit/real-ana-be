@@ -35,6 +35,17 @@ const purchasedPackSchema = new Schema(
 const planPurchaseSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    /**
+     * The workspace this period was bought for — plans are sold per workspace,
+     * so the same account can hold several unrelated purchases at once.
+     *
+     * Optional rather than required because rows predating per-workspace
+     * billing have no workspace to name; they were account-wide, and rewriting
+     * history to point at whichever workspace the migration happened to pick
+     * would make old receipts claim something that was never sold. Every new
+     * purchase sets it.
+     */
+    workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", default: null, index: true },
     planSlug: { type: String, required: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 

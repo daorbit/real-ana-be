@@ -14,7 +14,7 @@ import { Subscription } from "../models/Subscription.js";
 import { AddonPack } from "../models/AddonPack.js";
 import { Coupon } from "../models/Coupon.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
-import { quotaSummary } from "../lib/quota.js";
+import { accountBillingSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
 import { CURRENCIES } from "../lib/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../lib/fx.js";
@@ -100,14 +100,33 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     eventsByUser.set(owner, acc);
   }
 
-  const subs = await Subscription.find({ userId: { $in: ids } }).select("userId planSlug status currentPeriodEnd");
-  const subByUser = new Map(subs.map((s) => [String(s.userId), s]));
+  // An account holds one subscription per workspace, so the list column shows
+  // its best *live* tier rather than a single plan: that is what answers "is
+  // this a paying customer", which is the question the table is scanned for.
+  // Expired rows are still considered, so a lapsed Pro reads as Pro-expired
+  // instead of silently dropping to whatever else they happen to run.
+  const subs = await Subscription.find({ userId: { $in: ids } }).select(
+    "userId planSlug status currentPeriodEnd",
+  );
+
+  const bestByUser = new Map<string, { planSlug: string; expired: boolean; rank: number }>();
+  for (const sub of subs) {
+    const entry = getPlanCatalogEntry(sub.planSlug as string);
+    if (!entry) continue;
+    const expired = new Date(sub.currentPeriodEnd as Date).getTime() < Date.now();
+    // Live beats lapsed; within each, the higher tier wins.
+    const rank = (expired ? 0 : 1000) + entry.sortOrder;
+    const owner = String(sub.userId);
+    const current = bestByUser.get(owner);
+    if (!current || rank > current.rank)
+      bestByUser.set(owner, { planSlug: entry.slug, expired, rank });
+  }
 
   res.json({
     users: users.map((u) => {
-      const sub = subByUser.get(u.id);
-      const expired = sub ? new Date(sub.currentPeriodEnd as Date).getTime() < Date.now() : true;
-      const planEntry = sub ? getPlanCatalogEntry(sub.planSlug as string) : null;
+      const best = bestByUser.get(u.id);
+      const planEntry = best ? getPlanCatalogEntry(best.planSlug) : null;
+      const expired = best ? best.expired : true;
       return {
         id: u.id,
         email: u.email,
@@ -133,9 +152,11 @@ router.get("/users/:userId/billing", async (req: AuthedRequest, res: Response) =
   const target = await User.findById(req.params.userId).select("_id");
   if (!target) return res.status(404).json({ error: "user not found" });
 
-  const summary = await quotaSummary(String(req.params.userId));
-  if (!summary) return res.json({ subscribed: false });
-  res.json({ subscribed: true, ...summary });
+  // One row per workspace: an account no longer has a single plan, so this
+  // reports each workspace's own. `subscribed` stays in the response for the
+  // dialog's empty state — false now means "owns no billable workspace".
+  const workspaces = await accountBillingSummary(String(req.params.userId));
+  res.json({ subscribed: workspaces.some((w) => w.billing), workspaces });
 });
 
 /**

@@ -1,7 +1,7 @@
 import mongoose, { Schema } from "mongoose";
 
 /**
- * One user's billing state: which plan they're on, when the current paid
+ * One workspace's billing state: which plan it's on, when the current paid
  * period ends, and how much of this cycle's audit/crawl quota is left.
  *
  * No Razorpay subscription id — plans are bought via a one-time Order per
@@ -10,9 +10,10 @@ import mongoose, { Schema } from "mongoose";
  * tracks whether the account currently has access, not a payment-provider
  * lifecycle — see `lib/quota.ts` for how `currentPeriodEnd` decides that.
  *
- * One per user rather than per workspace — plans are sold to the account, not
- * to an individual site or workspace, matching how Workspace itself hangs off
- * `userId`.
+ * One per workspace, not per account: a workspace is the unit that is sold, so
+ * an account running three workspaces pays three times and each carries its own
+ * plan, period, and quota. `userId` is kept alongside for ownership queries
+ * (admin listings, "all my subscriptions") but is deliberately not unique.
  */
 export const SUBSCRIPTION_STATUSES = ["active", "expired"] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
@@ -22,7 +23,15 @@ export type BillingCycle = (typeof BILLING_CYCLES)[number];
 
 const subscriptionSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, unique: true, index: true },
+    workspaceId: {
+      type: Schema.Types.ObjectId,
+      ref: "Workspace",
+      required: true,
+      unique: true,
+      index: true,
+    },
+    /** The workspace's owner. Denormalised so admin views can list an account's plans without a join. */
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     /** Joins to the fixed catalogue in `src/plans.ts`, not a `Plan` document id. */
     planSlug: { type: String, required: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },

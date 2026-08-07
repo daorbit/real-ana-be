@@ -90,9 +90,9 @@ router.post(
     // A fresh audit spends plan/addon quota; a cached hit above never reaches
     // here. Checked before the (slow) analysis runs, spent only after it
     // succeeds — a failed audit should not cost the workspace a credit.
-    if (!(await hasQuota(req.userId as string, "audit")))
+    if (!(await hasQuota(ws.id, "audit")))
       return res.status(402).json({
-        error: "monthly audit quota used up — buy an addon pack or upgrade your plan",
+        error: "this workspace's monthly audit quota is used up — buy an addon pack or upgrade its plan",
         code: "quota_exceeded",
       });
 
@@ -114,7 +114,7 @@ router.post(
         criticalCount: data.issues.filter((i) => i.severity === "critical").length,
         data,
       });
-      await spendQuota(req.userId as string, "audit");
+      await spendQuota(ws.id, "audit");
       res.json({ report, cached: false });
     } catch (e) {
       const message = (e as Error)?.message ?? "analysis failed";
@@ -279,9 +279,9 @@ router.post(
         error: `too many crawls — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
       });
 
-    if (!(await hasQuota(req.userId as string, "crawl")))
+    if (!(await hasQuota(ws.id, "crawl")))
       return res.status(402).json({
-        error: "monthly crawl quota used up — buy an addon pack or upgrade your plan",
+        error: "this workspace's monthly crawl quota is used up — buy an addon pack or upgrade its plan",
         code: "quota_exceeded",
       });
 
@@ -307,7 +307,7 @@ router.post(
         criticalCount: data.findings.filter((f) => f.severity === "critical").length,
         data,
       });
-      await spendQuota(req.userId as string, "crawl");
+      await spendQuota(ws.id, "crawl");
       res.json(report);
     } catch (e) {
       const message = (e as Error)?.message ?? "crawl failed";

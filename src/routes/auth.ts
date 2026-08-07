@@ -12,7 +12,6 @@ import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../lib/cloudinary.js";
 import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
-import { assignFreePlan, quotaSummary } from "../lib/quota.js";
 
 const router = Router();
 
@@ -69,7 +68,10 @@ async function publicUser(user: InstanceType<typeof User>) {
     googleLinked: Boolean(user.googleId),
     /** False for Google-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
-    billing: await quotaSummary(user.id),
+    // No billing here. A plan belongs to a workspace, not to an account, so it
+    // travels with the workspace (see `GET /api/workspaces`) — this endpoint
+    // answers "who am I", and an account that can reach a workspace it does not
+    // own has no account-level plan to report at all.
   };
 }
 
@@ -294,7 +296,6 @@ router.post("/signup/verify", async (req, res) => {
       lastName: pending.lastName,
     });
     await pending.deleteOne();
-    await assignFreePlan(user.id);
 
     const token = signToken(user.id);
     res.status(201).json({ token, user: await publicUser(user) });
@@ -416,7 +417,6 @@ router.post("/google", async (req, res) => {
         googleId: profile.sub,
         avatarUrl: profile.picture,
       });
-      await assignFreePlan(user.id);
       created = true;
     } else if (!user.googleId) {
       // An existing password account linking Google for the first time. The

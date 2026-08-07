@@ -1,4 +1,5 @@
 import { Router, Response } from "express";
+import mongoose from "mongoose";
 import { AddonPack } from "../models/AddonPack.js";
 import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { AddonPurchase } from "../models/AddonPurchase.js";
@@ -6,6 +7,7 @@ import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
 import { activatePlanPeriod } from "../lib/quota.js";
+import { Workspace } from "../models/Workspace.js";
 import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
 import { applyCoupon } from "../lib/coupons.js";
 import { resolveCurrency } from "../lib/currency.js";
@@ -26,10 +28,35 @@ import { sendInvoiceEmail, mailConfigured } from "../lib/mail.js";
  * The catalogue reads (`/plans`, `/addons`) are open to any signed-in user;
  * everything that starts money moving requires auth, and writes are blocked
  * in demo mode like the rest of the dashboard API.
+ *
+ * Everything sold here is sold *to a workspace*: a plan period and any addon
+ * credits attach to one workspace's subscription, so every purchase route
+ * takes a `workspaceId` and refuses one the caller does not own.
  */
 const router = Router();
 router.use(requireAuth);
 router.use(blockDemoWrites);
+
+/**
+ * Resolve the target workspace of a purchase, scoped to the caller.
+ *
+ * Scoped rather than looked up by id alone because this is the boundary that
+ * decides whose subscription gets upgraded — an unscoped lookup would let any
+ * signed-in account pay to upgrade (or, with a crafted id, examine) someone
+ * else's workspace.
+ */
+async function resolveOwnedWorkspace(
+  userId: string,
+  raw: unknown,
+): Promise<{ id: string } | { error: string }> {
+  const workspaceId = String(raw ?? "").trim();
+  if (!workspaceId) return { error: "workspaceId required — plans are bought per workspace" };
+  if (!mongoose.isValidObjectId(workspaceId)) return { error: "workspace not found" };
+
+  const ws = await Workspace.findOne({ _id: workspaceId, userId }).select("_id");
+  if (!ws) return { error: "workspace not found" };
+  return { id: ws.id };
+}
 
 /* --------------------------------- catalogue -------------------------------- */
 
@@ -67,6 +94,9 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
  * switch plans) is how renewal works.
  */
 router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
+  const workspace = await resolveOwnedWorkspace(req.userId as string, req.body?.workspaceId);
+  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
+
   const planSlug = String(req.body?.planSlug ?? "");
   const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
   const currency = resolveCurrency(req.body?.currency);
@@ -94,7 +124,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   // Only when nothing else is being bought: a free plan with paid addons is a
   // real charge, and must go through checkout like any other.
   if (amount === 0 && !resolvedAddons.items.length) {
-    await activatePlanPeriod(req.userId as string, plan.slug, cycle);
+    await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
   }
 
@@ -112,6 +142,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       currency,
       notes: {
         userId: String(req.userId),
+        workspaceId: workspace.id,
         planSlug: plan.slug,
         cycle,
         addonPacks: String(resolvedAddons.items.length),
@@ -120,6 +151,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
 
     await PlanPurchase.create({
       userId: req.userId,
+      workspaceId: workspace.id,
       planSlug: plan.slug,
       cycle,
       addons: resolvedAddons.items,
@@ -245,6 +277,9 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   if (!razorpayConfigured())
     return res.status(503).json({ error: "payments are not configured" });
 
+  const workspace = await resolveOwnedWorkspace(req.userId as string, req.body?.workspaceId);
+  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
+
   const pack = await AddonPack.findOne({ slug: req.params.slug, active: true });
   if (!pack) return res.status(404).json({ error: "addon not found" });
 
@@ -274,11 +309,17 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
     const order = await razorpay().orders.create({
       amount,
       currency,
-      notes: { userId: String(req.userId), addonPackId: String(pack.id), packs: String(packs) },
+      notes: {
+        userId: String(req.userId),
+        workspaceId: workspace.id,
+        addonPackId: String(pack.id),
+        packs: String(packs),
+      },
     });
 
     await AddonPurchase.create({
       userId: req.userId,
+      workspaceId: workspace.id,
       addonPackId: pack.id,
       packs,
       razorpayOrderId: order.id,
@@ -331,7 +372,25 @@ router.post("/addons/verify", async (req: AuthedRequest, res: Response) => {
 });
 
 /**
- * Credit an addon purchase's pack quantity onto the user's subscription.
+ * Which workspace a purchase applies to.
+ *
+ * Normally just the id stored on the row. The fallback covers orders placed
+ * before billing moved to workspaces, and orders whose webhook arrives after
+ * the workspace was deleted: an in-flight legacy order must still land
+ * somewhere, and the account's oldest workspace is where the migration put
+ * that account's plan, so the two agree. Null when the account has no
+ * workspaces at all, which the callers treat as nothing to credit.
+ */
+async function purchaseWorkspaceId(stored: unknown, userId: unknown): Promise<string | null> {
+  if (stored) return String(stored);
+  const oldest = await Workspace.findOne({ userId: String(userId) })
+    .sort({ createdAt: 1 })
+    .select("_id");
+  return oldest ? String(oldest._id) : null;
+}
+
+/**
+ * Credit an addon purchase's pack quantity onto the workspace's subscription.
  * Idempotent on `purchase.status`, so the client-side verify call and the
  * webhook racing each other credits the user exactly once.
  *
@@ -354,12 +413,15 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   const pack = await AddonPack.findById(purchase.addonPackId);
   if (!pack) return;
 
+  const workspaceId = await purchaseWorkspaceId(purchase.workspaceId, purchase.userId);
+  if (!workspaceId) return;
+
   const field = pack.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
   // `packs` defaults to 1, so rows written before multi-pack checkout credit
   // exactly as they always did.
   const packs = (purchase.packs as number) ?? 1;
   await Subscription.updateOne(
-    { userId: purchase.userId },
+    { workspaceId },
     { $inc: { [field]: (pack.quantity as number) * packs } }
   );
 
@@ -382,7 +444,14 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   );
   if (!purchase) return;
 
+  const workspaceId = await purchaseWorkspaceId(purchase.workspaceId, purchase.userId);
+  // Nothing to activate against. Only reachable if the buyer deleted the
+  // workspace between paying and the webhook landing; the purchase stays marked
+  // paid so it still appears in their receipts and can be refunded by hand.
+  if (!workspaceId) return;
+
   await activatePlanPeriod(
+    workspaceId,
     String(purchase.userId),
     purchase.planSlug as string,
     purchase.cycle as BillingCycle
@@ -404,7 +473,7 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
       const field = addon.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
       increments[field] = (increments[field] ?? 0) + addon.quantity * addon.packs;
     }
-    await Subscription.updateOne({ userId: purchase.userId }, { $inc: increments });
+    await Subscription.updateOne({ workspaceId }, { $inc: increments });
   }
 
   await issueReceipt("plan", purchase.id, String(purchase.userId));

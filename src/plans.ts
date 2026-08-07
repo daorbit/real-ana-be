@@ -2,8 +2,13 @@
  * The fixed catalogue of subscription tiers.
  *
  * Everything about a plan except its price is decided in code, not the
- * database — quotas and workspace/site limits are the kind of thing that
- * should never silently drift because someone fat-fingered an admin form.
+ * database — quotas and feature limits are the kind of thing that should never
+ * silently drift because someone fat-fingered an admin form.
+ *
+ * A plan is bought per workspace, not per account (see `models/Subscription.ts`),
+ * so nothing here caps how many workspaces an account may have: another
+ * workspace is another purchase. The per-workspace site cap is likewise a flat
+ * constant, `MAX_SITES_PER_WORKSPACE`, rather than a tier field.
  * Only price is left editable at runtime (see `models/Plan.ts`), because
  * that's the one thing that legitimately changes without a deploy.
  *
@@ -14,6 +19,17 @@
  * Adding or retiring a tier is a code change (and a deploy), same as adding a
  * new route — not something the admin UI can do.
  */
+/**
+ * Sites one workspace may hold, on every tier.
+ *
+ * Not a per-plan field: a workspace is the billable unit, so growth is sold by
+ * buying another workspace rather than by widening this one. Keeping it flat
+ * across tiers is what makes that pricing story true — if Pro held ten sites,
+ * upgrading would be the cheaper way to add sites and workspaces would stop
+ * being what people pay for.
+ */
+export const MAX_SITES_PER_WORKSPACE = 2;
+
 /** Analytics date-range keys, matching `stats-core.ts`'s `RANGES` plus "custom". */
 export type RangeKey = "1h" | "24h" | "7d" | "30d" | "custom";
 
@@ -21,8 +37,6 @@ export type PlanCatalogEntry = {
   slug: string;
   name: string;
   description: string;
-  maxWorkspaces: number;
-  maxSitesPerWorkspace: number;
   monthlyAuditQuota: number;
   monthlyCrawlQuota: number;
   features: string[];
@@ -55,8 +69,6 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     slug: "free",
     name: "Free",
     description: "Try SEO audits and crawls on a couple of sites.",
-    maxWorkspaces: 2,
-    maxSitesPerWorkspace: 2,
     monthlyAuditQuota: 3,
     monthlyCrawlQuota: 1,
     features: [],
@@ -73,8 +85,6 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     slug: "starter",
     name: "Starter",
     description: "For a single site in production.",
-    maxWorkspaces: 5,
-    maxSitesPerWorkspace: 5,
     monthlyAuditQuota: 10,
     monthlyCrawlQuota: 10,
     features: ["Email support", "Scheduled reports by email"],
@@ -89,8 +99,6 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     slug: "pro",
     name: "Pro",
     description: "For teams running SEO across several sites.",
-    maxWorkspaces: 10,
-    maxSitesPerWorkspace: 10,
     monthlyAuditQuota: 50,
     monthlyCrawlQuota: 50,
     features: ["Priority support", "Competitor tracking", "Daily reports + WhatsApp alerts"],

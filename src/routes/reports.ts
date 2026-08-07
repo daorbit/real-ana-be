@@ -150,10 +150,10 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
   const parsed = await readBody(req);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
-  const allowed = await canCreateReportSchedule(req.userId as string, ws.id);
+  const allowed = await canCreateReportSchedule(ws.id);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
-  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
+  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
   if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
 
   const schedule = await ReportSchedule.create({
@@ -182,7 +182,7 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
   const parsed = await readBody(req);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
-  const configurable = await canConfigureReport(req.userId as string, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
+  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
   if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
 
   // Existing recipients keep their unsubscribe token, and their unsubscribed
@@ -302,7 +302,7 @@ router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
   // Checked here as well as on save: a schedule created on Pro keeps its
   // WhatsApp channel after a downgrade, and without this the test button
   // stays a working way to send messages the plan no longer includes.
-  const allowed = await canUseWhatsAppReports(req.userId as string);
+  const allowed = await canUseWhatsAppReports(ws.id);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error });
 
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
