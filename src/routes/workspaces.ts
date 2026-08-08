@@ -29,7 +29,7 @@ import { canCreateSite, canUseRange, currentPlan, assignFreePlan, quotaSummary }
 import { Subscription } from "../models/Subscription.js";
 import { Membership } from "../models/Membership.js";
 import { WorkspaceInvite } from "../models/WorkspaceInvite.js";
-import { resolveAccess, isDenied, accessibleWorkspaces } from "../lib/access.js";
+import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../lib/access.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -149,6 +149,32 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
       })),
     ),
   );
+});
+
+/**
+ * One workspace's plan and usage, on its own.
+ *
+ * The same `billing` object the list route attaches to every workspace, but
+ * reachable without refetching the list. Usage changes constantly — every
+ * audit, crawl and Orbit question moves it — while the list around it (names,
+ * roles, membership) almost never does, so refreshing a counter by refetching
+ * every workspace means N subscription lookups and N site counts to update one
+ * number.
+ *
+ * That cost is why counters went stale rather than being refreshed: the cheap
+ * correct call did not exist, so nothing called it.
+ */
+router.get("/:wid/usage", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const summary = await quotaSummary(ws.id);
+  // Null means no subscription row, which should not happen — creating a
+  // workspace assigns Free — but a 404 says so honestly rather than handing the
+  // client a null it will read as "no quota left".
+  if (!summary) return res.status(404).json({ error: "this workspace has no billing record" });
+
+  res.json(summary);
 });
 
 // Create site under workspace
