@@ -184,8 +184,36 @@ so it lists only live, canonical URLs, and reference it from robots.txt.
   the main thread.
 
 **Slow Lighthouse performance score** — the audit lists which opportunities cost
-the most; work down that list rather than guessing. Image size and render-blocking
-scripts are the two that pay off most often.
+the most; work down that list rather than guessing. The named ones, and what
+each actually means in code:
+
+- *Properly size images* — you are shipping a 2000px image into a 400px slot.
+  Export at the size it renders, and use \`srcset\` with a \`sizes\` attribute so
+  a phone downloads the small one.
+- *Serve images in next-gen formats* — convert JPEG and PNG to WebP or AVIF,
+  usually 30–50% smaller at the same quality. A \`<picture>\` element with the
+  original as fallback covers older browsers.
+- *Efficiently encode images* — the format is right, the quality setting is too
+  high. Around 80% is indistinguishable and much smaller.
+- *Defer offscreen images* — add \`loading="lazy"\` to every image below the
+  fold. Never to the hero image, which is usually the LCP element.
+- *Eliminate render-blocking resources* — a stylesheet or synchronous script in
+  the head stops the page painting. Inline the CSS the first screen needs and
+  load the rest with \`media="print" onload\`, and add \`defer\` to scripts.
+- *Reduce unused JavaScript / CSS* — you are shipping a whole library for a
+  fraction of it. Code-split by route, and drop dependencies used once.
+- *Preconnect to required origins* — add \`<link rel="preconnect">\` for domains
+  you load fonts or scripts from, so the connection is open before it is needed.
+- *Preload key requests* — \`<link rel="preload">\` the LCP image and the font
+  used above the fold.
+- *Avoid enormous network payloads* — compress with Brotli or gzip, and check
+  nothing large is being sent that the page does not use.
+- *Reduce initial server response time* — the server itself is slow to first
+  byte. Cache the response, or put a CDN in front of it.
+- *Avoid multiple page redirects* — each redirect is a full round trip. Link
+  the final URL.
+- *Ensure text remains visible during webfont load* — add \`font-display: swap\`
+  so text renders in a fallback face rather than staying invisible.
 
 After any fix, re-run the audit. The history keeps both runs with the score
 change between them, which is how you confirm the fix actually worked rather
