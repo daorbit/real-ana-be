@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import { askOrbit, orbitConfigured, type OrbitTurn } from "../lib/orbit.js";
+import { availableModels } from "../lib/orbit-models.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -84,9 +85,18 @@ function readHistory(raw: unknown): OrbitTurn[] {
     .slice(-MAX_HISTORY_TURNS);
 }
 
-/** Whether the assistant is available, so the UI can say so before being opened. */
+/**
+ * Whether the assistant is available, and which models can answer.
+ *
+ * The list is filtered to providers that actually have a key, so the picker
+ * never offers something that will fail — and it carries only what the UI
+ * needs, not the provider or the upstream model name.
+ */
 router.get("/status", (_req: AuthedRequest, res: Response) => {
-  res.json({ configured: orbitConfigured() });
+  res.json({
+    configured: orbitConfigured(),
+    models: availableModels().map((m) => ({ id: m.id, label: m.label, hint: m.hint })),
+  });
 });
 
 router.post("/ask", async (req: AuthedRequest, res: Response) => {
@@ -106,13 +116,25 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     return res.status(400).json({ error: "Ask a question first." });
   }
 
-  const result = await askOrbit(question, readHistory(req.body?.history));
+  // The chosen model is a preference, not a instruction: an unknown id falls
+  // back to the default rather than erroring, because the id comes from a
+  // browser that may have been open since before a model was retired.
+  const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
+
+  const result = await askOrbit(question, readHistory(req.body?.history), modelId);
 
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error });
   }
 
-  res.json({ reply: result.reply, suggestions: result.suggestions });
+  // `model` comes back because it may not be the one that was asked for — the
+  // chain falls through on a rate limit, and the UI says which one answered.
+  res.json({
+    reply: result.reply,
+    suggestions: result.suggestions,
+    model: result.model,
+    modelLabel: result.modelLabel,
+  });
 });
 
 export default router;
