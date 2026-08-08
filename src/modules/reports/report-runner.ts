@@ -27,6 +27,20 @@ import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
 /** How many schedules one cron invocation will attempt. The rest wait for tomorrow. */
 const BATCH_LIMIT = 25;
 
+/**
+ * What a schedule asked to have in its report.
+ *
+ * Named rather than written inline at each `schedule.get("include")`: the same
+ * cast appeared in three places, and a field added to the model but missed in
+ * one of them is a silently ignored setting.
+ */
+type ReportInclude = {
+  analytics: boolean;
+  seo: boolean;
+  dashboardLink: boolean;
+  aiSummary: boolean;
+};
+
 function appUrl(): string {
   return process.env.APP_URL || "https://studio-quantalog.daorbit.in";
 }
@@ -123,7 +137,7 @@ export async function buildReportView(schedule: InstanceType<typeof ReportSchedu
     : (await Site.find({ workspaceId: workspace.id }).select("siteId").lean()).map((s) => s.siteId as string);
 
   const frequency = schedule.get("frequency") as Frequency;
-  const include = schedule.get("include") as { analytics: boolean; seo: boolean; dashboardLink: boolean };
+  const include = schedule.get("include") as ReportInclude;
   const range = rangeForFrequency(frequency);
   const window = resolveWindow(range);
 
@@ -209,7 +223,7 @@ export async function runSchedule(
       );
 
   const frequency = schedule.get("frequency") as Frequency;
-  const include = schedule.get("include") as { analytics: boolean; seo: boolean; dashboardLink: boolean };
+  const include = schedule.get("include") as ReportInclude;
   const range = rangeForFrequency(frequency);
   const window = resolveWindow(range);
 
@@ -244,12 +258,14 @@ export async function runSchedule(
   // request to produce the same paragraph — and risk producing a different one,
   // which is worse. Null whenever it could not be written, and the report goes
   // out without it.
-  const digest = await buildDigest({
-    workspaceName: workspace.get("name") as string,
-    periodLabel: label,
-    metrics,
-    stats,
-  });
+  const digest = include.aiSummary
+    ? await buildDigest({
+        workspaceName: workspace.get("name") as string,
+        periodLabel: label,
+        metrics,
+        stats,
+      })
+    : null;
 
   const outcome: SendOutcome = {
     scheduleName: schedule.get("name") as string,
@@ -350,7 +366,7 @@ export async function testWhatsApp(
     : (await Site.find({ workspaceId: workspace.id }).select("siteId").lean()).map((s) => s.siteId as string);
 
   const frequency = schedule.get("frequency") as Frequency;
-  const include = schedule.get("include") as { analytics: boolean; seo: boolean; dashboardLink: boolean };
+  const include = schedule.get("include") as ReportInclude;
   const range = rangeForFrequency(frequency);
   const window = resolveWindow(range);
 

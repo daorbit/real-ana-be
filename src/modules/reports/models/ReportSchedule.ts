@@ -103,6 +103,20 @@ const reportScheduleSchema = new Schema(
       seo: { type: Boolean, default: true },
       /** A link to the live shared dashboard. Requires the workspace's share link to be on. */
       dashboardLink: { type: Boolean, default: false },
+      /**
+       * The plain-language summary of the period, written by a model.
+       *
+       * On by default, including for schedules created before it existed: it is
+       * the part of the report most recipients actually read, and a summary
+       * nobody discovers is a summary nobody benefits from. Off is a real
+       * choice, not a fallback — an agency mailing reports to its own clients
+       * may not want machine-written commentary going out under its name.
+       *
+       * Independent of `analytics`: the summary is written from those figures,
+       * so it cannot appear without them, but a report can carry the numbers
+       * without an interpretation of them.
+       */
+      aiSummary: { type: Boolean, default: true },
     },
     /** Attach the full data as a spreadsheet alongside the summary in the body. */
     attachXlsx: { type: Boolean, default: true },

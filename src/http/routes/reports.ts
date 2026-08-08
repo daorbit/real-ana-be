@@ -70,6 +70,9 @@ async function readBody(req: AuthedRequest): Promise<
     analytics: req.body?.include?.analytics !== false,
     seo: req.body?.include?.seo !== false,
     dashboardLink: Boolean(req.body?.include?.dashboardLink),
+    // Defaults on, so a client that has not been updated to know about the
+    // field keeps getting the summary rather than silently losing it.
+    aiSummary: req.body?.include?.aiSummary !== false,
   };
   if (!include.analytics && !include.seo)
     return { ok: false, error: "include analytics, SEO, or both — a report of neither is empty" };

@@ -174,6 +174,14 @@ function digestBlock(digest: Digest | undefined): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px">
       <tr>
         <td style="padding:14px 16px;background:${C.panel};border-left:3px solid ${C.accent};border-radius:6px">
+          <!-- Labelled, not silent. This paragraph makes causal claims — "traffic
+               rose because of X" — and it is occasionally wrong. A reader who
+               knows it was written by a model can weigh it accordingly; one who
+               assumes it was measured cannot, and may forward a wrong claim to
+               their own client as fact. -->
+          <p style="margin:0 0 7px;font-size:10.5px;font-weight:700;letter-spacing:0.7px;text-transform:uppercase;color:${C.faint}">
+            AI summary
+          </p>
           <p style="margin:0;font-size:13.5px;line-height:1.65;color:${C.dim}">${escapeHtml(digest.summary)}</p>
           ${action}
         </td>
