@@ -158,11 +158,39 @@ type CallResult =
   | { ok: true; text: string }
   | { ok: false; status: number; detail: string };
 
-/** Dispatch to whichever provider owns this model. */
+/**
+ * Dispatch to whichever provider owns this model.
+ *
+ * OpenRouter and NVIDIA both speak the OpenAI chat-completions shape, so they
+ * share one caller and differ only in host, key and headers.
+ */
 function callModel(model: OrbitModel, question: string, history: OrbitTurn[]): Promise<CallResult> {
   return model.provider === "gemini"
     ? callGemini(model, question, history)
-    : callOpenRouter(model, question, history);
+    : callOpenAiCompatible(model, question, history);
+}
+
+/** Host, key and any provider-specific headers for an OpenAI-shaped API. */
+function openAiEndpoint(provider: OrbitModel["provider"]) {
+  if (provider === "nvidia") {
+    return {
+      url: "https://integrate.api.nvidia.com/v1/chat/completions",
+      key: process.env.NVIDIA_API_KEY,
+      keyName: "NVIDIA_API_KEY",
+      headers: {} as Record<string, string>,
+    };
+  }
+  return {
+    url: "https://openrouter.ai/api/v1/chat/completions",
+    key: process.env.OPENROUTER_API_KEY,
+    keyName: "OPENROUTER_API_KEY",
+    // OpenRouter attributes usage to these, and they are what appear on the
+    // dashboard when working out which app spent a quota.
+    headers: {
+      "HTTP-Referer": process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in",
+      "X-Title": "Quantalog Orbit",
+    },
+  };
 }
 
 /**
@@ -257,23 +285,17 @@ async function callGemini(
   }
 }
 
-async function callOpenRouter(
+async function callOpenAiCompatible(
   model: OrbitModel,
   question: string,
   history: OrbitTurn[],
 ): Promise<CallResult> {
-  const key = process.env.OPENROUTER_API_KEY;
-  if (!key) return { ok: false, status: 503, detail: "no OPENROUTER_API_KEY" };
+  const { url, key, keyName, headers } = openAiEndpoint(model.provider);
+  if (!key) return { ok: false, status: 503, detail: `no ${keyName}` };
 
   const res = await post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      Authorization: `Bearer ${key}`,
-      // OpenRouter attributes usage to these, and they are what appear on the
-      // dashboard when working out which app spent a quota.
-      "HTTP-Referer": process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in",
-      "X-Title": "Quantalog Orbit",
-    },
+    url,
+    { Authorization: `Bearer ${key}`, ...headers },
     {
       model: model.model,
       messages: [
@@ -282,7 +304,11 @@ async function callOpenRouter(
         { role: "user", content: question },
       ],
       temperature: 0.3,
-      max_tokens: MAX_TOKENS,
+      // A reasoning model spends this budget on thinking before it writes
+      // anything, so the answer's own allowance is whatever is left. At the
+      // shared limit Nemotron routinely ran out mid-thought and returned an
+      // empty completion, which cost us the model on every call.
+      max_tokens: model.provider === "nvidia" ? MAX_TOKENS * 4 : MAX_TOKENS,
       // Only sent to models that honour it. Some providers reject a request
       // carrying a schema they cannot satisfy, which would cost us the model
       // entirely rather than just its formatting.
@@ -302,12 +328,20 @@ async function callOpenRouter(
   try {
     const data = JSON.parse(res.text) as {
       choices?: { message?: { content?: string } }[];
+      // OpenRouter's error shape, and NVIDIA's, which differ.
       error?: { message?: string };
+      detail?: unknown;
     };
-    // OpenRouter can return 200 with an error body when the upstream provider
-    // is the thing that refused.
+    // Both can return 200 with an error body when the upstream provider is the
+    // thing that refused.
     if (data.error) return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
+    if (data.detail && !data.choices) {
+      return { ok: false, status: 502, detail: JSON.stringify(data.detail).slice(0, 200) };
+    }
 
+    // `reasoning_content` is deliberately ignored: on a reasoning model it
+    // holds the chain of thought, which is not the answer and should never
+    // reach a support conversation.
     const text = data.choices?.[0]?.message?.content?.trim();
     return text ? { ok: true, text } : { ok: false, status: 502, detail: "empty completion" };
   } catch {

@@ -159,17 +159,24 @@ export function sanitiseModelAnswer(
 
   const parsed = parseLooseJson<Record<string, unknown>>(raw);
 
-  // No envelope at all. The model answered in prose, which is still an answer.
+  // No envelope at all. The model answered in prose, which is still an answer —
+  // and it may have appended its follow-ups to the end of it.
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    const reply = tidyProse(raw).slice(0, maxReplyChars);
-    return reply ? { reply, suggestions: [] } : null;
+    const tidied = tidyProse(raw).slice(0, maxReplyChars);
+    if (!tidied) return null;
+
+    const split = splitTrailingQuestions(tidied);
+    return {
+      reply: split.reply,
+      suggestions: split.questions.slice(0, maxSuggestions),
+    };
   }
 
   // The double-encoding case: `reply` holding another serialised envelope.
   const unwrapped = unwrapNested(parsed.reply, "reply");
-  const reply = typeof unwrapped === "string" ? tidyProse(unwrapped).slice(0, maxReplyChars) : "";
+  const rawReply = typeof unwrapped === "string" ? tidyProse(unwrapped).slice(0, maxReplyChars) : "";
 
-  if (!reply) return null;
+  if (!rawReply) return null;
 
   // Suggestions can be nested the same way the reply was, so they are read from
   // whichever envelope actually carried the text.
@@ -180,7 +187,92 @@ export function sanitiseModelAnswer(
     .filter((s) => s.length > 0 && s.length <= maxSuggestionChars)
     .slice(0, maxSuggestions);
 
-  return { reply, suggestions };
+  // A model that filled the envelope correctly is trusted as-is. One that left
+  // `suggestions` empty usually wrote them at the end of the reply instead,
+  // where they read as the answer trailing off into orphan questions.
+  if (suggestions.length > 0) return { reply: rawReply, suggestions };
+
+  const split = splitTrailingQuestions(rawReply);
+  return {
+    reply: split.reply,
+    suggestions: split.questions.slice(0, maxSuggestions),
+  };
+}
+
+/**
+ * Pull follow-up questions out of the end of a reply.
+ *
+ * A model that ignored the envelope often still produces the follow-ups — it
+ * just appends them to the prose instead of putting them in `suggestions`. The
+ * result is a reply that trails off into two orphan questions and an empty
+ * suggestions array, so the chips never render and the answer looks like it ran
+ * on past its ending.
+ *
+ * Only trailing lines are considered, and only ones that read as a whole
+ * question on their own line. A question *inside* the answer — "What does that
+ * mean? It means…" — is part of the explanation and is left alone.
+ *
+ * Returns the trimmed reply and whatever was lifted off the end.
+ */
+function splitTrailingQuestions(reply: string): { reply: string; questions: string[] } {
+  // The explicit form first: a model that wrote its own "Suggestions" heading
+  // and listed them under it. Everything from the heading down is not part of
+  // the answer, whatever shape the items take.
+  // The optional trailing "questions" matters: models write "Follow-up
+  // questions" at least as often as "Follow-ups", and missing it sends the
+  // whole block down the line-walker, which only strips the last few lines and
+  // leaves the heading stranded at the end of the answer.
+  const headed =
+    /\n\s*(?:\*\*|##+\s*)?(?:suggestions?|follow[- ]?ups?(?:\s+questions?)?|related questions?|next steps?)(?:\*\*)?\s*:?\s*\n([\s\S]+)$/i.exec(
+      reply,
+    );
+
+  if (headed) {
+    const items = headed[1]
+      .split("\n")
+      .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+      .map((l) => l.replace(/^["'“]|["'”]$/g, "").trim())
+      .filter((l) => l.length > 0 && l.length <= 80);
+
+    const body = reply.slice(0, headed.index).trim();
+    if (body && items.length > 0) return { reply: body, questions: items.slice(0, 3) };
+  }
+
+  const lines = reply.split("\n");
+  const questions: string[] = [];
+
+  // Walk backwards while the last non-empty line still looks like a follow-up.
+  while (lines.length > 0) {
+    const line = lines[lines.length - 1].trim();
+
+    if (!line) {
+      lines.pop();
+      continue;
+    }
+
+    const isQuestion =
+      line.endsWith("?") &&
+      // A follow-up is short. A long question is the model explaining
+      // something, and cutting it would remove part of the answer.
+      line.length <= 80 &&
+      // Bullets and numbers mean it belongs to a list in the answer body.
+      !/^[-*\d]/.test(line) &&
+      // Two sentences is prose, not a suggestion chip.
+      !/[.!]\s/.test(line);
+
+    if (!isQuestion) break;
+
+    questions.unshift(line.replace(/^["'“]|["'”]$/g, "").trim());
+    lines.pop();
+
+    // Three is the cap everywhere else; stop rather than eating the answer.
+    if (questions.length >= 3) break;
+  }
+
+  // Only accept the split if something is left. An answer that is *only*
+  // questions was never a list of suggestions — it is the reply.
+  const remaining = lines.join("\n").trim();
+  return remaining ? { reply: remaining, questions } : { reply, questions: [] };
 }
 
 /**

@@ -11,7 +11,7 @@
  * refuses, the next one answers and the user never learns there was a problem.
  */
 
-export type ModelProvider = "gemini" | "openrouter";
+export type ModelProvider = "gemini" | "openrouter" | "nvidia";
 
 export type OrbitModel = {
   /** Stable id, sent by the client and stored nowhere else. */
@@ -66,6 +66,14 @@ export const ORBIT_MODELS: OrbitModel[] = [
     structured: true,
   },
   {
+    id: "nemotron",
+    label: "Nemotron Ultra",
+    hint: "Large model, reasons carefully.",
+    provider: "nvidia",
+    model: "nvidia/nemotron-3-ultra-550b-a55b",
+    structured: true,
+  },
+  {
     id: "deepseek",
     label: "DeepSeek V4",
     hint: "Best for multi-step questions.",
@@ -93,9 +101,14 @@ export const ORBIT_MODELS: OrbitModel[] = [
 
 /** Whether a provider has the key it needs. */
 export function providerReady(provider: ModelProvider): boolean {
-  return provider === "gemini"
-    ? Boolean(process.env.GEMINI_API_KEY)
-    : Boolean(process.env.OPENROUTER_API_KEY);
+  switch (provider) {
+    case "gemini":
+      return Boolean(process.env.GEMINI_API_KEY);
+    case "nvidia":
+      return Boolean(process.env.NVIDIA_API_KEY);
+    default:
+      return Boolean(process.env.OPENROUTER_API_KEY);
+  }
 }
 
 /** The models that can actually run right now, in preference order. */
