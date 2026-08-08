@@ -43,6 +43,16 @@ router.use(requireAuth, requireSuperAdmin);
 const PAGE_SIZE = 20;
 
 /**
+ * Accounts per page in the user list.
+ *
+ * Smaller than the inbox's page: each row carries workspace, site and event
+ * counts that are aggregated per page, and the table is scanned rather than
+ * read straight through — ten keeps the pager useful instead of hiding it
+ * behind a single long page.
+ */
+const USERS_PAGE_SIZE = 10;
+
+/**
  * Every account, for the admin's user switcher.
  *
  * `q` matches email or name, `role` narrows to admins or plain users, and the
@@ -67,8 +77,8 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     User.find(filter)
       .select("email name role avatarUrl createdAt")
       .sort({ createdAt: -1 })
-      .skip((page - 1) * PAGE_SIZE)
-      .limit(PAGE_SIZE),
+      .skip((page - 1) * USERS_PAGE_SIZE)
+      .limit(USERS_PAGE_SIZE),
     User.countDocuments(filter),
   ]);
 
@@ -158,7 +168,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     }),
     total,
     page,
-    pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+    pages: Math.max(1, Math.ceil(total / USERS_PAGE_SIZE)),
   });
 });
 
