@@ -56,6 +56,43 @@ export function parseLooseJson<T = unknown>(text: string): T | null {
 }
 
 /**
+ * Find an envelope a model appended to its own prose answer.
+ *
+ * The failure this exists for: a weaker model writes the answer as prose, then —
+ * because it was asked for an object — restates the whole thing as a fenced
+ * ```json block underneath. Neither branch of `sanitiseModelAnswer` caught it:
+ * the string as a whole is not JSON, and the fence does not wrap the *entire*
+ * string, so `stripCodeFence` leaves it alone and the user reads the answer
+ * followed by a slab of raw JSON.
+ *
+ * The block is the model's own restatement, not content the user asked for, so
+ * the right move is to prefer it and drop the prose — it carries the
+ * `suggestions` the prose version lost.
+ *
+ * Deliberately narrow. Only a fenced object at the very *end* of the text
+ * qualifies, and only one that actually has a usable `reply`. A JSON sample in
+ * the middle of an answer is something the user needs to copy, and an arbitrary
+ * object at the end (a config example closing an answer) is not an envelope
+ * either — both are left where they are.
+ */
+export function extractTrailingEnvelope(
+  text: string,
+): { envelope: Record<string, unknown>; prose: string } | null {
+  const trimmed = text.trimEnd();
+  // Anchored to the end, and the body must open with `{` — a trailing fence of
+  // shell commands or HTML is part of the answer.
+  const match = /\n\s*```(?:json)?\s*\n(\{[\s\S]*?\})\s*```$/i.exec(trimmed);
+  if (!match) return null;
+
+  const envelope = parseLooseJson<Record<string, unknown>>(match[1]);
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) return null;
+  // Without a reply it is some other object that happened to end the answer.
+  if (typeof envelope.reply !== "string" || !envelope.reply.trim()) return null;
+
+  return { envelope, prose: trimmed.slice(0, match.index).trim() };
+}
+
+/**
  * Resolve a field that may have been serialised more than once.
  *
  * The case this exists for: a model is asked for `{reply, suggestions}`, and
@@ -157,30 +194,53 @@ export function sanitiseModelAnswer(
 
   if (!raw?.trim()) return null;
 
+  const limits = { maxSuggestionChars, maxSuggestions, maxReplyChars };
   const parsed = parseLooseJson<Record<string, unknown>>(raw);
 
-  // No envelope at all. The model answered in prose, which is still an answer —
-  // and it may have appended its follow-ups to the end of it.
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    const tidied = tidyProse(raw).slice(0, maxReplyChars);
-    if (!tidied) return null;
-
-    const split = splitTrailingQuestions(tidied);
-    return {
-      reply: split.reply,
-      suggestions: split.questions.slice(0, maxSuggestions),
-    };
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return fromEnvelope(parsed, limits);
   }
 
+  // Not an envelope on its own. Before treating it as prose, check whether the
+  // model wrote the answer twice — once as prose and once as a fenced object
+  // underneath it. That block is the model restating itself, and it carries the
+  // suggestions the prose copy dropped, so it is the better source.
+  const trailing = extractTrailingEnvelope(raw);
+  if (trailing) {
+    const fromBlock = fromEnvelope(trailing.envelope, limits);
+    if (fromBlock) return fromBlock;
+
+    // The block was unusable after tidying. The prose above it is still a real
+    // answer, so fall through on that rather than losing the response.
+    if (trailing.prose) return asProse(trailing.prose, limits);
+  }
+
+  return asProse(raw, limits);
+}
+
+type Limits = Required<SanitiseOptions>;
+
+/**
+ * Read the agreed shape out of a parsed envelope.
+ *
+ * Split out because the envelope can arrive two ways — as the whole response, or
+ * as a block appended to a prose answer — and both need identical treatment of
+ * double-encoding, limits and misplaced follow-ups.
+ */
+function fromEnvelope(
+  envelope: Record<string, unknown>,
+  { maxSuggestionChars, maxSuggestions, maxReplyChars }: Limits,
+): ModelAnswer | null {
   // The double-encoding case: `reply` holding another serialised envelope.
-  const unwrapped = unwrapNested(parsed.reply, "reply");
-  const rawReply = typeof unwrapped === "string" ? tidyProse(unwrapped).slice(0, maxReplyChars) : "";
+  const unwrapped = unwrapNested(envelope.reply, "reply");
+  const rawReply =
+    typeof unwrapped === "string" ? tidyProse(unwrapped).slice(0, maxReplyChars) : "";
 
   if (!rawReply) return null;
 
   // Suggestions can be nested the same way the reply was, so they are read from
   // whichever envelope actually carried the text.
-  const source = findSuggestions(parsed) ?? [];
+  const source = findSuggestions(envelope) ?? [];
   const suggestions = source
     .filter((s): s is string => typeof s === "string")
     .map((s) => tidyProse(s))
@@ -193,6 +253,25 @@ export function sanitiseModelAnswer(
   if (suggestions.length > 0) return { reply: rawReply, suggestions };
 
   const split = splitTrailingQuestions(rawReply);
+  return {
+    reply: split.reply,
+    suggestions: split.questions.slice(0, maxSuggestions),
+  };
+}
+
+/**
+ * Treat the response as prose from a model that ignored the shape entirely.
+ *
+ * Still an answer, and it may have the follow-ups appended to the end of it.
+ */
+function asProse(
+  text: string,
+  { maxSuggestions, maxReplyChars }: Limits,
+): ModelAnswer | null {
+  const tidied = tidyProse(text).slice(0, maxReplyChars);
+  if (!tidied) return null;
+
+  const split = splitTrailingQuestions(tidied);
   return {
     reply: split.reply,
     suggestions: split.questions.slice(0, maxSuggestions),
