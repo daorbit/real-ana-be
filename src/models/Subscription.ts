@@ -34,6 +34,15 @@ const subscriptionSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     /** Joins to the fixed catalogue in `src/plans.ts`, not a `Plan` document id. */
     planSlug: { type: String, required: true },
+    /**
+     * Joins to the Orbit catalogue in `src/orbit-plans.ts`.
+     *
+     * A second, independent axis: a workspace's analytics tier and its AI tier
+     * are separate purchases, because they serve different appetites — a small
+     * site can be a heavy Orbit user, and vice versa. Rows written before Orbit
+     * plans existed have no value here, which `resolveOrbitPlan` reads as Free.
+     */
+    orbitPlanSlug: { type: String, default: null },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 
     status: { type: String, enum: SUBSCRIPTION_STATUSES, required: true, default: "active" },
@@ -49,6 +58,25 @@ const subscriptionSchema = new Schema(
      */
     auditsUsed: { type: Number, default: 0 },
     crawlsUsed: { type: Number, default: 0 },
+    /**
+     * Orbit questions spent this cycle.
+     *
+     * Incremented only once a model has actually answered — a timeout, a
+     * refusal, or an exhausted fallback chain costs the user nothing, because
+     * charging for a question we failed to answer is the fastest way to make
+     * someone stop asking.
+     */
+    orbitUsed: { type: Number, default: 0 },
+
+    /**
+     * When the Orbit period ends, tracked separately from the analytics one.
+     *
+     * The two tiers are bought independently, so they expire independently: a
+     * lapsed analytics plan must not take a paid Orbit tier down with it. Null
+     * means the workspace has never bought a paid Orbit tier and is on Free,
+     * which does not expire.
+     */
+    orbitPeriodEnd: { type: Date, default: null },
 
     /**
      * Addon credits bought on top of the plan. These persist across renewals
@@ -57,6 +85,8 @@ const subscriptionSchema = new Schema(
      */
     addonAuditCredits: { type: Number, default: 0 },
     addonCrawlCredits: { type: Number, default: 0 },
+    /** Extra Orbit questions bought as a pack. Same rules: no expiry, spent last. */
+    addonOrbitCredits: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

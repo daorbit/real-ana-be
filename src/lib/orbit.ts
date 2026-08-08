@@ -17,7 +17,8 @@
  * was a problem.
  */
 
-import { ORBIT_SYSTEM_PROMPT } from "./orbit-knowledge.js";
+import { ORBIT_SYSTEM_PROMPT, orbitPromptWithData } from "./orbit-knowledge.js";
+import { workspaceDataSummary } from "./orbit-data.js";
 import { sanitiseModelAnswer } from "./model-output.js";
 import {
   availableModels,
@@ -25,6 +26,7 @@ import {
   resolveModel,
   type OrbitModel,
 } from "./orbit-models.js";
+import type { OrbitPlanEntry } from "../orbit-plans.js";
 
 /**
  * How long to wait on one model before moving to the next.
@@ -105,21 +107,42 @@ const SCHEMA = {
  *
  * `modelId` is the user's preference. It is tried first; everything else is
  * tried after it.
+ *
+ * `plan` is the workspace's Orbit tier. It decides which models may answer —
+ * both the chosen one and every fallback — so a plan boundary cannot be crossed
+ * by a rate limit. Omitted, every configured model is eligible, which is only
+ * appropriate for internal callers that are not billing anyone.
  */
 export async function askOrbit(
   question: string,
   history: OrbitTurn[] = [],
   modelId?: string,
+  plan?: OrbitPlanEntry,
+  workspaceId?: string,
 ): Promise<OrbitResult> {
-  const chosen = resolveModel(modelId);
+  const tier = plan?.modelTier;
+  const chosen = resolveModel(modelId, tier);
   if (!chosen) {
     return { ok: false, error: "Orbit is not configured on this server.", status: 503 };
+  }
+
+  // Only tiers that include data access get their figures appended; everyone
+  // else gets the base prompt, whose "you cannot read their analytics" rule
+  // then holds. A failure here degrades to the base prompt rather than failing
+  // the question: an answer without the numbers still beats an error.
+  let prompt = ORBIT_SYSTEM_PROMPT;
+  if (plan?.dataAccess && workspaceId) {
+    try {
+      prompt = orbitPromptWithData(await workspaceDataSummary(workspaceId));
+    } catch (e) {
+      console.error("[orbit] data summary failed:", (e as Error).message);
+    }
   }
 
   let lastStatus = 502;
   const startedAt = Date.now();
 
-  for (const model of fallbackChain(chosen)) {
+  for (const model of fallbackChain(chosen, tier)) {
     // Stop before starting an attempt that cannot finish inside the budget —
     // beginning a 35s call with 5s left only makes the user wait longer for the
     // same error.
@@ -128,7 +151,7 @@ export async function askOrbit(
       break;
     }
 
-    const raw = await callModel(model, question, history);
+    const raw = await callModel(model, question, history, prompt);
 
     if (raw.ok) {
       const parsed = parseAnswer(raw.text);
@@ -164,10 +187,15 @@ type CallResult =
  * OpenRouter and NVIDIA both speak the OpenAI chat-completions shape, so they
  * share one caller and differ only in host, key and headers.
  */
-function callModel(model: OrbitModel, question: string, history: OrbitTurn[]): Promise<CallResult> {
+function callModel(
+  model: OrbitModel,
+  question: string,
+  history: OrbitTurn[],
+  prompt: string,
+): Promise<CallResult> {
   return model.provider === "gemini"
-    ? callGemini(model, question, history)
-    : callOpenAiCompatible(model, question, history);
+    ? callGemini(model, question, history, prompt)
+    : callOpenAiCompatible(model, question, history, prompt);
 }
 
 /** Host, key and any provider-specific headers for an OpenAI-shaped API. */
@@ -232,6 +260,7 @@ async function callGemini(
   model: OrbitModel,
   question: string,
   history: OrbitTurn[],
+  prompt: string,
 ): Promise<CallResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: false, status: 503, detail: "no GEMINI_API_KEY" };
@@ -247,7 +276,7 @@ async function callGemini(
     `https://generativelanguage.googleapis.com/v1beta/models/${model.model}:generateContent`,
     { "X-goog-api-key": key },
     {
-      systemInstruction: { parts: [{ text: ORBIT_SYSTEM_PROMPT }] },
+      systemInstruction: { parts: [{ text: prompt }] },
       contents,
       generationConfig: {
         // Low, not zero. Support answers should be stable and factual; zero
@@ -289,6 +318,7 @@ async function callOpenAiCompatible(
   model: OrbitModel,
   question: string,
   history: OrbitTurn[],
+  prompt: string,
 ): Promise<CallResult> {
   const { url, key, keyName, headers } = openAiEndpoint(model.provider);
   if (!key) return { ok: false, status: 503, detail: `no ${keyName}` };
@@ -299,7 +329,7 @@ async function callOpenAiCompatible(
     {
       model: model.model,
       messages: [
-        { role: "system", content: ORBIT_SYSTEM_PROMPT },
+        { role: "system", content: prompt },
         ...history.map((t) => ({ role: t.role, content: t.content })),
         { role: "user", content: question },
       ],

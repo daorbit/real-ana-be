@@ -120,7 +120,10 @@ app.use("/api/support", dashboardCors, supportRoutes);
 // Orbit AI, the in-app assistant. Beside support rather than under it: the two
 // are the same job — a stuck user — and Orbit hands over to the form when it
 // cannot help.
-app.use("/api/orbit", dashboardCors, orbitRoutes);
+// Mounted under a workspace because Orbit is now metered against one: the AI
+// tier, its question quota, and its addon credits all live on the workspace's
+// subscription, the same as audits and crawls.
+app.use("/api/workspaces/:wid/orbit", dashboardCors, orbitRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
 app.use("/api/billing", dashboardCors, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —

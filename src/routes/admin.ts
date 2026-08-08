@@ -13,7 +13,13 @@ import { Plan } from "../models/Plan.js";
 import { Subscription } from "../models/Subscription.js";
 import { AddonPack } from "../models/AddonPack.js";
 import { Coupon } from "../models/Coupon.js";
-import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
+import {
+  listResolvedPlans,
+  getResolvedPlan,
+  listResolvedOrbitPlans,
+  getResolvedOrbitPlan,
+} from "../lib/planPricing.js";
+import { getOrbitPlanEntry } from "../orbit-plans.js";
 import { accountBillingSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
 import { CURRENCIES } from "../lib/currency.js";
@@ -696,6 +702,31 @@ async function resolveSegment(
  */
 router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
+});
+
+/**
+ * The Orbit AI tiers and their prices.
+ *
+ * A separate pair of routes from the analytics plans above, because they are a
+ * separate ladder sold separately — but they share the `Plan` collection, so
+ * the FX reprice job needs no second implementation.
+ */
+router.get("/billing/orbit-plans", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listResolvedOrbitPlans());
+});
+
+router.put("/billing/orbit-plans/:slug", async (req: AuthedRequest, res: Response) => {
+  const slug = String(req.params.slug);
+  if (!getOrbitPlanEntry(slug)) return res.status(404).json({ error: "unknown Orbit plan" });
+
+  const priceMonthly = readCurrencyPrices(req.body?.priceMonthly);
+  const priceYearly = readCurrencyPrices(req.body?.priceYearly);
+  if (!priceMonthly || !priceYearly) {
+    return res.status(400).json({ error: "priceMonthly and priceYearly must have non-negative numbers for every currency" });
+  }
+
+  await Plan.updateOne({ slug }, { $set: { priceMonthly, priceYearly } }, { upsert: true });
+  res.json(await getResolvedOrbitPlan(slug));
 });
 
 /** Set a plan's per-currency prices. Upserts the price row — a catalogue plan with no row yet defaults to 0 in every currency. */

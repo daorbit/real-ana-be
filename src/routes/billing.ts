@@ -1,15 +1,21 @@
 import { Router, Response } from "express";
 import mongoose from "mongoose";
-import { AddonPack } from "../models/AddonPack.js";
+import { AddonPack, type AddonType } from "../models/AddonPack.js";
 import { Subscription, type BillingCycle } from "../models/Subscription.js";
 import { AddonPurchase } from "../models/AddonPurchase.js";
 import { PlanPurchase } from "../models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../lib/razorpay.js";
-import { activatePlanPeriod } from "../lib/quota.js";
+import { activateOrbitPeriod, activatePlanPeriod } from "../lib/quota.js";
 import { resolveAccess, isDenied } from "../lib/access.js";
 import { Workspace } from "../models/Workspace.js";
-import { listResolvedPlans, getResolvedPlan } from "../lib/planPricing.js";
+import {
+  listResolvedPlans,
+  getResolvedPlan,
+  listResolvedOrbitPlans,
+  getResolvedOrbitPlan,
+} from "../lib/planPricing.js";
+import { DEFAULT_ORBIT_PLAN_SLUG } from "../orbit-plans.js";
 import { applyCoupon } from "../lib/coupons.js";
 import { resolveCurrency } from "../lib/currency.js";
 import { User } from "../models/User.js";
@@ -67,6 +73,10 @@ async function resolveAccessibleWorkspace(
 
 router.get("/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
+});
+
+router.get("/orbit-plans", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listResolvedOrbitPlans());
 });
 
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
@@ -186,6 +196,100 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     res.status(502).json({ error: "could not start checkout with Razorpay" });
   }
 });
+
+/**
+ * Start checkout for an Orbit AI tier.
+ *
+ * Deliberately its own endpoint rather than a flag on the plan route: the two
+ * ladders are bought separately, and folding them into one request would mean a
+ * checkout that could silently move someone's analytics tier while they thought
+ * they were buying AI questions. Addon packs and coupons work the same way here
+ * as they do there.
+ */
+router.post("/orbit-plans/:slug/purchase", async (req: AuthedRequest, res: Response) => {
+  const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
+  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
+
+  const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
+  const currency = resolveCurrency(req.body?.currency);
+
+  const plan = await getResolvedOrbitPlan(String(req.params.slug));
+  if (!plan) return res.status(404).json({ error: "Orbit plan not found" });
+
+  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
+
+  const listPrice = planAmount;
+  const discounted = await applyCoupon(listPrice, req.body?.couponCode);
+  if (discounted.error) return res.status(400).json({ error: discounted.error });
+  const amount = discounted.amount;
+
+  // Orbit Free costs nothing, and a coupon can take a paid tier to zero. Both
+  // activate directly rather than opening a Razorpay order for a zero charge.
+  if (amount === 0) {
+    await activateOrbitPeriod(workspace.id, req.userId as string, plan.slug, cycle);
+    return res.json({ free: true, plan: { name: plan.name, cycle } });
+  }
+
+  if (!razorpayConfigured())
+    return res.status(503).json({ error: "payments are not configured" });
+
+  try {
+    // Razorpay rejects a zero-amount order; same floor the other routes use.
+    const chargeable = Math.max(amount, 100);
+
+    const order = await razorpay().orders.create({
+      amount: chargeable,
+      currency,
+      notes: {
+        userId: String(req.userId),
+        workspaceId: workspace.id,
+        planSlug: plan.slug,
+        ladder: "orbit",
+        cycle,
+      },
+    });
+
+    await PlanPurchase.create({
+      userId: req.userId,
+      workspaceId: workspace.id,
+      planSlug: plan.slug,
+      ladder: "orbit",
+      cycle,
+      planAmount,
+      razorpayOrderId: order.id,
+      amount: chargeable,
+      currency,
+      couponCode: discounted.coupon?.code ?? "",
+      status: "created",
+    });
+
+    res.json({
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+      plan: { name: plan.name, cycle },
+    });
+  } catch (e) {
+    console.error("Razorpay order failed:", (e as Error).message);
+    res.status(502).json({ error: "could not start checkout with Razorpay" });
+  }
+});
+
+/**
+ * Which subscription field each kind of pack credits.
+ *
+ * A lookup rather than a ternary because there are now three kinds: a
+ * two-branch `audit ? … : …` would silently credit Orbit questions as crawls,
+ * and a purchase credited to the wrong quota still issues a correct-looking
+ * receipt, so the mistake would surface as a support ticket rather than an
+ * error. An unmapped type credits nothing.
+ */
+const ADDON_CREDIT_FIELD: Record<AddonType, string> = {
+  audit: "addonAuditCredits",
+  crawl: "addonCrawlCredits",
+  orbit: "addonOrbitCredits",
+};
 
 /** One addon line as it is stored on a purchase and credited on payment. */
 type ResolvedAddon = {
@@ -421,7 +525,8 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   const workspaceId = await purchaseWorkspaceId(purchase.workspaceId, purchase.userId);
   if (!workspaceId) return;
 
-  const field = pack.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
+  const field = ADDON_CREDIT_FIELD[pack.type as AddonType];
+  if (!field) return;
   // `packs` defaults to 1, so rows written before multi-pack checkout credit
   // exactly as they always did.
   const packs = (purchase.packs as number) ?? 1;
@@ -455,12 +560,25 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   // paid so it still appears in their receipts and can be refunded by hand.
   if (!workspaceId) return;
 
-  await activatePlanPeriod(
-    workspaceId,
-    String(purchase.userId),
-    purchase.planSlug as string,
-    purchase.cycle as BillingCycle
-  );
+  // An Orbit purchase moves the AI tier and resets its question count, and must
+  // leave the analytics period and its audit/crawl usage completely alone —
+  // buying Orbit Pro mid-cycle should not restart someone's analytics month or
+  // refund the audits they have already spent.
+  if (purchase.ladder === "orbit") {
+    await activateOrbitPeriod(
+      workspaceId,
+      String(purchase.userId),
+      purchase.planSlug as string,
+      purchase.cycle as BillingCycle,
+    );
+  } else {
+    await activatePlanPeriod(
+      workspaceId,
+      String(purchase.userId),
+      purchase.planSlug as string,
+      purchase.cycle as BillingCycle
+    );
+  }
 
   // Packs bought in the same checkout. Credited after the period is activated,
   // because activation resets the cycle's usage counters — crediting first
@@ -475,7 +593,11 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   if (addons.length) {
     const increments: Record<string, number> = {};
     for (const addon of addons) {
-      const field = addon.type === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
+      const field = ADDON_CREDIT_FIELD[addon.type as AddonType];
+      // An unrecognised type is skipped rather than defaulted onto some other
+      // credit field: crediting the wrong quota is worse than crediting none,
+      // because it is silent and the receipt still says it was paid for.
+      if (!field) continue;
       increments[field] = (increments[field] ?? 0) + addon.quantity * addon.packs;
     }
     await Subscription.updateOne({ workspaceId }, { $inc: increments });

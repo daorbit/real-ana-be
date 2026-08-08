@@ -11,6 +11,8 @@
  * refuses, the next one answers and the user never learns there was a problem.
  */
 
+import { tierAllows, type OrbitTier } from "../orbit-plans.js";
+
 export type ModelProvider = "gemini" | "openrouter" | "nvidia";
 
 export type OrbitModel = {
@@ -38,6 +40,15 @@ export type OrbitModel = {
    * satisfy.
    */
   structured: boolean;
+  /**
+   * The lowest Orbit plan tier that may reach this model.
+   *
+   * Set from what the model costs *us*, not from how good it is: the two free
+   * OpenRouter endpoints and Gemma are "basic" because a workspace using them
+   * runs up no bill, and Gemini is "advanced" because it is the one on a paid
+   * key. See `orbit-plans.ts`.
+   */
+  tier: OrbitTier;
 };
 
 /**
@@ -56,6 +67,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "gemini",
     model: process.env.GEMINI_MODEL || "gemini-flash-latest",
     structured: true,
+    tier: "advanced",
   },
   {
     id: "gemma",
@@ -64,6 +76,9 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "google/gemma-4-26b-a4b-it:free",
     structured: true,
+    // Basic tier's only structured model, which is why it leads the free
+    // endpoints: without it, Orbit Free would rely entirely on fence-stripping.
+    tier: "basic",
   },
   {
     id: "nemotron",
@@ -72,6 +87,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "nvidia",
     model: "nvidia/nemotron-3-ultra-550b-a55b",
     structured: true,
+    tier: "standard",
   },
   {
     id: "deepseek",
@@ -80,6 +96,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "deepseek/deepseek-v4-pro",
     structured: false,
+    tier: "standard",
   },
   {
     id: "gpt-oss",
@@ -88,6 +105,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "openai/gpt-oss-20b:free",
     structured: false,
+    tier: "basic",
   },
   {
     id: "north-mini",
@@ -96,6 +114,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "cohere/north-mini-code:free",
     structured: false,
+    tier: "basic",
   },
 ];
 
@@ -111,20 +130,29 @@ export function providerReady(provider: ModelProvider): boolean {
   }
 }
 
-/** The models that can actually run right now, in preference order. */
-export function availableModels(): OrbitModel[] {
-  return ORBIT_MODELS.filter((m) => providerReady(m.provider));
+/**
+ * The models that can actually run right now, in preference order.
+ *
+ * `tier` is the caller's Orbit plan tier. Passing it filters the list to what
+ * that plan may reach; omitting it returns everything configured, which is what
+ * the "is Orbit available at all" check wants.
+ */
+export function availableModels(tier?: OrbitTier): OrbitModel[] {
+  return ORBIT_MODELS.filter(
+    (m) => providerReady(m.provider) && (!tier || tierAllows(tier, m.tier)),
+  );
 }
 
 /**
- * Resolve the client's choice to a real model.
+ * Resolve the client's choice to a real model within the plan's tier.
  *
- * An unknown or unconfigured id falls back to the first available rather than
- * failing: the id comes from a browser, and a stale one — a model retired
- * between page load and question — should answer, not error.
+ * An unknown, unconfigured, or out-of-tier id falls back to the best model the
+ * plan *can* reach rather than failing: the id comes from a browser, and a stale
+ * one — a model retired between page load and question, or one left selected
+ * when a plan lapsed — should answer, not error.
  */
-export function resolveModel(id?: string): OrbitModel | undefined {
-  const available = availableModels();
+export function resolveModel(id?: string, tier?: OrbitTier): OrbitModel | undefined {
+  const available = availableModels(tier);
   return available.find((m) => m.id === id) ?? available[0];
 }
 
@@ -134,7 +162,13 @@ export function resolveModel(id?: string): OrbitModel | undefined {
  * The choice goes first, then everything else in preference order — so a user
  * who picked a model that is rate-limited still gets an answer, and one who
  * expressed no preference gets the best available.
+ *
+ * The chain is built from the plan's own tier, never from the full list. Without
+ * that, a rate-limited free model would fall through to a paid one and hand
+ * Orbit Free the model it is not paying for — the failure mode would be silent,
+ * and the bill would be real. A plan whose whole tier is refusing gets an error
+ * instead of an upgrade.
  */
-export function fallbackChain(chosen: OrbitModel): OrbitModel[] {
-  return [chosen, ...availableModels().filter((m) => m.id !== chosen.id)];
+export function fallbackChain(chosen: OrbitModel, tier?: OrbitTier): OrbitModel[] {
+  return [chosen, ...availableModels(tier).filter((m) => m.id !== chosen.id)];
 }

@@ -1,7 +1,7 @@
 import axios from "axios";
 import { AppSetting } from "../models/AppSetting.js";
 import { Plan } from "../models/Plan.js";
-import { listResolvedPlans } from "./planPricing.js";
+import { listResolvedPlans, listResolvedOrbitPlans } from "./planPricing.js";
 import { CURRENCIES, type Currency } from "./currency.js";
 
 /**
@@ -138,7 +138,10 @@ export type RepriceResult = {
 export async function repriceAllPlans(): Promise<RepriceResult> {
   const snapshot = await fetchRates();
   const derived = CURRENCIES.filter((c) => c !== FX_BASE);
-  const plans = await listResolvedPlans();
+  // Both ladders, because both are priced in INR and both are sold in every
+  // currency — an Orbit tier left out here would quietly keep quoting whatever
+  // the rate was on the day someone typed its price in.
+  const plans = [...(await listResolvedPlans()), ...(await listResolvedOrbitPlans())];
   const repriced: RepricedPlan[] = [];
 
   for (const plan of plans) {

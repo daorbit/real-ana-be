@@ -1,7 +1,10 @@
 import { Router, Response } from "express";
 import { requireAuth, AuthedRequest } from "../auth.js";
 import { askOrbit, orbitConfigured, type OrbitTurn } from "../lib/orbit.js";
-import { availableModels } from "../lib/orbit-models.js";
+import { ORBIT_MODELS, providerReady } from "../lib/orbit-models.js";
+import { requireWorkspace } from "../lib/access.js";
+import { currentOrbitPlan, hasQuota, quotaSummary, spendQuota } from "../lib/quota.js";
+import { tierAllows, type OrbitPlanEntry } from "../orbit-plans.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -15,36 +18,40 @@ import { availableModels } from "../lib/orbit-models.js";
  * transcript to retain, expire, or hand over. If reviewing what people actually
  * ask becomes worth having — it is the best docs backlog there is — that is a
  * deliberate addition with a retention policy, not a side effect of chatting.
+ *
+ * Metered against the workspace, not the account: the Orbit tier and its
+ * question quota are bought per workspace like everything else, so the routes
+ * are mounted under `/api/workspaces/:wid/orbit` and every question is checked
+ * and spent against that workspace's subscription.
  */
-const router = Router();
+const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
-/** Questions one account may ask per window before being asked to slow down. */
-const RATE_LIMIT = 30;
 const WINDOW_MS = 60 * 60 * 1000;
 
-/** How much conversation to carry. Older turns are dropped, oldest first. */
-const MAX_HISTORY_TURNS = 12;
-
-const MAX_QUESTION_CHARS = 2000;
 /** Per past turn. Long enough for a real answer, short enough to bound the prompt. */
 const MAX_TURN_CHARS = 4000;
 
 /**
- * In-process request counts, keyed by account.
+ * In-process request counts, keyed by workspace.
  *
  * Deliberately not in Mongo: this is throttling, not accounting. Losing the
- * counts on restart costs one user a few extra questions, which is cheaper than
- * a database round trip on every message — and the backstop that actually
- * matters is the quota on the API key itself.
+ * counts on restart costs one workspace a few extra questions, which is cheaper
+ * than a database round trip on every message — the durable count that decides
+ * what someone is entitled to is `orbitUsed` on the subscription.
+ *
+ * This does a different job from the quota. The quota is billing: it says how
+ * many questions a cycle includes. This is abuse control: it stops a workspace
+ * with two thousand questions left from spending them all in a minute through a
+ * script, which is what would turn a plan into an unbounded provider bill.
  */
 const hits = new Map<string, number[]>();
 
-function rateLimited(userId: string): boolean {
+function rateLimited(key: string, limit: number): boolean {
   const now = Date.now();
-  const recent = (hits.get(userId) ?? []).filter((t) => now - t < WINDOW_MS);
+  const recent = (hits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
   recent.push(now);
-  hits.set(userId, recent);
+  hits.set(key, recent);
 
   // Without this the map grows one entry per user forever. Cheap to do here,
   // and only when someone is actually talking.
@@ -54,7 +61,7 @@ function rateLimited(userId: string): boolean {
     }
   }
 
-  return recent.length > RATE_LIMIT;
+  return recent.length > limit;
 }
 
 /**
@@ -64,7 +71,7 @@ function rateLimited(userId: string): boolean {
  * else: every turn is length-capped and anything with an unknown role is
  * dropped rather than passed through to the model.
  */
-function readHistory(raw: unknown): OrbitTurn[] {
+function readHistory(raw: unknown, maxTurns: number): OrbitTurn[] {
   if (!Array.isArray(raw)) return [];
 
   return raw
@@ -81,21 +88,59 @@ function readHistory(raw: unknown): OrbitTurn[] {
       content: t.content.slice(0, MAX_TURN_CHARS),
     }))
     // Keep the most recent turns: the end of a conversation is what the next
-    // question refers to.
-    .slice(-MAX_HISTORY_TURNS);
+    // question refers to. How many is a plan field, because history is the
+    // largest part of what a question costs — every past turn is re-sent with
+    // the next one.
+    .slice(-maxTurns);
 }
 
 /**
- * Whether the assistant is available, and which models can answer.
- *
- * The list is filtered to providers that actually have a key, so the picker
- * never offers something that will fail — and it carries only what the UI
- * needs, not the provider or the upstream model name.
+ * Questions left this cycle: the plan's own remainder plus any purchased
+ * credits, which is the number that decides whether the next question is
+ * answered.
  */
-router.get("/status", (_req: AuthedRequest, res: Response) => {
+async function remainingQuestions(workspaceId: string, plan: OrbitPlanEntry) {
+  const summary = await quotaSummary(workspaceId);
+  if (!summary) return null;
+  const { used, addonCredits } = summary.orbit;
+  return Math.max(0, plan.monthlyQuota - used) + addonCredits;
+}
+
+/**
+ * The models this workspace's Orbit plan may pick, and what it has left.
+ *
+ * Models above the plan's tier are returned `locked`, not omitted. Hiding them
+ * would make the picker honest and the upgrade invisible; showing them greyed,
+ * with the tier that unlocks them, is what tells someone on Orbit Free that
+ * Gemini Flash exists and what it costs. Models whose provider has no key are
+ * still dropped entirely — that is a deployment fact, not a plan boundary, and
+ * offering one would only fail.
+ *
+ * The upstream model name and provider stay server-side.
+ */
+router.get("/status", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const plan = await currentOrbitPlan(ws.id);
+
   res.json({
     configured: orbitConfigured(),
-    models: availableModels().map((m) => ({ id: m.id, label: m.label, hint: m.hint })),
+    plan: {
+      slug: plan.slug,
+      name: plan.name,
+      tier: plan.modelTier,
+      monthlyQuota: plan.monthlyQuota,
+      maxQuestionChars: plan.maxQuestionChars,
+    },
+    models: ORBIT_MODELS.filter((m) => providerReady(m.provider)).map((m) => ({
+      id: m.id,
+      label: m.label,
+      hint: m.hint,
+      locked: !tierAllows(plan.modelTier, m.tier),
+      /** The tier that unlocks it, so the UI can name the upgrade. */
+      tier: m.tier,
+    })),
   });
 });
 
@@ -104,16 +149,30 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     return res.status(503).json({ error: "Orbit is not available on this server." });
   }
 
-  const userId = req.userId ?? "";
-  if (rateLimited(userId)) {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const plan = await currentOrbitPlan(ws.id);
+
+  if (rateLimited(ws.id, plan.hourlyBurst)) {
     return res.status(429).json({
       error: "That is a lot of questions in one hour. Try again later, or use Email support.",
     });
   }
 
-  const question = String(req.body?.question ?? "").trim().slice(0, MAX_QUESTION_CHARS);
+  const question = String(req.body?.question ?? "").trim().slice(0, plan.maxQuestionChars);
   if (!question) {
     return res.status(400).json({ error: "Ask a question first." });
+  }
+
+  // Checked before the call, not after: the model call is slow and costs us
+  // money, so discovering there was no quota once it has already run would mean
+  // paying for an answer nobody is entitled to.
+  if (!(await hasQuota(ws.id, "orbit"))) {
+    return res.status(402).json({
+      error: `This workspace has used all ${plan.monthlyQuota} Orbit questions in its plan — buy a question pack, or upgrade its Orbit plan.`,
+      plan: plan.slug,
+    });
   }
 
   // The chosen model is a preference, not a instruction: an unknown id falls
@@ -121,11 +180,22 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // browser that may have been open since before a model was retired.
   const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
 
-  const result = await askOrbit(question, readHistory(req.body?.history), modelId);
+  const result = await askOrbit(
+    question,
+    readHistory(req.body?.history, plan.maxHistoryTurns),
+    modelId,
+    plan,
+    ws.id,
+  );
 
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error });
   }
+
+  // Spent only now that an answer exists. A timeout, a refusal, or a fallback
+  // chain that ran out costs the user nothing — charging for a question we
+  // failed to answer is the fastest way to make someone stop asking.
+  await spendQuota(ws.id, "orbit");
 
   // `model` comes back because it may not be the one that was asked for — the
   // chain falls through on a rate limit, and the UI says which one answered.
@@ -134,6 +204,9 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     suggestions: result.suggestions,
     model: result.model,
     modelLabel: result.modelLabel,
+    // Sent back so the panel can count down without a second round trip. Read
+    // after the spend, so it is the figure the next question will face.
+    remaining: await remainingQuestions(ws.id, plan),
   });
 });
 

@@ -8,8 +8,20 @@ import {
   type Frequency,
 } from "../plans.js";
 import { ReportSchedule } from "../models/ReportSchedule.js";
+import {
+  DEFAULT_ORBIT_PLAN_SLUG,
+  resolveOrbitPlan,
+  type OrbitPlanEntry,
+} from "../orbit-plans.js";
 
-export type QuotaKind = "audit" | "crawl";
+export type QuotaKind = "audit" | "crawl" | "orbit";
+
+/** Where each quota kind keeps its usage and its purchased credits. */
+const QUOTA_FIELDS: Record<QuotaKind, { used: string; credits: string }> = {
+  audit: { used: "auditsUsed", credits: "addonAuditCredits" },
+  crawl: { used: "crawlsUsed", credits: "addonCrawlCredits" },
+  orbit: { used: "orbitUsed", credits: "addonOrbitCredits" },
+};
 
 const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
 
@@ -72,6 +84,52 @@ export async function currentPlan(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub || isExpired(sub)) return null;
   return getPlanCatalogEntry(sub.planSlug as string) ?? null;
+}
+
+/**
+ * The Orbit tier this workspace is on.
+ *
+ * Expiry is read from `orbitPeriodEnd`, not from the analytics period: the two
+ * are bought separately, so a lapsed analytics plan must not silently downgrade
+ * someone's AI tier. A lapsed *Orbit* period falls back to Free rather than to
+ * nothing, because the assistant going dark is a worse answer than the free
+ * allowance — and Free costs us nothing to serve.
+ */
+export async function currentOrbitPlan(workspaceId: string): Promise<OrbitPlanEntry> {
+  const sub = await Subscription.findOne({ workspaceId });
+  if (!sub) return resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
+
+  const end = sub.orbitPeriodEnd as Date | null;
+  // A paid tier with no end date shouldn't happen, but treating it as expired
+  // is the safe reading — it downgrades to Free rather than granting a paid
+  // tier forever on a malformed row.
+  const lapsed = sub.orbitPlanSlug && sub.orbitPlanSlug !== DEFAULT_ORBIT_PLAN_SLUG
+    ? !end || end.getTime() < Date.now()
+    : false;
+
+  return resolveOrbitPlan(lapsed ? DEFAULT_ORBIT_PLAN_SLUG : (sub.orbitPlanSlug as string | null));
+}
+
+/**
+ * Start an Orbit plan period, resetting the question count.
+ *
+ * Separate from `activatePlanPeriod` because the two ladders are bought
+ * independently — buying Orbit Pro must not restart the analytics period or
+ * refund its audit quota.
+ */
+export async function activateOrbitPeriod(
+  workspaceId: string,
+  userId: string,
+  orbitPlanSlug: string,
+  cycle: BillingCycle,
+) {
+  const now = new Date();
+  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
+  await Subscription.findOneAndUpdate(
+    { workspaceId },
+    { $set: { userId, orbitPlanSlug, orbitPeriodEnd: periodEnd, orbitUsed: 0 } },
+    { upsert: true },
+  );
 }
 
 /**
@@ -198,6 +256,26 @@ export async function canConfigureReport(
  * without spending it. Used to give a clear pre-flight error instead of letting
  * the (slow, external) audit/crawl run and then discovering there was no quota.
  */
+/**
+ * This cycle's plan allowance for one quota kind, or null if there is no live
+ * plan behind it.
+ *
+ * Orbit is read from its own ladder and its own expiry, so the two tiers lapse
+ * independently. It also never returns null for a live workspace: an expired
+ * Orbit period lands on Free, which still has an allowance.
+ */
+async function planAllowance(
+  sub: { planSlug: unknown; currentPeriodEnd?: Date | null },
+  workspaceId: string,
+  kind: QuotaKind,
+): Promise<number | null> {
+  if (kind === "orbit") return (await currentOrbitPlan(workspaceId)).monthlyQuota;
+
+  const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
+  if (!plan) return null;
+  return kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
+}
+
 export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ workspaceId });
   // No subscription, or a lapsed paid period, means no plan quota — but a
@@ -206,16 +284,15 @@ export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<bo
   // outright.
   if (!sub) return false;
 
-  const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
+  const fields = QUOTA_FIELDS[kind];
+  const allowance = await planAllowance(sub, workspaceId, kind);
 
-  if (plan) {
-    const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
-    const used = kind === "audit" ? sub.auditsUsed : sub.crawlsUsed;
-    if ((used as number) < planQuota) return true;
+  if (allowance !== null) {
+    const used = (sub.get(fields.used) as number) ?? 0;
+    if (used < allowance) return true;
   }
 
-  const addonCredits = kind === "audit" ? sub.addonAuditCredits : sub.addonCrawlCredits;
-  return (addonCredits as number) > 0;
+  return (((sub.get(fields.credits) as number) ?? 0) > 0);
 }
 
 /**
@@ -230,19 +307,24 @@ export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<bo
 export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return false;
-  const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
 
-  const usedField = kind === "audit" ? "auditsUsed" : "crawlsUsed";
-  const creditField = kind === "audit" ? "addonAuditCredits" : "addonCrawlCredits";
+  const { used: usedField, credits: creditField } = QUOTA_FIELDS[kind];
+  const allowance = await planAllowance(sub, workspaceId, kind);
 
   // Atomic conditional increments — two concurrent requests (double-click, two
   // tabs, a client retry) must not both read "quota left" before either
   // writes, or the workspace spends one more unit than it has. The condition is
   // re-checked by Mongo at write time, not by JS after a separate read.
-  if (plan) {
-    const planQuota = kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
+  if (allowance !== null) {
+    // The `$or` covers rows written before this field existed: Mongo's `$lt`
+    // does not match a missing field, so without the null branch every
+    // pre-Orbit subscription would read as having no allowance left and go
+    // straight to credits it also does not have.
     const spent = await Subscription.findOneAndUpdate(
-      { workspaceId, [usedField]: { $lt: planQuota } },
+      {
+        workspaceId,
+        $or: [{ [usedField]: { $lt: allowance } }, { [usedField]: { $exists: false } }],
+      },
       { $inc: { [usedField]: 1 } },
     );
     if (spent) return true;
@@ -263,8 +345,18 @@ export async function quotaSummary(workspaceId: string) {
   if (!plan) return null;
 
   const siteCount = await Site.countDocuments({ workspaceId });
+  const orbitPlan = await currentOrbitPlan(workspaceId);
 
   return {
+    orbit: {
+      plan: { slug: orbitPlan.slug, name: orbitPlan.name },
+      tier: orbitPlan.modelTier,
+      planQuota: orbitPlan.monthlyQuota,
+      used: (sub.orbitUsed as number) ?? 0,
+      addonCredits: (sub.addonOrbitCredits as number) ?? 0,
+      periodEnd: sub.orbitPeriodEnd ?? null,
+      dataAccess: orbitPlan.dataAccess,
+    },
     workspaceId: String(sub.workspaceId),
     plan: { slug: plan.slug, name: plan.name },
     cycle: sub.cycle,

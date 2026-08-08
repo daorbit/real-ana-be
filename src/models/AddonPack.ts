@@ -7,7 +7,7 @@ import { CURRENCIES } from "../lib/currency.js";
  * is a single charge, not a recurring one, so credits don't reset or expire on
  * their own; they're drawn down as they're used.
  */
-export const ADDON_TYPES = ["audit", "crawl"] as const;
+export const ADDON_TYPES = ["audit", "crawl", "orbit"] as const;
 export type AddonType = (typeof ADDON_TYPES)[number];
 
 const priceFields = Object.fromEntries(
