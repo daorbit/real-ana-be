@@ -601,18 +601,26 @@ router.post("/email/test", async (req: AuthedRequest, res: Response) => {
 
 type SegmentId = "all" | "not-installed" | "no-sites" | "installed";
 
+/**
+ * Named for the person, not the query that finds them.
+ *
+ * "Signed up, script not installed" describes a database condition; "Stuck on
+ * install" describes someone you might write to. The admin picking a segment is
+ * deciding who to talk to, and the label should be the thing they are deciding.
+ * The precise condition still matters — it is in the description below.
+ */
 const SEGMENT_LABELS: Record<SegmentId, string> = {
   all: "Everyone",
-  "not-installed": "Signed up, script not installed",
-  "no-sites": "Signed up, no site added",
-  installed: "Actively tracking",
+  "not-installed": "Stuck on install",
+  "no-sites": "Signed up, never started",
+  installed: "Up and running",
 };
 
 const SEGMENT_DESCRIPTIONS: Record<SegmentId, string> = {
   all: "Every non-admin account.",
-  "not-installed": "Has added a site but no event has ever arrived for it.",
-  "no-sites": "Never got as far as adding a site.",
-  installed: "At least one site is reporting events.",
+  "not-installed": "Added a site, but no traffic has ever arrived for it.",
+  "no-sites": "Made an account and never added a site.",
+  installed: "At least one site is sending traffic.",
 };
 
 function isSegment(v: string): v is SegmentId {
