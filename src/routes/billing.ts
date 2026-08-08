@@ -75,10 +75,6 @@ router.get("/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
 });
 
-router.get("/orbit-plans", async (_req: AuthedRequest, res: Response) => {
-  res.json(await listResolvedOrbitPlans());
-});
-
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
   const addons = await AddonPack.find({ active: true }).sort({ sortOrder: 1 });
   res.json(addons);
@@ -190,85 +186,6 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
         packs: a.packs,
         credits: a.quantity * a.packs,
       })),
-    });
-  } catch (e) {
-    console.error("Razorpay order failed:", (e as Error).message);
-    res.status(502).json({ error: "could not start checkout with Razorpay" });
-  }
-});
-
-/**
- * Start checkout for an Orbit AI tier.
- *
- * Deliberately its own endpoint rather than a flag on the plan route: the two
- * ladders are bought separately, and folding them into one request would mean a
- * checkout that could silently move someone's analytics tier while they thought
- * they were buying AI questions. Addon packs and coupons work the same way here
- * as they do there.
- */
-router.post("/orbit-plans/:slug/purchase", async (req: AuthedRequest, res: Response) => {
-  const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
-  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
-
-  const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
-  const currency = resolveCurrency(req.body?.currency);
-
-  const plan = await getResolvedOrbitPlan(String(req.params.slug));
-  if (!plan) return res.status(404).json({ error: "Orbit plan not found" });
-
-  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
-
-  const listPrice = planAmount;
-  const discounted = await applyCoupon(listPrice, req.body?.couponCode);
-  if (discounted.error) return res.status(400).json({ error: discounted.error });
-  const amount = discounted.amount;
-
-  // Orbit Free costs nothing, and a coupon can take a paid tier to zero. Both
-  // activate directly rather than opening a Razorpay order for a zero charge.
-  if (amount === 0) {
-    await activateOrbitPeriod(workspace.id, req.userId as string, plan.slug, cycle);
-    return res.json({ free: true, plan: { name: plan.name, cycle } });
-  }
-
-  if (!razorpayConfigured())
-    return res.status(503).json({ error: "payments are not configured" });
-
-  try {
-    // Razorpay rejects a zero-amount order; same floor the other routes use.
-    const chargeable = Math.max(amount, 100);
-
-    const order = await razorpay().orders.create({
-      amount: chargeable,
-      currency,
-      notes: {
-        userId: String(req.userId),
-        workspaceId: workspace.id,
-        planSlug: plan.slug,
-        ladder: "orbit",
-        cycle,
-      },
-    });
-
-    await PlanPurchase.create({
-      userId: req.userId,
-      workspaceId: workspace.id,
-      planSlug: plan.slug,
-      ladder: "orbit",
-      cycle,
-      planAmount,
-      razorpayOrderId: order.id,
-      amount: chargeable,
-      currency,
-      couponCode: discounted.coupon?.code ?? "",
-      status: "created",
-    });
-
-    res.json({
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-      plan: { name: plan.name, cycle },
     });
   } catch (e) {
     console.error("Razorpay order failed:", (e as Error).message);
