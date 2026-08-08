@@ -17,16 +17,15 @@
  * was a problem.
  */
 
-import { ORBIT_SYSTEM_PROMPT, orbitPromptWithData } from "./orbit-knowledge.js";
-import { workspaceDataSummary } from "./orbit-data.js";
-import { sanitiseModelAnswer } from "./model-output.js";
+import { ORBIT_SYSTEM_PROMPT, orbitPromptWithData } from "./prompt.js";
+import { sanitiseModelAnswer } from "./output.js";
 import {
   availableModels,
   fallbackChain,
   resolveModel,
   type OrbitModel,
-} from "./orbit-models.js";
-import type { OrbitPlanEntry } from "../orbit-plans.js";
+} from "./models.js";
+import type { OrbitEntitlement, OrbitHost } from "./types.js";
 
 /**
  * How long to wait on one model before moving to the next.
@@ -98,42 +97,75 @@ const SCHEMA = {
   additionalProperties: false,
 } as const;
 
+export type AskOptions = {
+  /** Oldest-first, excluding the current question. Trimmed to the entitlement. */
+  history?: OrbitTurn[];
+  /** The asker's preferred model. Tried first; everything else after it. */
+  modelId?: string;
+  /**
+   * The product embedding Orbit. Supplies the entitlement and owns quota.
+   *
+   * Optional so a host with nothing to bill — a script, a test, an internal
+   * tool — can call Orbit without implementing an interface it does not need.
+   * Without one, every configured model is eligible and nothing is metered.
+   */
+  host?: OrbitHost;
+  /** Opaque tenant key, passed back to the host unchanged. Required with `host`. */
+  tenantId?: string;
+};
+
 /**
  * Ask Orbit a question, with the conversation so far for context.
  *
- * `history` is oldest-first and excludes the current question, which is passed
- * separately — the caller should not have to remember to append it in the right
- * shape.
+ * With a host, this is the whole transaction: entitlement, quota check, model
+ * call, and the spend on success. Keeping the spend here rather than in the
+ * caller is what guarantees the two rules that matter — a question is never
+ * charged unless it was answered, and it is never answered without quota — hold
+ * for every embedder rather than being re-implemented correctly in each one.
  *
- * `modelId` is the user's preference. It is tried first; everything else is
- * tried after it.
- *
- * `plan` is the workspace's Orbit tier. It decides which models may answer —
- * both the chosen one and every fallback — so a plan boundary cannot be crossed
- * by a rate limit. Omitted, every configured model is eligible, which is only
- * appropriate for internal callers that are not billing anyone.
+ * The entitlement's tier decides which models may answer, both the chosen one
+ * and every fallback, so a tier boundary cannot be crossed by a rate limit.
  */
 export async function askOrbit(
   question: string,
-  history: OrbitTurn[] = [],
-  modelId?: string,
-  plan?: OrbitPlanEntry,
-  workspaceId?: string,
+  options: AskOptions = {},
 ): Promise<OrbitResult> {
-  const tier = plan?.modelTier;
+  const { modelId, host, tenantId } = options;
+
+  const entitlement: OrbitEntitlement | null =
+    host && tenantId ? await host.entitlement(tenantId) : null;
+  const tier = entitlement?.tier;
+
   const chosen = resolveModel(modelId, tier);
   if (!chosen) {
     return { ok: false, error: "Orbit is not configured on this server.", status: 503 };
   }
 
-  // Only tiers that include data access get their figures appended; everyone
-  // else gets the base prompt, whose "you cannot read their analytics" rule
+  // Before the model call, which is slow and costs money: finding out
+  // afterwards that there was no quota means having paid for an answer nobody
+  // was entitled to.
+  if (host && tenantId && !(await host.hasQuota(tenantId))) {
+    return {
+      ok: false,
+      status: 402,
+      error: entitlement
+        ? `You have used all ${entitlement.monthlyQuota} questions included this period. Buy a question pack, or upgrade.`
+        : "You are out of questions for this period.",
+    };
+  }
+
+  const history = (options.history ?? []).slice(
+    entitlement ? -entitlement.maxHistoryTurns : undefined,
+  );
+
+  // Only entitlements with data access get the tenant's figures appended;
+  // everyone else gets the base prompt, whose "you cannot read their data" rule
   // then holds. A failure here degrades to the base prompt rather than failing
   // the question: an answer without the numbers still beats an error.
   let prompt = ORBIT_SYSTEM_PROMPT;
-  if (plan?.dataAccess && workspaceId) {
+  if (entitlement?.dataAccess && host?.dataSummary && tenantId) {
     try {
-      prompt = orbitPromptWithData(await workspaceDataSummary(workspaceId));
+      prompt = orbitPromptWithData(await host.dataSummary(tenantId));
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);
     }
@@ -157,7 +189,20 @@ export async function askOrbit(
       const parsed = parseAnswer(raw.text);
       // A model that returned prose instead of the agreed shape has still
       // answered; only an empty reply is worth failing over.
-      if (parsed) return { ok: true, ...parsed, model: model.id, modelLabel: model.label };
+      if (parsed) {
+        // Charged only now that an answer exists. A spend that fails is logged
+        // and swallowed: the asker has their answer, and turning a bookkeeping
+        // error into a failed question would take away the thing they came for
+        // over a discrepancy of one.
+        if (host && tenantId) {
+          try {
+            await host.spendQuota(tenantId);
+          } catch (e) {
+            console.error("[orbit] quota spend failed:", (e as Error).message);
+          }
+        }
+        return { ok: true, ...parsed, model: model.id, modelLabel: model.label };
+      }
     } else {
       lastStatus = raw.status;
       // Logged per model so a chain that always falls through is visible in the

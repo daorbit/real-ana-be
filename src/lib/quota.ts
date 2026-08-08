@@ -87,30 +87,6 @@ export async function currentPlan(workspaceId: string) {
 }
 
 /**
- * The Orbit tier this workspace is on.
- *
- * Expiry is read from `orbitPeriodEnd`, not from the analytics period: the two
- * are bought separately, so a lapsed analytics plan must not silently downgrade
- * someone's AI tier. A lapsed *Orbit* period falls back to Free rather than to
- * nothing, because the assistant going dark is a worse answer than the free
- * allowance — and Free costs us nothing to serve.
- */
-export async function currentOrbitPlan(workspaceId: string): Promise<OrbitPlanEntry> {
-  const sub = await Subscription.findOne({ workspaceId });
-  if (!sub) return resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
-
-  const end = sub.orbitPeriodEnd as Date | null;
-  // A paid tier with no end date shouldn't happen, but treating it as expired
-  // is the safe reading — it downgrades to Free rather than granting a paid
-  // tier forever on a malformed row.
-  const lapsed = sub.orbitPlanSlug && sub.orbitPlanSlug !== DEFAULT_ORBIT_PLAN_SLUG
-    ? !end || end.getTime() < Date.now()
-    : false;
-
-  return resolveOrbitPlan(lapsed ? DEFAULT_ORBIT_PLAN_SLUG : (sub.orbitPlanSlug as string | null));
-}
-
-/**
  * Start an Orbit plan period, resetting the question count.
  *
  * Separate from `activatePlanPeriod` because the two ladders are bought
@@ -269,7 +245,14 @@ async function planAllowance(
   workspaceId: string,
   kind: QuotaKind,
 ): Promise<number | null> {
-  if (kind === "orbit") return (await currentOrbitPlan(workspaceId)).monthlyQuota;
+  if (kind === "orbit") {
+    // Imported lazily to break a cycle: `orbit-host` owns the rule for which
+    // Orbit tier a workspace is effectively on — which depends on its analytics
+    // plan — and in turn calls back into this module for the quota primitives.
+    // A static import either way round would be circular at load time.
+    const { effectiveOrbitPlan } = await import("./orbit-host.js");
+    return (await effectiveOrbitPlan(workspaceId)).monthlyQuota;
+  }
 
   const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return null;
@@ -345,7 +328,9 @@ export async function quotaSummary(workspaceId: string) {
   if (!plan) return null;
 
   const siteCount = await Site.countDocuments({ workspaceId });
-  const orbitPlan = await currentOrbitPlan(workspaceId);
+  // Lazy for the same cycle reason as `planAllowance` above.
+  const { effectiveOrbitPlan } = await import("./orbit-host.js");
+  const orbitPlan = await effectiveOrbitPlan(workspaceId);
 
   return {
     orbit: {

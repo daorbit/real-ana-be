@@ -1,10 +1,17 @@
 import { Router, Response } from "express";
 import { requireAuth, AuthedRequest } from "../auth.js";
-import { askOrbit, orbitConfigured, type OrbitTurn } from "../lib/orbit.js";
-import { ORBIT_MODELS, providerReady } from "../lib/orbit-models.js";
+import {
+  ORBIT_MODELS,
+  askOrbit,
+  orbitConfigured,
+  providerReady,
+  tierAllows,
+  type OrbitTurn,
+} from "../orbit/index.js";
 import { requireWorkspace } from "../lib/access.js";
-import { currentOrbitPlan, hasQuota, quotaSummary, spendQuota } from "../lib/quota.js";
-import { tierAllows, type OrbitPlanEntry } from "../orbit-plans.js";
+import { quotaSummary } from "../lib/quota.js";
+import { effectiveOrbitPlan, quantalogOrbitHost } from "../lib/orbit-host.js";
+import type { OrbitPlanEntry } from "../orbit-plans.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -122,7 +129,7 @@ router.get("/status", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res);
   if (!ws) return;
 
-  const plan = await currentOrbitPlan(ws.id);
+  const plan = await effectiveOrbitPlan(ws.id);
 
   res.json({
     configured: orbitConfigured(),
@@ -152,7 +159,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res);
   if (!ws) return;
 
-  const plan = await currentOrbitPlan(ws.id);
+  const plan = await effectiveOrbitPlan(ws.id);
 
   if (rateLimited(ws.id, plan.hourlyBurst)) {
     return res.status(429).json({
@@ -165,37 +172,25 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     return res.status(400).json({ error: "Ask a question first." });
   }
 
-  // Checked before the call, not after: the model call is slow and costs us
-  // money, so discovering there was no quota once it has already run would mean
-  // paying for an answer nobody is entitled to.
-  if (!(await hasQuota(ws.id, "orbit"))) {
-    return res.status(402).json({
-      error: `This workspace has used all ${plan.monthlyQuota} Orbit questions in its plan — buy a question pack, or upgrade its Orbit plan.`,
-      plan: plan.slug,
-    });
-  }
-
   // The chosen model is a preference, not a instruction: an unknown id falls
   // back to the default rather than erroring, because the id comes from a
   // browser that may have been open since before a model was retired.
   const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
 
-  const result = await askOrbit(
-    question,
-    readHistory(req.body?.history, plan.maxHistoryTurns),
+  // The quota check and the spend both happen inside `askOrbit`, against the
+  // host — that is what keeps "never charge for an unanswered question" true
+  // for every embedder rather than depending on each route remembering it. A
+  // 402 comes back here as an ordinary failed result.
+  const result = await askOrbit(question, {
+    history: readHistory(req.body?.history, plan.maxHistoryTurns),
     modelId,
-    plan,
-    ws.id,
-  );
+    host: quantalogOrbitHost,
+    tenantId: ws.id,
+  });
 
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error });
   }
-
-  // Spent only now that an answer exists. A timeout, a refusal, or a fallback
-  // chain that ran out costs the user nothing — charging for a question we
-  // failed to answer is the fastest way to make someone stop asking.
-  await spendQuota(ws.id, "orbit");
 
   // `model` comes back because it may not be the one that was asked for — the
   // chain falls through on a rate limit, and the UI says which one answered.

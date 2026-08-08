@@ -11,7 +11,7 @@
  * refuses, the next one answers and the user never learns there was a problem.
  */
 
-import { tierAllows, type OrbitTier } from "../orbit-plans.js";
+import { tierAllows, type OrbitTier } from "./types.js";
 
 export type ModelProvider = "gemini" | "openrouter" | "nvidia";
 
