@@ -10,6 +10,8 @@
  * before the ask is reached.
  */
 
+import type { BodyLayout } from "./mail.js";
+
 export type MailTemplate = {
   id: string;
   /** Shown on the picker. */
@@ -28,11 +30,17 @@ export type MailTemplate = {
   /**
    * Which body layout the renderer should use.
    *
-   * Templates are plain text by default. "invite" renders the designed feature
-   * list under the author's opening — worth it for a cold introduction, wrong
-   * for a message to someone who already uses the product.
+   * Templates are plain text by default — that is right for a message an admin
+   * writes themselves, where invented structure would put words in their mouth.
+   * The canned ones name a layout instead, because each is always about the
+   * same thing and prose alone was doing that thing badly: an install reminder
+   * that only describes the snippet is asking a reader to go and find something
+   * they have already not gone and found.
+   *
+   * Every layout except "plain" needs a `cta` and falls back to plain prose
+   * without one.
    */
-  layout?: "plain" | "invite";
+  layout?: BodyLayout;
   /**
    * The action the message is asking for.
    *
@@ -53,12 +61,13 @@ export const MAIL_TEMPLATES: MailTemplate[] = [
     label: "Install reminder",
     hint: "Added a site but never sent an event",
     segment: "not-installed",
+    layout: "install",
     subject: "Your Quantalog site isn't reporting yet",
+    // Short on purpose: the snippet and the two steps come from the layout, so
+    // describing them here would say everything twice.
     body: `Hi {{name}},
 
 You set up a site on Quantalog, but no traffic has come through yet — which almost always means the tracking snippet isn't on the page.
-
-It's one line, and it's waiting in your dashboard. Paste it into your site's <head> and your analytics start filling in within a minute.
 
 Stuck? Reply to this email and I'll take a look.`,
     cta: { label: "Get my snippet", href: `${APP_URL}/app` },
@@ -68,12 +77,12 @@ Stuck? Reply to this email and I'll take a look.`,
     label: "Welcome",
     hint: "Signed up but never added a site",
     segment: "no-sites",
+    layout: "welcome",
     subject: "Welcome to Quantalog",
+    // The three steps come from the layout. This says why they're worth taking.
     body: `Hi {{name}},
 
-Thanks for signing up.
-
-Add your first site and you'll get a one-line snippet to drop into your pages. Traffic shows up the moment it's live — no waiting, no sampling.
+Thanks for signing up. You're three short steps from live traffic, and none of them involve a cookie banner.
 
 If anything's unclear, just reply. I read every message.`,
     cta: { label: "Add my first site", href: `${APP_URL}/app/onboarding` },
@@ -97,14 +106,15 @@ If something's missing or in your way, reply and tell me. It genuinely shapes wh
     label: "SEO audits",
     hint: "Point active users at a feature they may not have found",
     segment: "installed",
+    layout: "feature",
     subject: "You've got SEO audits built in",
+    // The checklist comes from the layout, so this only has to say where the
+    // feature is and that it needs no setup.
     body: `Hi {{name}},
 
 Quick one — since you're already tracking traffic, you may not have noticed the SEO side of Quantalog.
 
-Point it at any page and it checks technical issues, Core Web Vitals from real visitors, broken links and structured data, then gives you a report you can share.
-
-It's under SEO in your dashboard, and it works on any site you've added.`,
+It's under SEO in your dashboard, it works on any site you've added, and the report is shareable.`,
     cta: { label: "Run an audit", href: `${APP_URL}/app/seo` },
   },
   {

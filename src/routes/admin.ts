@@ -18,7 +18,7 @@ import { accountBillingSummary } from "../lib/quota.js";
 import { getPlanCatalogEntry } from "../plans.js";
 import { CURRENCIES } from "../lib/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../lib/fx.js";
-import { mailConfigured, mailFrom, sendBulk, sendOne, broadcastHtml, inviteHtml, personalize, forBrowser, contactReplyHtml } from "../lib/mail.js";
+import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, contactReplyHtml, type BodyLayout } from "../lib/mail.js";
 import { MAIL_TEMPLATES } from "../lib/mail-templates.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../auth.js";
 
@@ -376,10 +376,9 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
 
   const cta = readCta(req.body?.cta);
   const text = personalize(body, sample);
-  const html =
-    readLayout(req.body?.layout) === "invite" && cta
-      ? inviteHtml(text, cta)
-      : broadcastHtml(text, cta);
+  // Same dispatcher the real send uses, so the preview cannot drift from what
+  // actually goes out.
+  const html = renderBody(readLayout(req.body?.layout), text, cta);
 
   res.json({
     subject: personalize(subject, sample),
@@ -391,8 +390,9 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
 });
 
 /** Only the layouts the renderer knows. Anything else falls back to plain text. */
-function readLayout(raw: unknown): "plain" | "invite" {
-  return raw === "invite" ? "invite" : "plain";
+function readLayout(raw: unknown): BodyLayout {
+  const known: BodyLayout[] = ["plain", "invite", "install", "welcome", "feature"];
+  return known.includes(raw as BodyLayout) ? (raw as BodyLayout) : "plain";
 }
 
 /**

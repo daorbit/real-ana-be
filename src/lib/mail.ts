@@ -101,7 +101,7 @@ export async function sendBulk(
    * "invite" swaps the plain-text renderer for the designed feature list, for
    * the one template that goes to people who have never heard of the product.
    */
-  layout: "plain" | "invite" = "plain",
+  layout: BodyLayout = "plain",
 ): Promise<SendResult[]> {
   const transport = getTransport();
   const from = mailFrom();
@@ -115,13 +115,7 @@ export async function sendBulk(
         to: person.name ? `"${person.name}" <${person.email}>` : person.email,
         subject: personalize(subject, person),
         text,
-        // The invite layout needs a button to be worth sending — its whole
-        // purpose is getting someone to the signup page — so it falls back to
-        // the plain renderer rather than shipping a feature list with no way in.
-        html:
-          layout === "invite" && cta
-            ? inviteHtml(text, cta)
-            : broadcastHtml(text, cta),
+        html: renderBody(layout, text, cta),
         attachments: [LOGO_ATTACHMENT],
       });
       results.push({ email: person.email, ok: true });
@@ -705,6 +699,202 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
       : "";
 
   return shell(paragraphs + action);
+}
+
+/**
+ * A block of code, for a message whose whole point is the code.
+ *
+ * The install reminder used to describe the snippet and link to the dashboard
+ * to go and find it — which is the one extra step the reader has already failed
+ * to take. Putting the actual tag in the message means the fix is copy, paste,
+ * done, without leaving the inbox.
+ *
+ * `word-break` matters more here than anywhere else: a script tag is one long
+ * unbreakable token, and without it the block sets the width of the whole card
+ * on a phone.
+ */
+export function codeBlock(code: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.block}px 0 0">
+    <tr><td class="panel" style="background:${C.panel};border-radius:10px;padding:16px 18px">
+      <code style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.65;color:${C.text};word-break:break-all">${escapeHtml(code)}</code>
+    </td></tr>
+  </table>`;
+}
+
+/**
+ * A numbered step.
+ *
+ * Only for messages that really are a sequence — "paste this, then check that".
+ * Numbering a list of features would be decoration; numbering the two things
+ * standing between someone and working analytics is information they need in
+ * order.
+ */
+export function step(n: number, title: string, body: string): string {
+  return `<tr>
+    <td width="26" style="padding:0 0 14px;vertical-align:top">
+      <div style="width:20px;height:20px;border-radius:50%;background:${C.accent};color:#ffffff;font-size:11px;font-weight:700;line-height:20px;text-align:center">${n}</div>
+    </td>
+    <td style="padding:0 0 14px;vertical-align:top">
+      <p style="margin:0;font-size:14px;font-weight:600;color:${C.text}">${title}</p>
+      <p style="margin:3px 0 0;font-size:13px;line-height:1.6;color:${C.dim}">${body}</p>
+    </td>
+  </tr>`;
+}
+
+/** Wraps `step` rows into their own table. */
+export function steps(rows: string[]): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0">${rows.join("")}</table>`;
+}
+
+/**
+ * Which body layout a template renders with.
+ *
+ * "plain" is the default and stays out of the way — it is what an admin writing
+ * their own message gets, where inventing structure would put words in their
+ * mouth.
+ *
+ * The rest are for the canned templates, where the message is always about the
+ * same thing and prose alone was doing that thing badly. An install reminder
+ * that only describes the snippet, or a feature announcement that only asserts
+ * a feature exists, is a paragraph asking the reader to go and find something —
+ * which, for a template sent to people who already didn't, is the whole problem.
+ */
+export type BodyLayout = "plain" | "invite" | "install" | "welcome" | "feature";
+
+/** Picks the renderer for a layout, falling back to plain where a CTA is required. */
+export function renderBody(
+  layout: BodyLayout,
+  text: string,
+  cta?: { label: string; href: string },
+): string {
+  // The layouts below all end in a button and are pointless without one, so a
+  // template missing its CTA degrades to plain prose rather than shipping a
+  // designed body with no way out of it.
+  if (!cta) return broadcastHtml(text, cta);
+
+  switch (layout) {
+    case "invite":
+      return inviteHtml(text, cta);
+    case "install":
+      return installHtml(text, cta);
+    case "welcome":
+      return welcomeHtml(text, cta);
+    case "feature":
+      return featureHtml(text, cta);
+    default:
+      return broadcastHtml(text, cta);
+  }
+}
+
+/**
+ * Renders the author's own opening paragraphs.
+ *
+ * Shared by every designed layout: each one is "the admin's words, then
+ * something built". The first block carries the greeting and gets a heading's
+ * weight without being marked up as one the author didn't write.
+ */
+function intro(text: string): string {
+  return escapeHtml(text)
+    .split(/\n{2,}/)
+    .map((block, i) => {
+      const html = block.replace(/\n/g, "<br>");
+      const style =
+        i === 0
+          ? `margin:0 0 14px;font-size:15.5px;font-weight:600;color:${C.text};line-height:1.6`
+          : `margin:0 0 14px;${T.body}`;
+      return `<p style="${style}">${html}</p>`;
+    })
+    .join("");
+}
+
+/**
+ * The install reminder.
+ *
+ * Sent to someone who added a site and never fired an event, so the one thing
+ * standing between them and working analytics is a script tag they haven't
+ * pasted. The old version described that tag and linked to the dashboard to go
+ * and find it — an extra step for a reader who has already demonstrated they
+ * won't take it.
+ *
+ * So the snippet is in the message. `{{siteId}}` is left as a placeholder
+ * because the composer sends one message per recipient and does not currently
+ * resolve a per-site value; the shape is right either way, and the reader
+ * recognises their own id.
+ */
+function installHtml(text: string, cta: { label: string; href: string }): string {
+  return shell(
+    `${intro(text)}
+
+    ${codeBlock('<script async src="https://cdn.quantalog.daorbit.in/q.js" data-site="YOUR-SITE-ID"></script>')}
+
+    ${steps([
+      step(1, "Paste it before &lt;/head&gt;", "Anywhere in the head works. One line, on every page you want counted."),
+      step(2, "Load any page", "The first pageview lands within a few seconds — no waiting for a nightly job."),
+    ])}
+
+    ${button(escapeHtml(cta.label), escapeAttr(cta.href))}`,
+  );
+}
+
+/**
+ * The welcome, for someone who signed up and never added a site.
+ *
+ * Their blocker is not motivation — they already signed up — it is not knowing
+ * how long this is going to take. So the body is the three steps, with the
+ * honest scale of each, rather than another pitch for a product they have
+ * already chosen.
+ */
+function welcomeHtml(text: string, cta: { label: string; href: string }): string {
+  return shell(
+    `${intro(text)}
+
+    ${steps([
+      step(1, "Add your site", "Name and domain. Takes about ten seconds."),
+      step(2, "Copy the snippet", "One script tag, generated for that site."),
+      step(3, "Watch it arrive", "Traffic shows up live, with no sampling and no cookie banner."),
+    ])}
+
+    ${button(escapeHtml(cta.label), escapeAttr(cta.href))}`,
+  );
+}
+
+/**
+ * A feature announcement — currently the SEO audit one.
+ *
+ * Goes to active users, so it cannot open by explaining what Quantalog is. What
+ * it has to answer is "what would I get out of running one", and a list of what
+ * an audit actually checks does that better than a sentence claiming audits are
+ * useful.
+ */
+function featureHtml(text: string, cta: { label: string; href: string }): string {
+  const checks = [
+    "Meta tags and canonical URLs",
+    "Core Web Vitals from real visitors",
+    "Broken links and redirect chains",
+    "Structured data and sitemap health",
+  ];
+
+  return shell(
+    `${intro(text)}
+
+    ${label("What an audit checks")}
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+      ${checks
+        .map(
+          (c) => `<tr>
+        <td width="18" style="padding:0 0 10px;vertical-align:top">
+          <div style="width:6px;height:6px;border-radius:50%;background:${C.accent};margin-top:7px"></div>
+        </td>
+        <td style="padding:0 0 10px;vertical-align:top">
+          <p style="margin:0;font-size:13.5px;line-height:1.6;color:${C.dim}">${c}</p>
+        </td>
+      </tr>`,
+        )
+        .join("")}
+    </table>
+
+    ${button(escapeHtml(cta.label), escapeAttr(cta.href))}`,
+  );
 }
 
 /**
