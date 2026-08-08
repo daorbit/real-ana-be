@@ -2,29 +2,30 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import authRoutes from "./routes/auth.js";
-import workspaceRoutes from "./routes/workspaces.js";
-import collectRoutes from "./routes/collect.js";
-import statsRoutes from "./routes/stats.js";
-import v1Routes from "./routes/v1.js";
-import adminRoutes from "./routes/admin.js";
-import shareRoutes from "./routes/share.js";
-import seoPublicRoutes from "./routes/seo-public.js";
-import plansPublicRoutes from "./routes/plans-public.js";
-import seoRoutes from "./routes/seo.js";
-import billingRoutes from "./routes/billing.js";
-import webhookRoutes from "./routes/webhooks.js";
-import cronRoutes from "./routes/cron.js";
-import reportRoutes from "./routes/reports.js";
-import segmentRoutes from "./routes/segments.js";
-import markerRoutes from "./routes/markers.js";
-import memberRoutes from "./routes/members.js";
-import inviteRoutes from "./routes/invites.js";
-import reportsPublicRoutes from "./routes/reports-public.js";
-import contactPublicRoutes from "./routes/contact-public.js";
-import newsletterPublicRoutes from "./routes/newsletter-public.js";
-import supportRoutes from "./routes/support.js";
-import orbitRoutes from "./routes/orbit.js";
+import authRoutes from "./http/routes/auth.js";
+import workspaceRoutes from "./http/routes/workspaces.js";
+import collectRoutes from "./http/routes/collect.js";
+import statsRoutes from "./http/routes/stats.js";
+import v1Routes from "./http/routes/v1.js";
+import adminRoutes from "./http/routes/admin.js";
+import shareRoutes from "./http/routes/share.js";
+import seoPublicRoutes from "./http/routes/seo-public.js";
+import plansPublicRoutes from "./http/routes/plans-public.js";
+import seoRoutes from "./http/routes/seo.js";
+import billingRoutes from "./http/routes/billing.js";
+import webhookRoutes from "./http/routes/webhooks.js";
+import cronRoutes from "./http/routes/cron.js";
+import reportRoutes from "./http/routes/reports.js";
+import segmentRoutes from "./http/routes/segments.js";
+import markerRoutes from "./http/routes/markers.js";
+import memberRoutes from "./http/routes/members.js";
+import inviteRoutes from "./http/routes/invites.js";
+import reportsPublicRoutes from "./http/routes/reports-public.js";
+import contactPublicRoutes from "./http/routes/contact-public.js";
+import newsletterPublicRoutes from "./http/routes/newsletter-public.js";
+import supportRoutes from "./http/routes/support.js";
+import orbitRoutes from "./http/routes/orbit.js";
+import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -132,5 +133,11 @@ app.use("/api/webhooks", webhookRoutes);
 // Vercel Cron: same reasoning as the webhooks above — never called from a
 // browser, and `CRON_SECRET` in the route is the credential.
 app.use("/api/cron", cronRoutes);
+
+// Both must stay last: the 404 only fires once every router has declined the
+// path, and the error handler only receives what the routers above pass to
+// `next`. Anything mounted after them would be unreachable.
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 export default app;

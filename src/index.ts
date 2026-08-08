@@ -1,7 +1,7 @@
 import "dotenv/config";
 import app from "./app.js";
-import { connectDB } from "./db.js";
-import { startFxCron } from "./lib/fx-cron.js";
+import { connectDB } from "./infra/db/connection.js";
+import { startFxCron } from "./modules/billing/fx-cron.js";
 
 const PORT = process.env.PORT ?? 4000;
 

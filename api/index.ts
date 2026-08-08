@@ -1,6 +1,6 @@
 import "dotenv/config";
 import app from "../src/app.js";
-import { connectDB } from "../src/db.js";
+import { connectDB } from "../src/infra/db/connection.js";
 
 // Vercel serverless entrypoint. Ensure DB connected per cold start.
 export default async function handler(req: any, res: any) {

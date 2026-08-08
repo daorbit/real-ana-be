@@ -1,9 +1,9 @@
 import "dotenv/config";
-import { connectDB } from "../src/db.js";
-import { Plan } from "../src/models/Plan.js";
-import { Subscription } from "../src/models/Subscription.js";
-import { User } from "../src/models/User.js";
-import { PLAN_CATALOG } from "../src/plans.js";
+import { connectDB } from "../src/infra/db/connection.js";
+import { Plan } from "../src/modules/billing/models/Plan.js";
+import { Subscription } from "../src/modules/billing/models/Subscription.js";
+import { User } from "../src/modules/identity/models/User.js";
+import { PLAN_CATALOG } from "../src/modules/billing/plans.catalog.js";
 import mongoose from "mongoose";
 
 /**
