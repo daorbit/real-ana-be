@@ -1,5 +1,6 @@
 import { sendOne, shell, button, mailConfigured, statTile, barRow, C } from "../../infra/mail/mailer.js";
 import type { SeoRow } from "./report-xlsx.js";
+import type { Digest } from "./digest.js";
 
 /**
  * The scheduled report email itself.
@@ -28,6 +29,8 @@ export type ReportEmailInput = {
   seo: SeoRow[];
   /** Busiest pages, for the bar breakdown. Absent when analytics is off. */
   topPages?: { label: string; value: number }[];
+  /** The plain-language read of the period. Absent when it could not be written. */
+  digest?: Digest;
   /** Public share URL, when the owner turned the live link on. */
   dashboardUrl?: string;
   unsubscribeUrl: string;
@@ -146,6 +149,38 @@ function seoBlock(seo: SeoRow[]): string {
     </table>`;
 }
 
+/**
+ * The plain-language read of the period, above the numbers.
+ *
+ * Placed first because it is the only part most recipients will read, and set
+ * on a tinted panel so it is visibly commentary rather than another figure —
+ * the reader should never have to wonder whether a sentence is measured or
+ * interpreted. The recommendation is given its own line for the same reason it
+ * was parsed out separately: it is the part someone might act on.
+ *
+ * Returns nothing at all when there is no digest, so a report that could not
+ * get one looks exactly like a report from before this existed — no empty
+ * panel, no apology, no gap.
+ */
+function digestBlock(digest: Digest | undefined): string {
+  if (!digest) return "";
+
+  const action = digest.action
+    ? `<p style="margin:10px 0 0;font-size:13.5px;line-height:1.6;color:${C.text}">
+         <strong style="color:${C.accentDeep}">Worth doing:</strong> ${escapeHtml(digest.action)}
+       </p>`
+    : "";
+
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px">
+      <tr>
+        <td style="padding:14px 16px;background:${C.panel};border-left:3px solid ${C.accent};border-radius:6px">
+          <p style="margin:0;font-size:13.5px;line-height:1.65;color:${C.dim}">${escapeHtml(digest.summary)}</p>
+          ${action}
+        </td>
+      </tr>
+    </table>`;
+}
+
 export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
   if (!mailConfigured()) throw new Error("outbound email is not configured");
 
@@ -156,6 +191,13 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
   const text = [
     `${input.workspaceName} — ${input.periodLabel}`,
     ``,
+    ...(input.digest
+      ? [
+          input.digest.summary,
+          ...(input.digest.action ? [``, `Worth doing: ${input.digest.action}`] : []),
+          ``,
+        ]
+      : []),
     ...input.metrics.map((m) => `${m.label}: ${m.value}${m.delta !== undefined && m.delta !== null ? ` (${deltaText(m.delta)})` : ""}`),
     ...(input.seo.length ? ["", "SEO:", ...input.seo.slice(0, 8).map((r) => `${r.url} — ${r.score}`)] : []),
     ...(input.dashboardUrl ? ["", `Live dashboard: ${input.dashboardUrl}`] : []),
@@ -173,6 +215,7 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
     }
      <p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">${escapeHtml(input.workspaceName)}</p>
      <p style="margin:0 0 22px;font-size:13px;color:${C.faint}">${escapeHtml(input.periodLabel)}</p>
+     ${digestBlock(input.digest)}
      ${metricGrid(input.metrics)}
      ${breakdown("Top pages", input.topPages ?? [], (n) => n.toLocaleString("en-US"))}
      ${seoBlock(input.seo)}

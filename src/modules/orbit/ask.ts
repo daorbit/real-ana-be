@@ -120,6 +120,19 @@ export type AskOptions = {
   host?: OrbitHost;
   /** Opaque tenant key, passed back to the host unchanged. Required with `host`. */
   tenantId?: string;
+  /**
+   * Replace the assistant's instructions for this call.
+   *
+   * For internal jobs that want the model plumbing — the fallback chain, the
+   * timeouts, the output sanitising — but are not the in-app assistant. The
+   * report digest is one: under the support prompt the model correctly refuses
+   * it, because "summarise these figures" is not a Quantalog support question.
+   *
+   * Never set from a request. The prompt decides what the assistant will and
+   * will not do, so a caller-supplied one reaching a route would let anyone
+   * replace the rules — including the refusal this exists to work around.
+   */
+  systemPrompt?: string;
 };
 
 /**
@@ -170,8 +183,10 @@ export async function askOrbit(
   // everyone else gets the base prompt, whose "you cannot read their data" rule
   // then holds. A failure here degrades to the base prompt rather than failing
   // the question: an answer without the numbers still beats an error.
-  let prompt = ORBIT_SYSTEM_PROMPT;
-  if (entitlement?.dataAccess && host?.dataSummary && tenantId) {
+  let prompt = options.systemPrompt ?? ORBIT_SYSTEM_PROMPT;
+  // Only the assistant's own prompt takes the tenant's figures. A caller that
+  // brought its own instructions also brought its own data in the question.
+  if (!options.systemPrompt && entitlement?.dataAccess && host?.dataSummary && tenantId) {
     try {
       prompt = orbitPromptWithData(await host.dataSummary(tenantId));
     } catch (e) {

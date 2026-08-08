@@ -7,6 +7,7 @@ import { buildReportWorkbook, type SeoRow } from "./report-xlsx.js";
 import { sendReportEmail } from "./report-mail.js";
 import { sendWhatsAppReport } from "./report-whatsapp.js";
 import { renderReportPage } from "./report-html.js";
+import { buildDigest } from "./digest.js";
 import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
 
 /**
@@ -238,6 +239,18 @@ export async function runSchedule(
       ? `${appUrl()}/share/${shareToken}`
       : undefined;
 
+  // Written once per schedule, not per recipient: everyone on the list is
+  // reading the same period, so a second call would spend a second model
+  // request to produce the same paragraph — and risk producing a different one,
+  // which is worse. Null whenever it could not be written, and the report goes
+  // out without it.
+  const digest = await buildDigest({
+    workspaceName: workspace.get("name") as string,
+    periodLabel: label,
+    metrics,
+    stats,
+  });
+
   const outcome: SendOutcome = {
     scheduleName: schedule.get("name") as string,
     sent: [],
@@ -270,6 +283,7 @@ export async function runSchedule(
           metrics,
           seo,
           topPages: (stats?.topPages ?? []).map((r) => ({ label: r.key, value: r.count })),
+          digest: digest ?? undefined,
           dashboardUrl,
           unsubscribeUrl: `${apiUrl()}/api/public/reports/unsubscribe/${recipient.unsubToken}`,
           xlsx,
