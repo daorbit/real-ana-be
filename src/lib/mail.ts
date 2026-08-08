@@ -1,17 +1,3 @@
-/**
- * Outbound email, over Gmail's SMTP.
- *
- * There is no transactional mail provider on this project, so sending goes
- * straight through a Gmail account with an app password. That shapes everything
- * here: Gmail caps a free account at roughly 500 recipients a day and throttles
- * bursts, so messages go out one at a time with a small gap rather than in a
- * single fan-out, and the caller gets a per-recipient result instead of one
- * all-or-nothing verdict.
- *
- * The transport is created once and reused. Nodemailer keeps the connection
- * pooled, which matters when a send goes to a few dozen addresses — a fresh TLS
- * handshake per message is what gets an account rate-limited.
- */
 
 import nodemailer, { type Transporter } from "nodemailer";
 import { LOGO_DATA_URI } from "./logo.js";
@@ -314,8 +300,8 @@ export const LOGO_ATTACHMENT = {
   contentType: "image/png",
 };
 
-const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="36" height="36" alt="Quantalog"
-  style="display:block;border:0;outline:none;text-decoration:none;width:36px;height:36px">`;
+const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="28" height="28" alt="Quantalog"
+  style="display:block;border:0;outline:none;text-decoration:none;width:28px;height:28px">`;
 
 /**
  * The shell every outgoing message shares: logo, card, footer.
@@ -333,25 +319,128 @@ const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="36" height="36" alt="Quantal
  * every template, and a card that drifts one shade off the others is the kind
  * of thing nobody can point at but everybody notices.
  *
- * Text colours are deliberately brighter than a browser design would need. Some
- * clients — Outlook's Word engine most reliably — discard background colours
- * while keeping text colours, so any text that depends on a dark card behind it
- * to be readable becomes invisible. Every foreground here is chosen to survive
- * being dropped onto white.
+ * Light, and deliberately so. A dark email is a bet that the client will honour
+ * your background colour — and the one that most reliably does not, Outlook's
+ * Word engine, keeps the text colour while dropping the background, which turns
+ * pale grey body copy on a near-black card into pale grey on white. A light
+ * palette fails in the safe direction: dark text on a background that was going
+ * to be white anyway.
+ *
+ * The neutrals carry a slight cool cast rather than being pure greys, so they
+ * sit with the emerald instead of against it.
  */
 export const C = {
-  page: "#0b0c0f",
-  card: "#16181d",
-  panel: "#1b1e24",
-  line: "#2a2e36",
-  text: "#f3f4f6",
-  /** Body copy. Passes on the dark card, still legible if a client strips it. */
-  dim: "#9aa1ad",
+  /** Behind the card. Barely off-white, so the card reads as a distinct sheet. */
+  page: "#f5f6f8",
+  card: "#ffffff",
+  /** Insets — the code block, quoted messages, receipt summaries. */
+  panel: "#f3f4f6",
+  line: "#e5e7eb",
+  /** Headings. Near-black, not pure, which is harsh at large sizes. */
+  text: "#111827",
+  /** Body copy. */
+  dim: "#4b5563",
+  /** Small print and labels. Passes AA on both the card and the panel. */
   faint: "#6b7280",
-  accent: "#10b981",
+  accent: "#059669",
   accentDeep: "#047857",
-  danger: "#f87171",
+  danger: "#dc2626",
 } as const;
+
+/**
+ * The vertical rhythm, as a scale rather than a number per call site.
+ *
+ * Every gap in these templates used to be typed by hand, which is how the same
+ * "space between a heading and its paragraph" ended up as 8px in one message,
+ * 10px in another and 12px in a third. Nobody can point at which one is wrong;
+ * the set just reads as untidy. Four steps is enough for an email — there is
+ * only ever a gap inside a block, between blocks, between sections, or around
+ * the one that ends a message.
+ */
+const S = { tight: 8, block: 16, section: 24, major: 32 } as const;
+
+/**
+ * The type scale.
+ *
+ * Three sizes and one muted variant. An email is a single column with one
+ * message in it; the moment there are five sizes, two of them are doing the
+ * same job at slightly different weights.
+ */
+const T = {
+  title: `font-size:18px;font-weight:700;line-height:1.4;letter-spacing:-0.3px;color:${C.text}`,
+  body: `font-size:14.5px;line-height:1.65;color:${C.dim}`,
+  small: `font-size:12.5px;line-height:1.6;color:${C.faint}`,
+} as const;
+
+/**
+ * How a message is set.
+ *
+ * "centered" is for the short ones — a code, a confirmation, an alert. They are
+ * four lines around a single object, and centring them puts that object on the
+ * page's axis under the logo, which is the shape people already read as a
+ * transactional email.
+ *
+ * "left" is for messages with real prose or a quoted block. Centred paragraphs
+ * are hard to read past a couple of lines, because every line starts in a
+ * different place.
+ */
+export type Align = "center" | "left";
+
+/** The heading that opens a message. */
+export function heading(text: string, align: Align = "center"): string {
+  return `<p style="margin:0;${T.title};text-align:${align}">${text}</p>`;
+}
+
+/** A paragraph of body copy. `top` is the gap above it, from the scale. */
+export function paragraph(html: string, top: number = S.block, align: Align = "center"): string {
+  return `<p style="margin:${top}px 0 0;${T.body};text-align:${align}">${html}</p>`;
+}
+
+/**
+ * The closing note — the caveat a message ends on.
+ *
+ * No rule above it. The card's own footer already draws one, and two hairlines
+ * a few lines apart chopped the message into slices. Distance does the same job
+ * here, and the smaller, lighter type is enough to mark it as an aside.
+ */
+export function footnote(html: string, align: Align = "center"): string {
+  return `<p style="margin:${S.section}px 0 0;${T.small};text-align:${align}">${html}</p>`;
+}
+
+/**
+ * A section label — the small uppercase line above a panel.
+ *
+ * Used by the receipt, the invite feature list and the quoted-message blocks,
+ * which each had their own copy of these five properties.
+ */
+export function label(text: string, top: number = S.section): string {
+  return `<p style="margin:${top}px 0 ${S.tight}px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">${text}</p>`;
+}
+
+/**
+ * The verification code.
+ *
+ * A plain grey block with the code in near-black — no accent colour, no border.
+ * Colouring the digits emerald made the code read as a link, and an outlined
+ * box made it read as an empty input control. Neither is what this is: it is a
+ * number to copy, and a quiet inset with weight on the digits says that without
+ * any decoration at all.
+ *
+ * Set in the system UI face rather than a monospace. Six digits at 32px are
+ * unambiguous either way, and monospace on a light card looks like a code
+ * sample — something to run, not something to type.
+ *
+ * `word-break` is the phone insurance: a long code wraps inside the block
+ * rather than pushing the card wider than the screen.
+ */
+export function codePanel(code: string, minutes: number): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0">
+    <tr><td class="panel" align="center" style="background:${C.panel};border-radius:10px;padding:26px 20px">
+      <div style="font-size:27px;font-weight:700;letter-spacing:6px;text-indent:6px;line-height:1.25;color:${C.text};word-break:break-all">${code}</div>
+    </td></tr>
+  </table>
+  ${paragraph(`This code expires in ${minutes} minutes.`, S.block)}`;
+}
 
 /**
  * A labelled number.
@@ -361,10 +450,10 @@ export const C = {
  */
 export function statTile(label: string, value: string, delta?: string, tone: "up" | "down" | "flat" = "flat"): string {
   const toneColor = tone === "up" ? C.accent : tone === "down" ? C.danger : C.faint;
-  return `<td width="50%" class="panel" style="padding:14px 16px;background:${C.panel};border:1px solid ${C.line};border-radius:10px;vertical-align:top">
-    <div style="font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:${C.faint};font-weight:600">${label}</div>
-    <div style="font-size:24px;font-weight:700;color:${C.text};line-height:1.3;padding-top:2px">${value}</div>
-    ${delta ? `<div style="font-size:12px;font-weight:600;color:${toneColor}">${delta}</div>` : ""}
+  return `<td width="50%" class="panel" style="padding:16px 18px;background:${C.panel};border-radius:10px;vertical-align:top">
+    <div style="font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:${C.faint};font-weight:700">${label}</div>
+    <div style="font-size:22px;font-weight:700;color:${C.text};line-height:1.3;padding-top:4px">${value}</div>
+    ${delta ? `<div style="font-size:12.5px;font-weight:600;color:${toneColor};padding-top:2px">${delta}</div>` : ""}
   </td>`;
 }
 
@@ -400,25 +489,55 @@ export function barRow(label: string, value: string, pct: number): string {
  * the difference between a message that converts and one that doesn't.
  */
 export function button(label: string, href: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0"><tr>
-    <td align="center" style="background:#047857;border-radius:9px;mso-padding-alt:14px 28px">
-      <a href="${href}" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;line-height:1;color:#ffffff !important;text-decoration:none !important;letter-spacing:-0.1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">${label}</a>
-    </td>
-  </tr></table>`;
+  // Centred in its own full-width row rather than sitting wherever the previous
+  // block left the cursor — on a centred message a left-hugging button is the
+  // one element off the page's axis.
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0"><tr><td align="center">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td align="center" style="background:${C.accentDeep};border-radius:8px;mso-padding-alt:11px 22px">
+        <a href="${href}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:600;line-height:1;color:#ffffff !important;text-decoration:none !important;letter-spacing:-0.1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">${label}</a>
+      </td>
+    </tr></table>
+  </td></tr></table>`;
 }
 
 /**
- * Why this message arrived, in the footer's fine print.
+ * Why this message arrived.
  *
- * An invite goes to someone who does not have an account, so the default line
- * would be a plain falsehood — and "you're receiving this because you have an
- * account" on a cold email is exactly the kind of thing that gets a sender
- * marked as spam. Callers sending to non-users pass their own reason.
+ * No longer rendered — the fine print under the card was cut deliberately. The
+ * parameter stays because callers pass a reason that is true of their specific
+ * audience, and the one place it still has to appear is a list mail: the
+ * scheduled report puts its unsubscribe link in this string, and mail to people
+ * who never signed up needs a visible way out or it gets reported.
+ *
+ * `shell` therefore still renders it when a caller passes one, and shows
+ * nothing when they don't.
  */
-const DEFAULT_REASON = "You're receiving this because you have a Quantalog account.";
+const DEFAULT_REASON = "";
 
-export function shell(inner: string, reason: string = DEFAULT_REASON): string {
-  return `<div style="background:#0b0c0f;padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+/**
+ * What goes under the card.
+ *
+ * Both footers carry the Dashboard/Docs/Website row. Dropping it entirely made
+ * the transactional mails look unfinished rather than restrained — a message
+ * that ends in a line of grey legal text and nothing else reads like it was
+ * cut short, and those links are also the cheapest signal that a real product
+ * sent this and not someone phishing for a code.
+ *
+ * What separates them is the sales pitch above the links. "Real-time
+ * analytics, SEO audits and a multi-tenant API" belongs on a broadcast or an
+ * invitation. On a password reset it is a sentence about a multi-tenant API
+ * answering someone who is trying to find out whether their account is
+ * compromised.
+ */
+export type ShellFooter = "product" | "minimal";
+
+export function shell(
+  inner: string,
+  reason: string = DEFAULT_REASON,
+  footer: ShellFooter = "product",
+): string {
+  return `<div style="background:${C.page};padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <!--[if mso]>
   <style>
     /* Outlook's Word engine drops border-radius and renders every background
@@ -428,90 +547,91 @@ export function shell(inner: string, reason: string = DEFAULT_REASON): string {
     .card, .panel { border-radius: 0 !important; }
   </style>
   <![endif]-->
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:0 auto">
 
-    <!-- Header. Kept dark rather than an emerald band: the logo tile is itself
-         an emerald gradient, and on a green background the tile vanishes and
-         only the white glyph reads — which is not the app's mark. -->
-    <tr><td style="background:#131519;border:1px solid #22252c;border-bottom:none;border-radius:16px 16px 0 0;padding:24px 32px">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td style="padding-right:10px;vertical-align:middle">${LOGO_IMG}</td>
-        <td style="vertical-align:middle;font-size:19px;font-weight:700;color:#f3f4f6;letter-spacing:-0.3px">Quantalog<span style="color:#10b981">.</span></td>
+    <!-- One card, not three stacked panels. The header/body/footer used to be
+         separate cells with their own backgrounds and shared borders, which is
+         what made the message read as a stack of boxes rather than a letter. -->
+    <tr><td class="card" style="background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:${S.major}px">
+
+      <!-- Logo, centred, on the card's own white. The old header sat the mark
+           on its own darker band, which fought the card it was attached to. -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto ${S.major}px"><tr>
+        <td style="padding-right:9px;vertical-align:middle">${LOGO_IMG}</td>
+        <td style="vertical-align:middle;font-size:17px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Quantalog<span style="color:${C.accent}">.</span></td>
       </tr></table>
-    </td></tr>
 
-    <tr><td style="background:#16181d;border-left:1px solid #22252c;border-right:1px solid #22252c;padding:30px 32px 32px">
       ${inner}
+
+      <!-- Footer, inside the card and behind a rule. Outside it, in its own
+           panel, it read as a second message rather than the end of this one. -->
+      <div style="margin-top:${S.major}px;padding-top:${S.section}px;border-top:1px solid ${C.line};text-align:center">
+        ${
+          footer === "product"
+            ? `<p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:${C.faint}">
+          Real-time analytics, SEO audits and a multi-tenant API — from one script tag.
+        </p>`
+            : ""
+        }
+        <p style="margin:0;font-size:13px">
+          <a href="${LINKS.app}" style="color:${C.accent};text-decoration:none;font-weight:600">Dashboard</a>
+          <span style="color:${C.line}"> &nbsp;·&nbsp; </span>
+          <a href="${LINKS.docs}" style="color:${C.accent};text-decoration:none;font-weight:600">Docs</a>
+          <span style="color:${C.line}"> &nbsp;·&nbsp; </span>
+          <a href="${LINKS.site}" style="color:${C.accent};text-decoration:none;font-weight:600">Website</a>
+        </p>
+      </div>
     </td></tr>
 
-    <!-- Footer: product links, then the legal line. -->
-    <tr><td style="background:#131519;border:1px solid #22252c;border-top:none;border-radius:0 0 16px 16px;padding:20px 32px">
-      <p style="margin:0 0 14px;font-size:13px;line-height:1.6;color:#9aa1ad">
-        Real-time analytics, SEO audits and a multi-tenant API — from one script tag.
-      </p>
-      <p style="margin:0;font-size:13px">
-        <a href="${LINKS.app}" style="color:#34d399;text-decoration:none;font-weight:500">Dashboard</a>
-        <span style="color:#3a3f4a"> &nbsp;·&nbsp; </span>
-        <a href="${LINKS.docs}" style="color:#34d399;text-decoration:none;font-weight:500">Docs</a>
-        <span style="color:#3a3f4a"> &nbsp;·&nbsp; </span>
-        <a href="${LINKS.site}" style="color:#34d399;text-decoration:none;font-weight:500">Website</a>
-      </p>
-    </td></tr>
-
-    <tr><td style="padding:18px 8px 0;text-align:center">
-      <p style="margin:0;font-size:11px;line-height:1.7;color:#6b7280">
-        ${reason}<br>
-        <a href="${LINKS.site}" style="color:#6b7280;text-decoration:underline">quantalog.daorbit.in</a>
-      </p>
-    </td></tr>
+    ${
+      // Only list mail carries a line under the card now — and it is there to
+      // hold an unsubscribe link, not to explain itself. Everything else ends
+      // at the card, which is what "quantalog.daorbit.in" repeated under a
+      // message already signed Quantalog was adding nothing to.
+      reason
+        ? `<tr><td style="padding:${S.section}px 8px 0;text-align:center">
+      <p style="margin:0;font-size:11.5px;line-height:1.7;color:${C.faint}">${reason}</p>
+    </td></tr>`
+        : ""
+    }
   </table>
 </div>`;
 }
 
-function otpHtml(code: string, minutes: number): string {
-  return shell(`
-      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center">Verify your account</p>
-      <p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${C.dim};text-align:center">
-        Enter this code on the signup page to finish creating your account.
-      </p>
-
-      <!-- The code panel is the whole point of this email, so it gets the only
-           accent border in the shell and nothing else competes for attention. -->
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0">
-        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.accentDeep};border-radius:12px;padding:24px;text-align:center">
-          <div style="font-size:36px;font-weight:700;letter-spacing:12px;text-indent:12px;color:${C.accent};font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
-          <div style="margin-top:12px;font-size:12px;color:${C.faint}">Valid for ${minutes} minutes</div>
-        </td></tr>
-      </table>
-
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
-        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint};text-align:center">
-          If you didn't request this code, you can safely ignore this email —
-          no account has been created.
-        </p>
-      </div>`);
+/**
+ * The signup code.
+ *
+ * Centred and short. Someone reads this for about four seconds with the signup
+ * page still open in another window, so it is a heading, a line telling them
+ * where the code goes, the code, and the one caveat that matters.
+ *
+ * The footer is the minimal one: offering Dashboard and Docs links to an
+ * account that does not exist yet is two ways to leave the flow.
+ */
+export function otpHtml(code: string, minutes: number): string {
+  return shell(
+    `${heading("Verify your account")}
+     ${paragraph("Enter this code on the signup page to finish creating your account.")}
+     ${codePanel(code, minutes)}
+     ${footnote(
+       "If you didn't request this code, you can safely ignore this email — no account has been created.",
+     )}`,
+    undefined,
+    "minimal",
+  );
 }
 
-function resetHtml(code: string, minutes: number): string {
-  return shell(`
-      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center">Reset your password</p>
-      <p style="margin:8px 0 0;font-size:14px;line-height:1.65;color:${C.dim};text-align:center">
-        Enter this code on the password reset page to choose a new password.
-      </p>
-
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0 0">
-        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.accentDeep};border-radius:12px;padding:24px;text-align:center">
-          <div style="font-size:36px;font-weight:700;letter-spacing:12px;text-indent:12px;color:${C.accent};font-family:'SF Mono',SFMono-Regular,Menlo,Consolas,monospace">${code}</div>
-          <div style="margin-top:12px;font-size:12px;color:${C.faint}">Valid for ${minutes} minutes</div>
-        </td></tr>
-      </table>
-
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
-        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint};text-align:center">
-          If you didn't ask to reset your password, ignore this email — your
-          password has not changed, and nobody can change it without this code.
-        </p>
-      </div>`);
+export function resetHtml(code: string, minutes: number): string {
+  return shell(
+    `${heading("Reset your password")}
+     ${paragraph("Enter this code on the password reset page to choose a new password.")}
+     ${codePanel(code, minutes)}
+     ${footnote(
+       "If you didn't ask to reset your password, ignore this email — your password has not changed, and nobody can change it without this code.",
+     )}`,
+    undefined,
+    "minimal",
+  );
 }
 
 /**
@@ -521,25 +641,36 @@ function resetHtml(code: string, minutes: number): string {
  * not expect it has minutes, not days, and burying the instruction under
  * reassurance would waste them.
  */
-function passwordChangedHtml(): string {
-  return shell(`
-      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Your password was changed</p>
-      <p style="margin:12px 0 0;font-size:15px;line-height:1.7;color:${C.dim}">
-        The password on your Quantalog account was just changed. If that was
-        you, there is nothing to do.
-      </p>
+export function passwordChangedHtml(): string {
+  return shell(
+    `${heading("Your password was changed")}
+     ${paragraph(
+       "The password on your Quantalog account was just changed. If that was you, there is nothing to do.",
+     )}
 
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:20px 0 0">
-        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.line};border-radius:12px;padding:18px 20px">
-          <p style="margin:0;font-size:14px;line-height:1.7;color:${C.dim}">
-            <strong style="color:${C.text}">If it wasn't you</strong>, someone
-            else may have access to your account. Reset your password again
-            straight away, and check that your email account is still secure.
-          </p>
-        </td></tr>
-      </table>
+     <!-- The warning carries a red left edge rather than a full red panel. A
+          message that turns out to be routine — which most of these are, since
+          this goes out on every successful reset — should not open by shouting;
+          but the one reader for whom it is not routine has to find this
+          paragraph immediately, and a coloured edge does that without making
+          the other ninety-nine feel attacked. -->
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0">
+       <tr>
+         <td width="3" style="background:${C.danger};border-radius:3px 0 0 3px;font-size:0;line-height:0">&nbsp;</td>
+         <td class="panel" style="background:${C.panel};border-radius:0 10px 10px 0;padding:16px 20px;text-align:left">
+           <p style="margin:0;font-size:14.5px;line-height:1.7;color:${C.dim}">
+             <strong style="color:${C.text}">If it wasn't you</strong>, someone else may have
+             access to your account. Reset your password again straight away, and check that
+             your email account is still secure.
+           </p>
+         </td>
+       </tr>
+     </table>
 
-      ${button("Reset your password", `${LINKS.app}/forgot-password`)}`);
+     ${button("Reset your password", `${LINKS.app}/forgot-password`)}`,
+    undefined,
+    "minimal",
+  );
 }
 
 /**
@@ -560,8 +691,8 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
       // heading would — without inventing a heading the author didn't write.
       const style =
         i === 0
-          ? "margin:0 0 16px;font-size:16px;font-weight:600;color:#f3f4f6;line-height:1.6"
-          : "margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad";
+          ? `margin:0 0 ${S.block}px;font-size:15.5px;font-weight:600;color:${C.text};line-height:1.6`
+          : `margin:0 0 ${S.block}px;${T.body}`;
       return `<p style="${style}">${html}</p>`;
     })
     .join("");
@@ -620,11 +751,11 @@ const INVITE_FEATURES: { title: string; body: string }[] = [
 function featureRow({ title, body }: { title: string; body: string }): string {
   return `<tr>
     <td style="padding:0 0 18px;vertical-align:top;width:18px">
-      <div style="width:7px;height:7px;border-radius:50%;background:#10b981;margin-top:6px"></div>
+      <div style="width:7px;height:7px;border-radius:50%;background:${C.accent};margin-top:6px"></div>
     </td>
     <td style="padding:0 0 18px;vertical-align:top">
-      <p style="margin:0;font-size:14px;font-weight:600;color:#e8eaee;letter-spacing:-0.1px">${escapeHtml(title)}</p>
-      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:#9aa1ad">${escapeHtml(body)}</p>
+      <p style="margin:0;font-size:14px;font-weight:600;color:${C.text};letter-spacing:-0.1px">${escapeHtml(title)}</p>
+      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:${C.dim}">${escapeHtml(body)}</p>
     </td>
   </tr>`;
 }
@@ -651,8 +782,8 @@ export function inviteHtml(
       const html = block.replace(/\n/g, "<br>");
       const style =
         i === 0
-          ? "margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px"
-          : "margin:0 0 14px;font-size:15px;line-height:1.7;color:#9aa1ad";
+          ? `margin:0 0 14px;font-size:16px;font-weight:600;color:${C.text};line-height:1.55;letter-spacing:-0.2px`
+          : `margin:0 0 14px;${T.body}`;
       return `<p style="${style}">${html}</p>`;
     })
     .join("");
@@ -664,9 +795,9 @@ export function inviteHtml(
   return shell(
     `${paragraphs}
 
-    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
+    <div style="margin:${S.section}px 0;height:1px;background:${C.line}"></div>
 
-    <p style="margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
+    <p style="margin:0 0 ${S.block}px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">
       What you get
     </p>
 
@@ -677,9 +808,9 @@ export function inviteHtml(
     <!-- The caveats sit above the button, not below it. A paragraph after the
          call to action competes with the one thing this message is asking for,
          and the demo link in particular is an invitation to not sign up. -->
-    <p style="margin:6px 0 0;font-size:13px;line-height:1.65;color:#9aa1ad">
+    <p style="margin:6px 0 0;font-size:13.5px;line-height:1.65;color:${C.dim}">
       Free to start, and the tracker is one line — or try the
-      <a href="${escapeAttr(LINKS.site)}" style="color:#34d399;text-decoration:none;font-weight:500">live demo</a>
+      <a href="${escapeAttr(LINKS.site)}" style="color:${C.accent};text-decoration:none;font-weight:600">live demo</a>
       first, which needs no account at all.
     </p>
 
@@ -724,35 +855,32 @@ export function forBrowser(html: string): string {
 export function contactAckHtml(name: string, subject: string, message: string): string {
   const quoted = escapeHtml(message).replace(/\n/g, "<br>");
 
+  // Left-aligned, unlike the code mails: this one has real prose and a quoted
+  // block, and centred paragraphs stop being readable past a couple of lines
+  // because every line starts somewhere different.
   return shell(
-    `<p style="margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px">
-      Thanks, ${escapeHtml(name)} — we have your message.
-    </p>
+    `${heading(`Thanks, ${escapeHtml(name)} — we have your message.`, "left")}
+    ${paragraph(
+      "A person reads every message that comes through this form. You should hear back at this address within one working day.",
+      S.block,
+      "left",
+    )}
 
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad">
-      A person reads every message that comes through this form. You should hear
-      back at this address within one working day.
-    </p>
+    ${label("What you sent")}
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr><td class="panel" style="background:${C.panel};border-radius:10px;padding:18px 20px">
+        <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${C.faint}">Subject</p>
+        <p style="margin:0;font-size:14.5px;font-weight:600;line-height:1.5;color:${C.text}">${escapeHtml(subject)}</p>
+        <div style="height:1px;background:${C.line};margin:${S.block}px 0"></div>
+        <p style="margin:0;font-size:14px;line-height:1.75;color:${C.dim}">${quoted}</p>
+      </td></tr>
+    </table>
 
-    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
-
-    <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
-      What you sent
-    </p>
-
-    <p style="margin:0 0 10px;font-size:13px;color:#6b7280">
-      Subject: <span style="color:#9aa1ad">${escapeHtml(subject)}</span>
-    </p>
-
-    <div style="padding:14px 16px;background:#131519;border:1px solid #22252c;border-radius:10px">
-      <p style="margin:0;font-size:14px;line-height:1.7;color:#9aa1ad">${quoted}</p>
-    </div>
-
-    <p style="margin:22px 0 0;font-size:14px;line-height:1.7;color:#9aa1ad">
-      No need to reply to this — it is just a receipt. If you remember something
-      you left out, reply to this email and it will reach the same place.
-    </p>`,
-    "You're receiving this because you sent a message through the contact form on quantalog.daorbit.in."
+    ${paragraph(
+      "No need to reply to this — it is just a receipt. If you remember something you left out, reply to this email and it will reach the same place.",
+      S.section,
+      "left",
+    )}`,
   );
 }
 
@@ -783,28 +911,29 @@ export function contactReplyHtml(body: string, original: string): string {
     .split(/\n{2,}/)
     .map(
       (block) =>
-        `<p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#d6dae1">${block.replace(
+        `<p style="margin:0 0 ${S.block}px;font-size:14.5px;line-height:1.7;color:${C.text}">${block.replace(
           /\n/g,
           "<br>"
         )}</p>`
     )
     .join("");
 
+  // The reply itself is set in the heading colour, not body grey: this is a
+  // person writing back, and it should read as the message rather than as
+  // supporting text around the quote below it.
   return shell(
     `${paragraphs}
 
-    <div style="margin:24px 0 22px;height:1px;background:#22252c"></div>
+    <div style="margin:${S.section}px 0;height:1px;background:${C.line}"></div>
 
-    <p style="margin:0 0 12px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#6b7280">
-      Your original message
-    </p>
+    ${label("Your original message", 0)}
 
-    <div style="padding:14px 16px;background:#131519;border:1px solid #22252c;border-radius:10px">
-      <p style="margin:0;font-size:14px;line-height:1.7;color:#6b7280">${escapeHtml(
+    <div class="panel" style="padding:16px 18px;background:${C.panel};border-radius:10px">
+      <p style="margin:0;font-size:14px;line-height:1.7;color:${C.faint}">${escapeHtml(
         original
       ).replace(/\n/g, "<br>")}</p>
     </div>`,
-    "You're receiving this because you contacted Quantalog. Reply to this email to continue the conversation."
+    "Reply to this email to continue the conversation."
   );
 }
 
@@ -871,42 +1000,46 @@ function invoiceRow(label: string, value: string, strong = false): string {
   </tr>`;
 }
 
-function invoiceHtml(invoice: {
+export function invoiceHtml(invoice: {
   number: string;
   description: string;
   amountLabel: string;
   paymentId: string;
   dateLabel: string;
 }): string {
-  return shell(`
-      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Payment received</p>
-      <p style="margin:10px 0 0;font-size:15px;line-height:1.7;color:${C.dim}">
-        Thanks — your payment went through and your account has already been
-        updated. Your receipt is attached to this email as a PDF.
-      </p>
+  // Left-aligned throughout: a receipt is a document someone files or forwards
+  // to an accountant, and a centred one reads as a notification rather than a
+  // record.
+  return shell(
+    `${heading("Payment received", "left")}
+     ${paragraph(
+       "Thanks — your payment went through and your account has already been updated. Your receipt is attached to this email as a PDF.",
+       S.block,
+       "left",
+     )}
 
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:22px 0 0">
-        <tr><td class="panel" style="background:${C.panel};border:1px solid ${C.line};border-radius:12px;padding:18px 20px">
-          <p style="margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">
-            Receipt ${escapeHtml(invoice.number)}
-          </p>
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-            ${invoiceRow("Item", invoice.description)}
-            ${invoiceRow("Date", invoice.dateLabel)}
-            ${invoiceRow("Payment reference", invoice.paymentId || "—")}
-            <tr><td colspan="2" style="padding:4px 0"><div style="height:1px;background:${C.line}"></div></td></tr>
-            ${invoiceRow("Total paid", invoice.amountLabel, true)}
-          </table>
-        </td></tr>
-      </table>
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0">
+       <tr><td class="panel" style="background:${C.panel};border-radius:10px;padding:20px">
+         <p style="margin:0 0 ${S.tight}px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">
+           Receipt ${escapeHtml(invoice.number)}
+         </p>
+         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+           ${invoiceRow("Item", invoice.description)}
+           ${invoiceRow("Date", invoice.dateLabel)}
+           ${invoiceRow("Payment reference", invoice.paymentId || "—")}
+           <tr><td colspan="2" style="padding:6px 0"><div style="height:1px;background:${C.line}"></div></td></tr>
+           ${invoiceRow("Total paid", invoice.amountLabel, true)}
+         </table>
+       </td></tr>
+     </table>
 
-      <p style="margin:20px 0 0;font-size:12.5px;line-height:1.65;color:${C.faint}">
-        This is a payment receipt, not a tax invoice — no GST has been charged
-        or collected. Every receipt stays available under Billing in your
-        dashboard.
-      </p>
+     ${footnote(
+       "This is a payment receipt, not a tax invoice — no GST has been charged or collected. Every receipt stays available under Billing in your dashboard.",
+       "left",
+     )}
 
-      ${button("View billing", `${LINKS.app}/billing`)}`);
+     ${button("View billing", `${LINKS.app}/billing`)}`,
+  );
 }
 
 /* ------------------------------ newsletter -------------------------------- */
@@ -924,23 +1057,18 @@ function invoiceHtml(invoice: {
  */
 export function newsletterAckHtml(): string {
   return shell(
-    `<p style="margin:0 0 14px;font-size:17px;font-weight:600;color:#f3f4f6;line-height:1.55;letter-spacing:-0.2px">
-      You're on the list.
-    </p>
+    `${heading("You're on the list.")}
+     ${paragraph(
+       "We write when there is something worth reading — new features, and what we learn building analytics that runs without cookies. A few times a month at most, and never a sales sequence.",
+     )}
+     ${paragraph(
+       "Nothing to do from here. To stop, reply with &quot;unsubscribe&quot; and you're off the list.",
+     )}
 
-    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#9aa1ad">
-      We write when there is something worth reading — new features, and what we
-      learn building analytics that runs without cookies. A few times a month at
-      most, and never a sales sequence.
-    </p>
-
-    <p style="margin:0;font-size:15px;line-height:1.7;color:#9aa1ad">
-      Nothing to do from here. To stop, reply with "unsubscribe" and you're off
-      the list.
-    </p>
-
-    ${button("Try the live demo", LINKS.site)}`,
-    "You're receiving this because you subscribed to the Quantalog newsletter on quantalog.daorbit.in."
+     ${button("Try the live demo", LINKS.site)}`,
+    // A subscriber has no account, and this is list mail — the line under the
+    // card is where an unsubscribe route has to stay visible.
+    "You subscribed to the Quantalog newsletter on quantalog.daorbit.in. Reply with \"unsubscribe\" to stop.",
   );
 }
 
@@ -1010,29 +1138,37 @@ This invitation expires in ${invite.expiresInDays} days. If you weren't expectin
   );
 }
 
-function workspaceInviteHtml(
+export function workspaceInviteHtml(
   invite: { workspaceName: string; inviterName: string; expiresInDays: number },
   link: string,
   roleLine: string,
   what: string,
 ): string {
-  return shell(`
-      <p style="margin:0;font-size:20px;font-weight:700;color:${C.text};letter-spacing:-0.3px">
-        You've been invited to a workspace
-      </p>
-      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">
-        <strong style="color:${C.text}">${escapeHtml(invite.inviterName)}</strong> invited you to
-        <strong style="color:${C.text}">${escapeHtml(invite.workspaceName)}</strong> on Quantalog.
-      </p>
-      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">${escapeHtml(roleLine)}</p>
-      <p style="margin:10px 0 0;font-size:14px;line-height:1.65;color:${C.dim}">${escapeHtml(what)}</p>
+  // The workspace name gets its own block rather than sitting inside a
+  // sentence. What the reader is deciding is whether to join *this* workspace,
+  // and an invite that makes them parse a paragraph to find its name is the
+  // kind that gets mistaken for phishing.
+  return shell(
+    `${heading("You've been invited to a workspace")}
+     ${paragraph(
+       `<strong style="color:${C.text}">${escapeHtml(invite.inviterName)}</strong> invited you to join`,
+     )}
 
-      ${button("Accept invitation", link)}
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.block}px 0 0">
+       <tr><td class="panel" align="center" style="background:${C.panel};border-radius:10px;padding:18px 20px">
+         <p style="margin:0;font-size:16px;font-weight:700;line-height:1.4;color:${C.text};letter-spacing:-0.2px">${escapeHtml(invite.workspaceName)}</p>
+         <p style="margin:5px 0 0;font-size:13px;line-height:1.6;color:${C.faint}">${escapeHtml(roleLine)}</p>
+       </td></tr>
+     </table>
 
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid ${C.line}">
-        <p style="margin:0;font-size:12.5px;line-height:1.65;color:${C.faint}">
-          This invitation expires in ${invite.expiresInDays} days. If you weren't expecting it,
-          you can ignore this email — nothing has been shared with you until you accept.
-        </p>
-      </div>`);
+     ${paragraph(escapeHtml(what))}
+
+     ${button("Accept invitation", link)}
+
+     ${footnote(
+       `This invitation expires in ${invite.expiresInDays} days. If you weren't expecting it, you can ignore this email — nothing has been shared with you until you accept.`,
+     )}`,
+    undefined,
+    "minimal",
+  );
 }

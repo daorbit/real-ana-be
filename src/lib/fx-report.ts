@@ -1,4 +1,4 @@
-import { sendOne, mailConfigured, shell, button } from "./mail.js";
+import { sendOne, mailConfigured, shell, button, C } from "./mail.js";
 import type { RepriceResult } from "./fx.js";
 
 /**
@@ -39,7 +39,7 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
       return `<tr>${cells
         .map(
           (cell, i) =>
-            `<td style="padding:8px 12px;border-top:1px solid #22252c;color:${i === 0 ? "#f3f4f6" : "#9ca3af"};font-size:14px">${cell}</td>`
+            `<td style="padding:9px 12px;border-top:1px solid ${C.line};color:${i === 0 ? C.text : C.dim};font-weight:${i === 0 ? 600 : 400};font-size:14px">${cell}</td>`
         )
         .join("")}</tr>`;
     })
@@ -47,7 +47,7 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
 
   const header = ["Plan", `${result.base} / month`]
     .concat(result.derived.map((c) => `${c} / month`))
-    .map((h) => `<th style="padding:8px 12px;text-align:left;color:#6b7280;font-size:12px;text-transform:uppercase;letter-spacing:0.4px">${h}</th>`)
+    .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
     .join("");
 
   const text = [
@@ -64,17 +64,16 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
   ].join("\n");
 
   const html = shell(
-    `<p style="margin:0 0 8px;font-size:17px;font-weight:600;color:#f3f4f6">Plan prices repriced</p>
-     <p style="margin:0 0 20px;font-size:14px;color:#9ca3af">
+    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan prices repriced</p>
+     <p style="margin:0 0 20px;font-size:14.5px;line-height:1.7;color:${C.dim}">
        ${result.plans.length} plan${result.plans.length === 1 ? "" : "s"} updated from the ${result.base} price at today's rate.
-       <br><span style="color:#10b981;font-weight:600">${rates}</span>
+       <br><span style="color:${C.accent};font-weight:600">${rates}</span>
      </p>
      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
        <tr>${header}</tr>
        ${rows}
      </table>
-     <p style="margin:20px 0 0;font-size:12px;color:#6b7280">Triggered by ${source}.</p>`,
-    "You're receiving this because you're listed as the billing operator for Quantalog."
+     <p style="margin:20px 0 0;font-size:12.5px;color:${C.faint}">Triggered by ${source}.</p>`,
   );
 
   await deliver(to, `Plan prices repriced — ${rates}`, text, html);
@@ -94,15 +93,16 @@ export async function sendFxFailureReport(error: string, source: string): Promis
   ].join("\n");
 
   const html = shell(
-    `<p style="margin:0 0 8px;font-size:17px;font-weight:600;color:#f3f4f6">Plan repricing failed</p>
-     <p style="margin:0 0 16px;font-size:14px;color:#9ca3af">
+    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan repricing failed</p>
+     <p style="margin:0 0 16px;font-size:14.5px;line-height:1.7;color:${C.dim}">
        The exchange rate could not be fetched, so no plan was changed.
        Prices are still yesterday's — nothing is broken for customers.
      </p>
-     <p style="margin:0 0 20px;padding:12px 14px;background:#1a1214;border:1px solid #3f2226;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:#fca5a5">${escapeHtml(error)}</p>
+     <!-- The error keeps its own tinted block: this mail is read by whoever has
+          to act on it, and the exact string is the first thing they need. -->
+     <p style="margin:0 0 20px;padding:13px 15px;background:#fef2f2;border-radius:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.6;color:#b91c1c;word-break:break-word">${escapeHtml(error)}</p>
      ${button("Open admin billing", `${process.env.APP_URL || "https://studio-quantalog.daorbit.in"}/admin/billing`)}
-     <p style="margin:20px 0 0;font-size:12px;color:#6b7280">Triggered by ${source}.</p>`,
-    "You're receiving this because you're listed as the billing operator for Quantalog."
+     <p style="margin:20px 0 0;font-size:12.5px;color:${C.faint}">Triggered by ${source}.</p>`,
   );
 
   await deliver(to, "Plan repricing failed — prices unchanged", text, html);

@@ -42,8 +42,8 @@ function appUrl(): string {
 
 /** Emerald for up, red for down, grey for flat or unknown. Bounce rate is inverted by the caller, not here. */
 function deltaColor(delta: number | null | undefined): string {
-  if (delta === null || delta === undefined || delta === 0) return "#6b7280";
-  return delta > 0 ? "#10b981" : "#f87171";
+  if (delta === null || delta === undefined || delta === 0) return C.faint;
+  return delta > 0 ? C.accent : C.danger;
 }
 
 function deltaText(delta: number | null | undefined): string {
@@ -106,7 +106,7 @@ function breakdown(title: string, rows: { label: string; value: number }[], form
   return `
     <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:${C.text}">${escapeHtml(title)}</p>
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="panel"
-      style="background:${C.panel};border:1px solid ${C.line};border-radius:10px;margin:0 0 20px">
+      style="background:${C.panel};border-radius:10px;margin:0 0 20px">
       ${top.map((r) => barRow(escapeHtml(r.label), format(r.value), (r.value / max) * 100)).join("")}
     </table>`;
 }
@@ -120,8 +120,8 @@ function seoBlock(seo: SeoRow[]): string {
       const moved = r.previousScore === undefined ? null : Math.round(r.score - r.previousScore);
       const movement =
         moved === null || moved === 0
-          ? '<span style="color:#6b7280">—</span>'
-          : `<span style="color:${moved > 0 ? "#10b981" : "#f87171"}">${moved > 0 ? "+" : ""}${moved} pts</span>`;
+          ? `<span style="color:${C.faint}">—</span>`
+          : `<span style="color:${moved > 0 ? C.accent : C.danger}">${moved > 0 ? "+" : ""}${moved} pts</span>`;
       return `<tr>
         <td style="padding:9px 12px;border-top:1px solid ${C.line};font-size:13px;color:${C.dim};word-break:break-all">${escapeHtml(r.url)}</td>
         <td style="padding:9px 12px;border-top:1px solid ${C.line};font-size:13px;color:${C.text};font-weight:700">${r.score}</td>
@@ -133,7 +133,7 @@ function seoBlock(seo: SeoRow[]): string {
   return `
     <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:${C.text}">SEO scores</p>
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="panel"
-      style="background:${C.panel};border:1px solid ${C.line};border-radius:10px;border-collapse:separate;margin:0 0 20px">
+      style="background:${C.panel};border-radius:10px;border-collapse:separate;margin:0 0 20px">
       <tr>
         ${["Page", "Score", "Change"]
           .map(
@@ -166,19 +166,22 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
   const html = shell(
     `${
       input.isTest
-        ? `<p style="margin:0 0 16px;padding:10px 12px;background:#12213a;border:1px solid #1e3a5f;border-radius:8px;font-size:13px;color:#93c5fd">
+        ? `<p style="margin:0 0 20px;padding:11px 14px;background:#eff6ff;border-radius:8px;font-size:13px;line-height:1.6;color:#1d4ed8">
              This is a test send. Scheduled reports will look exactly like this.
            </p>`
         : ""
     }
-     <p style="margin:0 0 3px;font-size:19px;font-weight:700;color:${C.text};letter-spacing:-0.3px">${escapeHtml(input.workspaceName)}</p>
-     <p style="margin:0 0 20px;font-size:13.5px;color:${C.dim}">${escapeHtml(input.periodLabel)}</p>
+     <p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">${escapeHtml(input.workspaceName)}</p>
+     <p style="margin:0 0 22px;font-size:13px;color:${C.faint}">${escapeHtml(input.periodLabel)}</p>
      ${metricGrid(input.metrics)}
      ${breakdown("Top pages", input.topPages ?? [], (n) => n.toLocaleString("en-US"))}
      ${seoBlock(input.seo)}
      ${input.xlsx ? `<p style="margin:0 0 20px;font-size:12.5px;color:${C.faint}">The full breakdown is attached as a spreadsheet.</p>` : ""}
      ${input.dashboardUrl ? button("Open live dashboard", input.dashboardUrl) : button("Open Quantalog", appUrl())}`,
-    `You're receiving this because someone shares their Quantalog reports with you. <a href="${input.unsubscribeUrl}" style="color:#6b7280">Unsubscribe</a>.`
+    // This is the one message that must keep a line under the card: most
+    // recipients never signed up for anything, and the unsubscribe link is what
+    // separates a report from a spam complaint.
+    `Someone shares their Quantalog reports with you. <a href="${input.unsubscribeUrl}" style="color:${C.faint}">Unsubscribe</a>.`
   );
 
   await sendReport(input, title, text, html);
