@@ -194,6 +194,20 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
 });
 
 /**
+ * What a pack's credits are called on a receipt.
+ *
+ * A lookup rather than a ternary for the same reason as `ADDON_CREDIT_FIELD`
+ * below: with three pack types, `audit ? … : …` silently labels Orbit questions
+ * as crawls — and on a receipt that is a financial document stating something
+ * that was never sold.
+ */
+function creditNoun(type: AddonType, count: number): string {
+  const noun =
+    type === "audit" ? "audit" : type === "crawl" ? "crawl" : "Orbit question";
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
  * Which subscription field each kind of pack credits.
  *
  * A lookup rather than a ternary because there are now three kinds: a
@@ -600,10 +614,25 @@ async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: strin
  * appear — an abandoned checkout is not a purchase.
  */
 router.get("/invoices", async (req: AuthedRequest, res: Response) => {
+
+  const rawWorkspaceId = String(req.query.workspaceId ?? "").trim();
+  let workspaceFilter: Record<string, unknown> = {};
+
+  if (rawWorkspaceId) {
+    if (!mongoose.isValidObjectId(rawWorkspaceId))
+      return res.status(404).json({ error: "workspace not found" });
+
+    const access = await resolveAccess(req, "viewer", rawWorkspaceId);
+    if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+    workspaceFilter = { workspaceId: access.workspace.id };
+  }
+
   const query = {
     userId: req.userId,
     status: "paid" as const,
     invoiceNumber: { $nin: ["", null] },
+    ...workspaceFilter,
   };
 
   const [plans, addons] = await Promise.all([
@@ -642,7 +671,7 @@ router.get("/invoices", async (req: AuthedRequest, res: Response) => {
         number: a.invoiceNumber as string,
         issuedAt: a.invoicedAt,
         description: pack
-          ? `${pack.name}${packs > 1 ? ` × ${packs}` : ""} — ${pack.quantity * packs} ${pack.type === "audit" ? "audit" : "crawl"} credits`
+          ? `${pack.name}${packs > 1 ? ` × ${packs}` : ""} — ${creditNoun(pack.type as AddonType, pack.quantity * packs)}`
           : "Add-on credit pack",
         amount: a.amount,
         currency: a.currency,
