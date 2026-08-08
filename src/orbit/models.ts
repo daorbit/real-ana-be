@@ -43,10 +43,10 @@ export type OrbitModel = {
   /**
    * The lowest Orbit plan tier that may reach this model.
    *
-   * Set from what the model costs *us*, not from how good it is: the two free
-   * OpenRouter endpoints and Gemma are "basic" because a workspace using them
-   * runs up no bill, and Gemini is "advanced" because it is the one on a paid
-   * key. See `orbit-plans.ts`.
+   * Cost sets the floor — a paid-key model can never sit in a tier the operator
+   * gives away — but above that floor the placement is a pricing decision. Only
+   * Gemma is `basic`: the free tier gets one model that works, and the fact that
+   * a choice of models exists at all is itself part of what a plan buys.
    */
   tier: OrbitTier;
 };
@@ -105,7 +105,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "openai/gpt-oss-20b:free",
     structured: false,
-    tier: "basic",
+    tier: "standard",
   },
   {
     id: "north-mini",
@@ -114,7 +114,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "cohere/north-mini-code:free",
     structured: false,
-    tier: "basic",
+    tier: "standard",
   },
 ];
 
