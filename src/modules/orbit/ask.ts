@@ -52,8 +52,16 @@ const TOTAL_BUDGET_MS = 75_000;
 /**
  * Room for a numbered fix — an SEO answer runs to several steps with a tag to
  * paste in each — plus the follow-ups.
+ *
+ * Sized against the *envelope*, not the prose. The reply is capped at 4000
+ * characters (`MAX_REPLY_CHARS`), roughly 1000 tokens, and everything else in
+ * the response is billed to the same ceiling: the JSON scaffolding, three
+ * suggestions, and — because a reply is a JSON string — a backslash for every
+ * quote and newline in it, which an answer full of `<script src="…">` produces
+ * in quantity. At 1400 a long install answer ran out of tokens mid-string and
+ * arrived as an unparseable envelope.
  */
-const MAX_TOKENS = 1400;
+const MAX_TOKENS = 2600;
 
 /** At most this many follow-ups. Three fits the panel; more is a menu. */
 const MAX_SUGGESTIONS = 3;
@@ -347,13 +355,28 @@ async function callGemini(
 
   try {
     const data = JSON.parse(res.text) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
+      candidates?: {
+        finishReason?: string;
+        content?: { parts?: { text?: string }[] };
+      }[];
     };
-    const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim();
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("").trim();
     // An empty candidate usually means the safety filter caught something, or
     // the answer was cut off before any text was produced. Either way the next
     // model in the chain should get a turn.
-    return text ? { ok: true, text } : { ok: false, status: 502, detail: "empty candidate" };
+    if (!text) return { ok: false, status: 502, detail: "empty candidate" };
+
+    // Hitting the token ceiling mid-generation leaves a JSON envelope with no
+    // closing quote or brace. It cannot be parsed, so the sanitiser has nothing
+    // to unwrap and falls back to rendering the raw source — the user reads
+    // `{"reply":"To install…` in the chat. Treat it as a failed call so the
+    // chain tries another model rather than showing the wreckage.
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      return { ok: false, status: 502, detail: "truncated at max tokens" };
+    }
+
+    return { ok: true, text };
   } catch {
     return { ok: false, status: 502, detail: "unparseable envelope" };
   }

@@ -120,10 +120,72 @@ export function unwrapNested(
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return value;
 
   const parsed = parseLooseJson<Record<string, unknown>>(trimmed);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    // The inner copy was cut off mid-generation. This is the common shape of
+    // the double-encoding failure: the outer envelope closed because it was
+    // short, while the serialised one inside it ran out of tokens. Recover the
+    // text rather than handing back JSON source to be rendered.
+    return key === "reply" ? (salvageTruncatedEnvelope(trimmed) ?? value) : value;
+  }
   if (!(key in parsed)) return value;
 
   return unwrapNested(parsed[key], key, depth - 1);
+}
+
+/**
+ * Recover the reply from an envelope that was cut off mid-generation.
+ *
+ * A model that hits its token ceiling while writing `{"reply": "…"}` leaves a
+ * string with no closing quote and no brace. Nothing can parse it, so every
+ * path above falls through to treating it as prose — and the user reads
+ * `{"reply":"To install Quantalog…` verbatim in the chat window.
+ *
+ * The answer itself is sitting right there, just missing its terminator, so
+ * this lifts the value of the first `reply` key and unescapes it by hand. The
+ * text was written for the user; only its wrapper failed.
+ *
+ * Deliberately narrow: the string must *open* with the envelope, which is what
+ * separates a broken wrapper from an answer that merely quotes JSON. A complete
+ * envelope never reaches here — `parseLooseJson` handles those — so matching
+ * only unterminated input costs nothing in the normal case.
+ */
+export function salvageTruncatedEnvelope(text: string): string | null {
+  const trimmed = stripCodeFence(text);
+  if (!trimmed.startsWith("{")) return null;
+  // Complete JSON is somebody else's job.
+  if (parseLooseJson(trimmed) !== null) return null;
+
+  const opening = /^\{\s*(?:"reply"|'reply'|reply)\s*:\s*"/.exec(trimmed);
+  if (!opening) return null;
+
+  // Walk the string body, honouring escapes, until the closing quote or the end
+  // of what we were given. Scanning by hand rather than by regex because the
+  // whole point is that this input is malformed: `[\s\S]*?"` would stop at the
+  // first escaped quote inside the answer and truncate it further.
+  let out = "";
+  for (let i = opening[0].length; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+
+    if (ch === "\\") {
+      const next = trimmed[++i];
+      if (next === undefined) break; // trailing backslash: the cut landed here
+      out +=
+        next === "n" ? "\n"
+        : next === "t" ? "\t"
+        : next === "r" ? "\r"
+        : next === "u" ? String.fromCharCode(parseInt(trimmed.slice(i + 1, i + 5), 16) || 0)
+        : next;
+      if (next === "u") i += 4;
+      continue;
+    }
+
+    if (ch === '"') break; // the value closed; anything after is envelope
+    out += ch;
+  }
+
+  const salvaged = out.trim();
+  // A few stray characters are the start of an answer we did not really get.
+  return salvaged.length >= 20 ? salvaged : null;
 }
 
 /**
@@ -205,6 +267,14 @@ export function sanitiseModelAnswer(
   // model wrote the answer twice — once as prose and once as a fenced object
   // underneath it. That block is the model restating itself, and it carries the
   // suggestions the prose copy dropped, so it is the better source.
+  // A response that is an envelope but could not be parsed is almost always one
+  // that ran out of tokens while writing it. Recovering the reply beats
+  // rendering the JSON source, and beats discarding an answer we already paid
+  // for. Suggestions are lost with the tail, so the trailing-question split is
+  // the only chance of recovering any.
+  const salvaged = salvageTruncatedEnvelope(raw);
+  if (salvaged) return asProse(salvaged, limits);
+
   const trailing = extractTrailingEnvelope(raw);
   if (trailing) {
     const fromBlock = fromEnvelope(trailing.envelope, limits);
