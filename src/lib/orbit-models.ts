@@ -18,7 +18,13 @@ export type OrbitModel = {
   id: string;
   /** Shown in the picker. */
   label: string;
-  /** One line on what it is good for, so the choice is informed. */
+  /**
+   * What it is good for, in one line.
+   *
+   * Kept to roughly thirty characters because it renders on a single row in a
+   * narrow menu — anything longer wraps to two lines and turns a scannable
+   * list into a wall of text.
+   */
   hint: string;
   provider: ModelProvider;
   /** The provider's own model name. */
@@ -46,7 +52,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
   {
     id: "gemini-flash",
     label: "Gemini Flash",
-    hint: "Fast and accurate. The default.",
+    hint: "Fast and accurate. Default.",
     provider: "gemini",
     model: process.env.GEMINI_MODEL || "gemini-flash-latest",
     structured: true,
@@ -54,7 +60,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
   {
     id: "gemma",
     label: "Gemma 4",
-    hint: "Open weights, strong at following instructions.",
+    hint: "Open weights, precise.",
     provider: "openrouter",
     model: "google/gemma-4-26b-a4b-it:free",
     structured: true,
@@ -62,7 +68,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
   {
     id: "deepseek",
     label: "DeepSeek V4",
-    hint: "Reasons through longer, multi-step questions.",
+    hint: "Best for multi-step questions.",
     provider: "openrouter",
     model: "deepseek/deepseek-v4-pro",
     structured: false,
@@ -78,7 +84,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
   {
     id: "north-mini",
     label: "North Mini",
-    hint: "Cohere's compact model. Good on technical detail.",
+    hint: "Compact, strong on detail.",
     provider: "openrouter",
     model: "cohere/north-mini-code:free",
     structured: false,
