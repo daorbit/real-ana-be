@@ -38,6 +38,7 @@ export function publicSeoReport(
     siteFiles: panels.technical ? data.siteFiles ?? null : null,
     links: panels.links ? data.links ?? null : null,
     schema: panels.schema ? data.schema ?? null : null,
+    aiSearch: panels.aiSearch ? data.aiSearch ?? null : null,
   };
 }
 

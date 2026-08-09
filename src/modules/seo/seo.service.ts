@@ -13,6 +13,7 @@ import {
   type SitemapReport,
 } from "./robots-validate.js";
 import { checkLinks, type LinkCheckReport, type PageLink } from "./link-check.js";
+import { analyzeAiSearch, type AiSearchReport } from "./ai-search.js";
 
 /**
  * On-page SEO auditing for a single URL.
@@ -157,7 +158,7 @@ export type SeoSiteFiles = {
 
 export type SeoIssue = {
   severity: "critical" | "warning" | "info";
-  area: "meta" | "content" | "technical" | "files";
+  area: "meta" | "content" | "technical" | "files" | "ai";
   title: string;
   detail: string;
 };
@@ -174,6 +175,8 @@ export type SeoReportData = {
   schema?: SchemaValidation;
   /** Link check results. Absent on reports predating the checker. */
   links?: LinkCheckReport;
+  /** AI search readiness. Absent on reports predating the checker. */
+  aiSearch?: AiSearchReport;
   issues: SeoIssue[];
   score: number;
 };
@@ -715,7 +718,8 @@ function deriveIssues(
   technical: SeoTechnical,
   files: SeoSiteFiles,
   schema?: SchemaValidation,
-  links?: LinkCheckReport
+  links?: LinkCheckReport,
+  aiSearch?: AiSearchReport
 ): SeoIssue[] {
   const issues: SeoIssue[] = [];
   const add = (
@@ -827,6 +831,19 @@ function deriveIssues(
     }
   }
 
+  // Only the blocking and actionable AI findings are promoted to issues; the
+  // rest are context that belongs in the AI Search tab, not the fix list.
+  if (aiSearch) {
+    for (const f of aiSearch.findings.filter((x) => x.severity !== "info")) {
+      add(
+        f.severity,
+        "ai",
+        f.severity === "critical" ? "Blocked from AI search" : "AI search readiness",
+        f.message
+      );
+    }
+  }
+
   const rank = { critical: 0, warning: 1, info: 2 };
   return issues.sort((a, b) => rank[a.severity] - rank[b.severity]);
 }
@@ -925,7 +942,17 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     .filter((t) => t.trim().length > 0);
   const schema = validateStructuredData(rawSchemas);
 
-  const issues = deriveIssues(meta, content, technical, siteFiles, schema, linkCheck);
+  // Needs the parsed robots groups, so it runs after checkSiteFiles rather
+  // than alongside it. Its only network call is /llms.txt.
+  const aiSearch = await analyzeAiSearch(
+    $,
+    finalUrl,
+    siteFiles.robotsReport?.groups ?? [],
+    content.schemaTypes,
+    wordCount
+  );
+
+  const issues = deriveIssues(meta, content, technical, siteFiles, schema, linkCheck, aiSearch);
 
   return {
     url,
@@ -937,6 +964,7 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     siteFiles,
     schema,
     links: linkCheck,
+    aiSearch,
     issues,
     score: overallScore(performance, issues),
   };

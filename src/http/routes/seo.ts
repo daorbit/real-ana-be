@@ -519,6 +519,7 @@ export const SEO_SHARE_PANEL_DEFAULTS: Record<string, boolean> = {
   content: false,
   links: false,
   schema: false,
+  aiSearch: false,
 };
 
 /** Normalise a stored/incoming panel map to exactly the known keys. */

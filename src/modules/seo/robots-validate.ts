@@ -199,6 +199,37 @@ export function isPathBlocked(groups: RobotsGroup[], path: string): boolean {
   const group =
     groups.find((g) => g.userAgents.includes("*")) ??
     groups.find((g) => g.userAgents.some((a) => a.includes("googlebot")));
+  return groupBlocks(group, path);
+}
+
+/**
+ * The group a named crawler obeys.
+ *
+ * Crawlers follow the most specific matching `User-agent` block and ignore the
+ * wildcard entirely when one names them — so a site with `Disallow: /` under
+ * `*` and an empty block for `GPTBot` is fully open to GPTBot. Falling back to
+ * the wildcard only when no block names the agent is what makes that come out
+ * right.
+ */
+export function groupForAgent(groups: RobotsGroup[], agent: string): RobotsGroup | undefined {
+  const needle = agent.toLowerCase();
+  return (
+    groups.find((g) => g.userAgents.some((a) => a.toLowerCase() === needle)) ??
+    groups.find((g) => g.userAgents.includes("*"))
+  );
+}
+
+/** Whether one named crawler may fetch `path`, using that crawler's own group. */
+export function isPathBlockedForAgent(
+  groups: RobotsGroup[],
+  agent: string,
+  path: string
+): boolean {
+  return groupBlocks(groupForAgent(groups, agent), path);
+}
+
+/** Longest-match Allow/Disallow resolution within a single group. */
+function groupBlocks(group: RobotsGroup | undefined, path: string): boolean {
   if (!group) return false;
 
   let longestDisallow = -1;
