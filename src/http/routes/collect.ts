@@ -118,6 +118,10 @@ router.post("/", async (req, res) => {
         source: str(body.utm?.source, 80),
         medium: str(body.utm?.medium, 80),
         campaign: str(body.utm?.campaign, 80),
+        term: str(body.utm?.term, 120),
+        content: str(body.utm?.content, 120),
+        clickId: str(body.utm?.clickId, 200),
+        landingReferrer: str(body.utm?.landingReferrer, 300),
       },
       props: body.props,
 

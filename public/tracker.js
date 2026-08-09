@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 5;
+  var VERSION = 6;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -163,12 +163,89 @@
     };
   }
 
-  function utm() {
+  /* ------------------------------------------------------------------
+   * Attribution: first-touch, sticky for the session.
+   *
+   * Reading location.search on every event only works for the landing hit —
+   * one SPA route change or internal click drops the query string and every
+   * later event reports empty UTM. So the campaign is captured once, on the
+   * first hit of a session, and replayed on everything that follows.
+   *
+   * Ad platforms and mail clients often send no utm_* at all, so the click id
+   * (gclid/fbclid/msclkid/li_fat_id) and the landing referrer are stored
+   * alongside it — those are what let the server classify the visit.
+   * ------------------------------------------------------------------ */
+  var AKEY = "_va_attr_" + siteId;
+
+  /** Ad click ids, in the order we prefer them when several are present. */
+  var CLICK_ID_PARAMS = ["gclid", "gbraid", "wbraid", "fbclid", "msclkid", "li_fat_id", "ttclid", "twclid"];
+
+  function readAttribution() {
     var q = new URLSearchParams(location.search);
+    var clickId = "";
+    for (var i = 0; i < CLICK_ID_PARAMS.length; i++) {
+      var v = q.get(CLICK_ID_PARAMS[i]);
+      if (v) {
+        clickId = CLICK_ID_PARAMS[i] + ":" + v;
+        break;
+      }
+    }
     return {
       source: q.get("utm_source") || "",
       medium: q.get("utm_medium") || "",
       campaign: q.get("utm_campaign") || "",
+      term: q.get("utm_term") || "",
+      content: q.get("utm_content") || "",
+      clickId: clickId,
+      referrer: document.referrer || "",
+    };
+  }
+
+  function attribution() {
+    var stored;
+    try {
+      stored = JSON.parse(sessionStorage.getItem(AKEY) || "null");
+    } catch (e) {
+      stored = null;
+    }
+
+    // The session id drives expiry: a new session re-attributes from scratch,
+    // so a visitor returning 30 minutes later via a different campaign is not
+    // credited to the old one.
+    var sid = session().id;
+    if (stored && stored.sid === sid) return stored.attr;
+
+    var attr = readAttribution();
+
+    // A fresh session with no campaign and no referrer inherits nothing —
+    // stored as-is so later events in the session stay consistently "direct".
+    try {
+      sessionStorage.setItem(AKEY, JSON.stringify({ sid: sid, attr: attr }));
+    } catch (e) {
+      /* storage disabled — attribution degrades to per-event, landing hit only */
+    }
+    return attr;
+  }
+
+  /**
+   * The attribution payload sent with every event. Kept under the `utm` key
+   * for wire compatibility with older collectors.
+   */
+  function utm() {
+    var a = attribution();
+
+    // A same-session internal referrer is noise; only the landing one matters.
+    var ref = a.referrer;
+    if (ref && ref.indexOf(location.origin) === 0) ref = "";
+
+    return {
+      source: a.source,
+      medium: a.medium,
+      campaign: a.campaign,
+      term: a.term,
+      content: a.content,
+      clickId: a.clickId,
+      landingReferrer: ref,
     };
   }
 

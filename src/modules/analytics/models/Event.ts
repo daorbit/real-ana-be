@@ -68,10 +68,25 @@ const eventSchema = new Schema({
     ttfb: { type: Number, default: null },
   },
 
+  /**
+   * First-touch attribution for the session, replayed by the tracker on every
+   * event — not just the landing pageview, which is all `location.search`
+   * could ever supply.
+   */
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },
     campaign: { type: String, default: "" },
+    term: { type: String, default: "" },
+    content: { type: String, default: "" },
+    /**
+     * Ad platform click id, stored as "param:value" (e.g. "gclid:abc123").
+     * Ads and mail clients frequently arrive with a click id and no utm_*, so
+     * this is what marks the visit as paid when the campaign tags are missing.
+     */
+    clickId: { type: String, default: "" },
+    /** Referrer of the session's landing page, kept for channel grouping. */
+    landingReferrer: { type: String, default: "" },
   },
   props: { type: Schema.Types.Mixed }, // custom event properties
 

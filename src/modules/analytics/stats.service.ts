@@ -93,6 +93,7 @@ export type StatsFilter = Partial<{
   path: string;
   language: string;
   utmSource: string;
+  utmMedium: string;
   utmCampaign: string;
   eventName: string;
 }>;
@@ -106,6 +107,7 @@ const FILTER_FIELDS: Record<keyof StatsFilter, string> = {
   path: "path",
   language: "language",
   utmSource: "utm.source",
+  utmMedium: "utm.medium",
   utmCampaign: "utm.campaign",
   eventName: "name",
 };
@@ -666,7 +668,7 @@ async function livePages(siteIds: string[]) {
  * The rules mirror the common GA-style grouping and are applied in Mongo so the
  * whole window is bucketed in one pass:
  *   - Paid    — a paid utm.medium (cpc/ppc/paid…) or a gclid/fbclid-style tag
- *   - Email   — utm.medium of email/newsletter
+ *   - Email   — utm.medium of email/newsletter, or a webmail referrer
  *   - Social  — referrer host is a known social network
  *   - Organic Search — referrer host is a known search engine
  *   - Referral — any other non-empty referrer
@@ -674,6 +676,16 @@ async function livePages(siteIds: string[]) {
  * The classification is a `$switch`, first match wins, top to bottom.
  */
 async function channels(match: Match) {
+  // The event's own referrer is empty on everything after the landing hit, so
+  // the session's stored landing referrer is preferred when present. Without
+  // it, every in-session pageview would fall through to "Direct".
+  const referrerSource = {
+    $cond: [
+      { $ne: [{ $ifNull: ["$utm.landingReferrer", ""] }, ""] },
+      "$utm.landingReferrer",
+      { $ifNull: ["$referrer", ""] },
+    ],
+  };
   const host = {
     // hostname of the referrer, lowercased; "" when there is no referrer
     $let: {
@@ -681,7 +693,11 @@ async function channels(match: Match) {
         noProto: {
           $replaceAll: {
             input: {
-              $replaceAll: { input: { $toLower: "$referrer" }, find: "https://", replacement: "" },
+              $replaceAll: {
+                input: { $toLower: referrerSource },
+                find: "https://",
+                replacement: "",
+              },
             },
             find: "http://",
             replacement: "",
@@ -699,6 +715,7 @@ async function channels(match: Match) {
     {
       $addFields: {
         _medium: { $toLower: { $ifNull: ["$utm.medium", ""] } },
+        _clickId: { $toLower: { $ifNull: ["$utm.clickId", ""] } },
         _host: host,
       },
     },
@@ -712,12 +729,26 @@ async function channels(match: Match) {
                   $or: [
                     has("cpc", "$_medium"), has("ppc", "$_medium"), has("paid", "$_medium"),
                     { $eq: ["$_medium", "display"] },
+                    // An ad click id is paid traffic even when the landing URL
+                    // carries no utm_* tags at all, which is common for
+                    // auto-tagged Google and Meta campaigns.
+                    { $ne: ["$_clickId", ""] },
                   ],
                 },
                 then: "Paid",
               },
               {
-                case: { $or: [{ $eq: ["$_medium", "email"] }, { $eq: ["$_medium", "newsletter"] }] },
+                case: {
+                  $or: [
+                    { $eq: ["$_medium", "email"] },
+                    { $eq: ["$_medium", "newsletter"] },
+                    // Webmail referrers: a click from Gmail or Outlook rarely
+                    // carries utm_medium=email unless the sender tagged it.
+                    has("mail.google.", "$_host"), has("mail.yahoo.", "$_host"),
+                    has("outlook.", "$_host"), has("mail.proton", "$_host"),
+                    has("mail.zoho.", "$_host"),
+                  ],
+                },
                 then: "Email",
               },
               {
@@ -850,6 +881,10 @@ export type ExportRow = {
   utmSource: string;
   utmMedium: string;
   utmCampaign: string;
+  utmTerm: string;
+  utmContent: string;
+  /** Ad click id as "param:value", e.g. "gclid:abc123". */
+  utmClickId: string;
   durationMs: number;
   scrollDepth: number;
 };
@@ -858,6 +893,7 @@ export type ExportRow = {
 export const EXPORT_COLUMNS: (keyof ExportRow)[] = [
   "timestamp", "type", "name", "path", "referrer", "device", "os", "browser",
   "country", "language", "utmSource", "utmMedium", "utmCampaign",
+  "utmTerm", "utmContent", "utmClickId",
   "durationMs", "scrollDepth",
 ];
 
@@ -898,6 +934,9 @@ export async function exportEvents(
     utmSource: e.utm?.source ?? "",
     utmMedium: e.utm?.medium ?? "",
     utmCampaign: e.utm?.campaign ?? "",
+    utmTerm: e.utm?.term ?? "",
+    utmContent: e.utm?.content ?? "",
+    utmClickId: e.utm?.clickId ?? "",
     durationMs: e.durationMs ?? 0,
     scrollDepth: e.scrollDepth ?? 0,
   }));
@@ -934,6 +973,7 @@ export async function computeStats(
     languages,
     screens,
     utmSources,
+    utmMediums,
     utmCampaigns,
     clicks,
     clickTotal,
@@ -962,6 +1002,7 @@ export async function computeStats(
     topBy(pageviewBase, "language"),
     screenSizes(pageviewBase),
     topBy(base, "utm.source"),
+    topBy(base, "utm.medium"),
     topBy(base, "utm.campaign"),
     topClicks(base),
     Event.countDocuments({ ...base, type: "click" }),
@@ -1051,6 +1092,7 @@ export async function computeStats(
     languages: clean(languages, "(unknown)"),
     screenSizes: screens,
     utmSources: clean(utmSources, "(none)"),
+    utmMediums: clean(utmMediums, "(none)"),
     utmCampaigns: clean(utmCampaigns, "(none)"),
 
     // clicks
