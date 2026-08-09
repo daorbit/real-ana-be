@@ -5,6 +5,7 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { SeoReport } from "../../modules/seo/models/SeoReport.js";
 import { Competitor } from "../../modules/seo/models/Competitor.js";
+import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
 import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import {
@@ -606,6 +607,9 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   await Event.deleteMany({ siteId: { $in: ids } });
   await SeoReport.deleteMany({ workspaceId: ws.id });
   await Competitor.deleteMany({ workspaceId: ws.id });
+  // Trend rows carry no workspace id, so they are cleared by the site ids the
+  // workspace owned — otherwise they outlive both and are unreachable.
+  await CompetitorSnapshot.deleteMany({ siteId: { $in: ids } });
   await CrawlReport.deleteMany({ workspaceId: ws.id });
   await Site.deleteMany({ workspaceId: ws.id });
   await Goal.deleteMany({ workspaceId: ws.id });
@@ -641,6 +645,7 @@ router.delete(
     await Event.deleteMany({ siteId: site.siteId });
     await SeoReport.deleteMany({ siteId: site.siteId });
     await Competitor.deleteMany({ siteId: site.siteId });
+    await CompetitorSnapshot.deleteMany({ siteId: site.siteId });
     await CrawlReport.deleteMany({ siteId: site.siteId });
     await site.deleteOne();
     res.status(204).end();

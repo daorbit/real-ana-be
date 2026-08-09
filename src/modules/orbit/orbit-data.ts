@@ -15,10 +15,20 @@
  * third-party model, so it carries aggregates only. A model provider receiving
  * "/pricing had 412 views" is a different thing from one receiving a visitor
  * log, and only the first is defensible on a support feature.
+ *
+ * The digest also carries the site's SEO standing and how it compares to any
+ * tracked competitors, which is what lets Orbit answer "how do we beat them"
+ * from real gaps rather than generic advice. That data is of a different kind
+ * but the same sensitivity: the workspace's own audit findings, and public
+ * page content already fetched from competitor sites. Still no visitor data.
  */
 
 import { Site } from "../analytics/models/Site.js";
 import { computeStats } from "../analytics/stats.service.js";
+import { SeoReport } from "../seo/models/SeoReport.js";
+import { Competitor } from "../seo/models/Competitor.js";
+import { snapshotFromReport, type CompareSnapshot } from "../seo/competitor.js";
+import { compareSnapshots } from "../seo/competitor-analysis.js";
 
 /** Rows per breakdown. Enough to spot a pattern, short enough to stay in budget. */
 const TOP_N = 5;
@@ -39,6 +49,83 @@ function change(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "";
   const rounded = Math.round(value);
   return ` (${rounded >= 0 ? "+" : ""}${rounded}% vs previous period)`;
+}
+
+/** Competitors summarised per site. More than this and the digest crowds out the rest. */
+const MAX_COMPETITORS_SUMMARISED = 3;
+
+/** Gap bullets carried per competitor, highest-value first. */
+const MAX_RECOMMENDATIONS = 3;
+
+/**
+ * The SEO standing for one site: your latest audit, and how you compare to the
+ * competitors tracked against it.
+ *
+ * This is what lets Orbit answer "how do we beat them" with the actual gaps
+ * rather than generic advice. The comparison is the same `compareSnapshots`
+ * the Compare page draws, so Orbit cannot quote a different verdict than the
+ * one on screen.
+ *
+ * Everything here is either the workspace's own audit or public page content
+ * fetched from a competitor's site. No visitor data of any kind.
+ */
+async function seoSummary(siteId: string): Promise<string> {
+  const report = await SeoReport.findOne({ siteId }).sort({ createdAt: -1 });
+  if (!report?.get("data")) return "";
+
+  const data = report.get("data") as Parameters<typeof snapshotFromReport>[0] & {
+    issues?: { severity: string; title: string }[];
+  };
+
+  const lines: string[] = [`SEO score: ${report.get("score") ?? "unknown"}/100`];
+
+  const critical = (data.issues ?? []).filter((i) => i.severity === "critical");
+  if (critical.length) {
+    lines.push(
+      `Critical issues (${critical.length}): ${critical.slice(0, 5).map((i) => i.title).join("; ")}`
+    );
+  }
+
+  const competitors = await Competitor.find({ siteId })
+    .sort({ createdAt: 1 })
+    .limit(MAX_COMPETITORS_SUMMARISED);
+
+  const tracked = competitors.filter((c) => c.get("snapshot"));
+  if (tracked.length) {
+    const mine = snapshotFromReport(data);
+
+    for (const competitor of tracked) {
+      const snapshot = competitor.get("snapshot") as CompareSnapshot;
+      const gap = compareSnapshots(mine, snapshot);
+      const label = competitor.get("label") || competitor.get("url");
+
+      // The sign is stated in words as well as arithmetic: "gap: -8" reads
+      // ambiguously to a model, and a wrong reading inverts the advice.
+      const standing =
+        gap.scoreGap > 0
+          ? `they lead by ${gap.scoreGap}`
+          : gap.scoreGap < 0
+          ? `you lead by ${Math.abs(gap.scoreGap)}`
+          : "level";
+
+      lines.push(
+        `Competitor ${label} — on-page ${snapshot.score}/100 vs your ${mine.score} (${standing}).`
+      );
+
+      if (gap.contentGaps.length)
+        lines.push(`  Sections they cover that you do not: ${gap.contentGaps.slice(0, 4).join("; ")}`);
+      if (gap.missingSchemaTypes.length)
+        lines.push(`  Schema they declare and you do not: ${gap.missingSchemaTypes.join(", ")}`);
+      if (gap.missingKeywords.length)
+        lines.push(`  Prominent terms on their page, absent from yours: ${gap.missingKeywords.slice(0, 6).join(", ")}`);
+
+      for (const rec of gap.recommendations.slice(0, MAX_RECOMMENDATIONS)) {
+        lines.push(`  - ${rec}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**
@@ -73,6 +160,10 @@ export async function workspaceDataSummary(workspaceId: string): Promise<string>
       topList("Top referrers", stats.topReferrers as Row[]),
       topList("Top countries", stats.countries as Row[]),
       topList("Devices", stats.devices as Row[]),
+      // Appended to the same site block rather than kept in a section of its
+      // own, so a model reading about acme.com sees its traffic and its
+      // competitive standing as one subject.
+      await seoSummary(site.siteId as string),
     ].filter(Boolean);
 
     blocks.push(lines.join("\n"));

@@ -6,8 +6,7 @@ import { SeoReport } from "../../modules/seo/models/SeoReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js";
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
-import { Competitor } from "../../modules/seo/models/Competitor.js";
-import { snapshotPage } from "../../modules/analytics/compare.js";
+import { resolveSite, siteRefused, type SiteRefused } from "./resolve-site.js";
 import { computeSearchTraffic } from "../../modules/analytics/search-traffic.js";
 import { computeFieldVitals } from "../../modules/seo/field-vitals.js";
 import { crawlSite } from "../../modules/seo/crawl.js";
@@ -39,37 +38,10 @@ const FRESH_MS = 60 * 60 * 1000; // 1 hour
 /** One analysis at a time per site — PageSpeed is slow and quota-limited. */
 const running = new Set<string>();
 
-// Taken from `Access` rather than from the model's own query return type: the
-// latter widens to `{}` here, which silently loses `.id` at every call site.
-type WorkspaceDoc = Access["workspace"];
-type SiteDoc = NonNullable<Awaited<ReturnType<typeof Site.findOne>>>;
-
-/** Either the site and its workspace, or a refusal carrying the status to send. */
-type SiteRefused = { error: string; status: 403 | 404 };
-type SiteResult = { ws: WorkspaceDoc; site: SiteDoc } | SiteRefused;
-
-/**
- * Narrowing helper. A plain `"error" in found` cannot discriminate here —
- * the refusal and the success branch are structurally unrelated, so the check
- * has to be a real type guard for the success branch's fields to survive it.
- */
-function siteRefused(result: SiteResult): result is SiteRefused {
-  return "error" in result;
-}
-
-async function resolveSite(
-  req: AuthedRequest,
-  minimum: WorkspaceRole = "viewer",
-): Promise<SiteResult> {
-  const access = await resolveAccess(req, minimum);
-  // Carries the access layer's own status: a role refusal is a 403, while a
-  // workspace the caller cannot see stays a 404. Collapsing both to 404 here
-  // would tell an editor their own workspace had vanished.
-  if (isDenied(access)) return { error: access.error, status: access.status as 403 | 404 };
-  const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: access.workspace.id });
-  if (!site) return { error: "site not found", status: 404 as 403 | 404 };
-  return { ws: access.workspace, site };
-}
+// `resolveSite` and its result types are shared with the competitor routes —
+// see `resolve-site.ts`. Re-exported here so this module's own call sites and
+// anything importing them from it keep working unchanged.
+export type { SiteRefused, SiteResult } from "./resolve-site.js";
 
 /**
  * Run (or reuse) an audit for a URL on this site.
@@ -359,140 +331,6 @@ router.get(
     });
     if (!report) return res.status(404).json({ error: "no crawl yet" });
     res.json(report);
-  }
-);
-
-/* ------------------------------- competitors ------------------------------ */
-
-/**
- * Competitor comparison.
- *
- * This is the one place the server fetches a host the user simply typed, with
- * no prior relationship to the workspace. Two things make that acceptable:
- * `safeFetch` refuses anything that is not publicly routable, and the rate
- * limit stops the endpoint being used to scan or flood.
- */
-const MAX_COMPETITORS = 3;
-
-router.get(
-  "/:wid/sites/:siteId/seo/competitors",
-  async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-
-    const list = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
-    res.json(list);
-  }
-);
-
-router.post(
-  "/:wid/sites/:siteId/seo/competitors",
-  async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-    const { ws, site } = found;
-
-    const url = normalizeUrl(String(req.body?.url ?? ""));
-    if (!url) return res.status(400).json({ error: "invalid URL" });
-
-    // Comparing a site against itself is a mistake, not a feature.
-    if (urlMatchesDomain(url, site.domain))
-      return res.status(400).json({ error: "that URL is on your own site" });
-
-    const count = await Competitor.countDocuments({ siteId: site.siteId });
-    if (count >= MAX_COMPETITORS)
-      return res
-        .status(400)
-        .json({ error: `at most ${MAX_COMPETITORS} competitors per site` });
-
-    const budget = rateLimit(`compare:${ws.id}`, { capacity: 10, refillPerMinute: 5 });
-    if (!budget.allowed)
-      return res.status(429).json({
-        error: `too many comparisons — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-      });
-
-    let hostname = url;
-    try {
-      hostname = new URL(url).hostname.replace(/^www\./, "");
-    } catch {
-      /* normalizeUrl already validated this; fall back to the raw string */
-    }
-
-    try {
-      const snapshot = await snapshotPage(url);
-      const doc = await Competitor.findOneAndUpdate(
-        { siteId: site.siteId, url },
-        {
-          workspaceId: ws.id,
-          siteId: site.siteId,
-          url,
-          label: String(req.body?.label ?? "").trim() || hostname,
-          snapshot,
-          lastCheckedAt: new Date(),
-          lastError: "",
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      );
-      res.status(201).json(doc);
-    } catch (e) {
-      const message = (e as Error)?.message ?? "could not fetch that URL";
-      if (e instanceof BlockedUrlError)
-        return res.status(400).json({ error: `cannot audit ${url}: ${message}` });
-      res.status(502).json({ error: `could not fetch ${url}: ${message}` });
-    }
-  }
-);
-
-/** Re-fetch one competitor. */
-router.post(
-  "/:wid/sites/:siteId/seo/competitors/:id/refresh",
-  async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-
-    const competitor = await Competitor.findOne({
-      _id: req.params.id,
-      siteId: found.site.siteId,
-    });
-    if (!competitor) return res.status(404).json({ error: "competitor not found" });
-
-    const budget = rateLimit(`compare:${found.ws.id}`, { capacity: 10, refillPerMinute: 5 });
-    if (!budget.allowed)
-      return res.status(429).json({
-        error: `too many comparisons — try again in ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-      });
-
-    try {
-      competitor.set({
-        snapshot: await snapshotPage(competitor.url as string),
-        lastCheckedAt: new Date(),
-        lastError: "",
-      });
-      await competitor.save();
-      res.json(competitor);
-    } catch (e) {
-      // A failure is recorded rather than thrown away: "we tried and their site
-      // was down" is more useful than a snapshot that silently went stale.
-      const message = (e as Error)?.message ?? "could not fetch that URL";
-      competitor.set({ lastCheckedAt: new Date(), lastError: message });
-      await competitor.save();
-      res.status(502).json({ error: message });
-    }
-  }
-);
-
-router.delete(
-  "/:wid/sites/:siteId/seo/competitors/:id",
-  async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-
-    const deleted = await Competitor.findOneAndDelete({
-      _id: req.params.id,
-      siteId: found.site.siteId,
-    });
-    if (!deleted) return res.status(404).json({ error: "competitor not found" });
-    res.status(204).end();
   }
 );
 

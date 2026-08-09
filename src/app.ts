@@ -12,6 +12,7 @@ import shareRoutes from "./http/routes/share.js";
 import seoPublicRoutes from "./http/routes/seo-public.js";
 import plansPublicRoutes from "./http/routes/plans-public.js";
 import seoRoutes from "./http/routes/seo.js";
+import competitorRoutes from "./http/routes/competitors.js";
 import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
@@ -106,6 +107,10 @@ app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.
 app.use("/api/workspaces", dashboardCors, seoRoutes);
+// Competitor tracking keeps the `/seo/competitors` paths but lives in its own
+// router: it is the only place the server fetches a host the user typed, and
+// that is worth being able to read in one file.
+app.use("/api/workspaces", dashboardCors, competitorRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.

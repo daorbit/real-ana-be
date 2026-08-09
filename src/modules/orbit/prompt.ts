@@ -124,9 +124,10 @@ sitemap health.
 duplicate titles, thin pages and sitemap URLs that no longer load. Lighthouse is
 not run per page, so a crawl costs no PageSpeed quota.
 
-**Competitors** — up to 3 per site, compared on on-page signals only. Their
+**Competitors** — up to 10 per site, compared on on-page signals only. Their
 scores are not Lighthouse-blended, so they are not directly comparable to the
-Overview score.
+Overview score. Each refresh is kept, so a competitor's score can be tracked
+over time rather than only read as it stands today.
 
 Audits and crawls consume workspace quota and need editor access. Every audit is
 kept in history with its score change, so a fix can be confirmed.
@@ -383,6 +384,15 @@ Workspace data — this user's own figures, current as of now. You may answer
 questions about these directly. Quote them as given; never estimate a number
 that is not here, and if they ask for something this summary does not cover,
 say which page of the dashboard shows it.
+
+Where a site's SEO standing and competitor gaps appear, use them to answer
+"how do we beat them" concretely — name the sections, schema types and terms
+listed as missing, and say which change moves the score most. The gaps are
+computed from a real fetch of their page, so quote them as fact. What is not
+listed was not measured: do not guess at their backlinks, traffic, rankings or
+domain authority, none of which Quantalog can see. Competitor scores are
+on-page only and not Lighthouse-blended, so never compare one to an Overview
+score.
 
 ${summary.trim()}`;
 }
