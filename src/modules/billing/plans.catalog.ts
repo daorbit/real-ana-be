@@ -4,6 +4,7 @@ export const MAX_SITES_PER_WORKSPACE = 2;
 /** Analytics date-range keys, matching `stats-core.ts`'s `RANGES` plus "custom". */
 export type RangeKey = "1h" | "24h" | "7d" | "30d" | "custom";
 
+/** Comparison baselines, matching `stats.service.ts`'s `CompareMode`. */
 export type CompareModeKey = "previous" | "yoy" | "custom";
 
 export type PlanCatalogEntry = {
@@ -30,6 +31,14 @@ export type PlanCatalogEntry = {
    * sender number, so an unmetered free tier on it is a bill with no ceiling.
    */
   whatsappReports: boolean;
+  /**
+   * Which baselines the dashboard may compare a window against.
+   *
+   * Every tier keeps "previous" — the headline deltas have always been measured
+   * against the preceding period and taking that away would be a downgrade. The
+   * chosen baselines are the paid part: year-over-year needs a year of history
+   * to be worth anything, which is exactly the customer who has been paying.
+   */
   compareModes: CompareModeKey[];
 };
 
@@ -62,7 +71,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     description: "For a single site in production.",
     monthlyAuditQuota: 10,
     monthlyCrawlQuota: 10,
-    features: ["Email support", "Scheduled reports by email"],
+    features: ["Email support", "Scheduled reports by email", "Custom comparison periods"],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
     maxReportSchedules: 5,
@@ -77,7 +86,12 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     description: "For teams running SEO across several sites.",
     monthlyAuditQuota: 50,
     monthlyCrawlQuota: 50,
-    features: ["Priority support", "Competitor tracking", "Daily reports + WhatsApp alerts"],
+    features: [
+      "Priority support",
+      "Competitor tracking",
+      "Daily reports + WhatsApp alerts",
+      "Year-over-year comparison",
+    ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
     maxReportSchedules: 20,

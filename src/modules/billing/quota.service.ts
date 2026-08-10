@@ -154,6 +154,14 @@ export async function canUseRange(
   return { ok: true };
 }
 
+/**
+ * Whether this workspace's plan may compare against the given baseline.
+ *
+ * Unlike `canUseRange`, a refusal here does not fail the request: the caller
+ * falls back to "previous", which every tier has. Losing the year-over-year
+ * overlay is a missing comparison, not a missing report, and 402-ing the whole
+ * stats payload over it would blank a dashboard the plan is entitled to see.
+ */
 export async function canUseCompare(
   workspaceId: string,
   mode: string,
