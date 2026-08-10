@@ -16,6 +16,9 @@ import {
   exportEvents,
   resolveWindow,
   parseFilters,
+  parseCompareMode,
+  compareBreakdown,
+  COMPARABLE_DIMENSION_KEYS,
   EXPORT_COLUMNS,
   TRACKER_VERSION,
   type FunnelStep,
@@ -26,7 +29,7 @@ import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey } from "../middleware/api-key.js";
-import { canCreateSite, canUseRange, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
@@ -401,9 +404,23 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const allowed = await canUseRange(ws.id, rangeKey);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
 
-  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
+  // A baseline the plan doesn't include degrades to "previous" rather than
+  // refusing the request — see `canUseCompare`.
+  const askedCompare = parseCompareMode(req.query.compare);
+  const compare = (await canUseCompare(ws.id, askedCompare)) ? askedCompare : "previous";
+
+  const win = resolveWindow(
+    rangeKey,
+    req.query.from,
+    req.query.to,
+    compare,
+    req.query.compareFrom,
+    req.query.compareTo,
+  );
   const filters = parseFilters(req.query.filter);
-  const stats = await computeStats(ids, rangeKey, filters, win);
+  // The overlay series is only worth its extra aggregation when the client is
+  // actually drawing a comparison.
+  const stats = await computeStats(ids, rangeKey, filters, win, compare !== "previous");
 
   // Score the workspace's goals over the same window/scope. Goals live on the
   // workspace, so they're resolved here rather than inside computeStats (which
@@ -431,7 +448,53 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     filters,
     // Echo the resolved window so a custom range round-trips to the client.
     window: { since: win.since, until: win.until },
+    // Echo the baseline actually used, which may not be the one asked for if
+    // the plan does not include it — the picker reads this back to stay honest
+    // about what is on screen.
+    compare: win.compare,
   });
+});
+
+/**
+ * One breakdown, current window against its baseline.
+ *
+ * Separate from the stats payload because comparing every breakdown would
+ * double roughly twenty-five aggregations to serve a panel the user may never
+ * open. The dashboard calls this per panel, on expand.
+ */
+router.get("/:wid/stats/compare", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const dimension = String(req.query.dimension ?? "");
+  if (!COMPARABLE_DIMENSION_KEYS.includes(dimension)) {
+    return res.status(400).json({ error: `unknown dimension: ${dimension}` });
+  }
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (!ids.length) return res.json({ dimension, rows: [] });
+
+  const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(ws.id, rangeKey);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
+  const askedCompare = parseCompareMode(req.query.compare);
+  const compare = (await canUseCompare(ws.id, askedCompare)) ? askedCompare : "previous";
+
+  const win = resolveWindow(
+    rangeKey,
+    req.query.from,
+    req.query.to,
+    compare,
+    req.query.compareFrom,
+    req.query.compareTo,
+  );
+  const filters = parseFilters(req.query.filter);
+  const rows = await compareBreakdown(ids, dimension, win, filters);
+
+  res.json({ dimension, compare: win.compare, rows });
 });
 
 // Export raw events as CSV or XLSX for the current window/scope.

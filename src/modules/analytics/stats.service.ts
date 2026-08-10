@@ -1,16 +1,5 @@
 import { Event } from "./models/Event.js";
 
-/**
- * Lowest tracker.js version that reports every metric the dashboard shows.
- * Sites below this are missing data and get flagged for an upgrade.
- *
- * This tracked one behind `VERSION` in public/tracker.js until v5, because v4
- * added only opt-in script options (DNT, ignore rules, hash mode) and no new
- * metrics — a site on v3 was complete and should not have been nagged.
- *
- * v5 adds Core Web Vitals, which is real missing data, so the two are now in
- * step and a site below v5 is correctly prompted to re-copy its snippet.
- */
 export const TRACKER_VERSION = 5;
 
 export const RANGES: Record<string, number> = {
@@ -24,26 +13,34 @@ const LIVE_WINDOW_MS = 5 * 60 * 1000;
 
 type Match = Record<string, unknown>;
 
-/** A resolved time window plus the equal-length window immediately before it. */
+export type CompareMode = "previous" | "yoy" | "custom";
+
+export const COMPARE_MODES: CompareMode[] = ["previous", "yoy", "custom"];
+
+export function parseCompareMode(raw: unknown): CompareMode {
+  return COMPARE_MODES.includes(raw as CompareMode) ? (raw as CompareMode) : "previous";
+}
+
 export type Window = {
-  /** The range key the request used, or "custom". */
   rangeKey: string;
   since: Date;
   until: Date;
   windowMs: number;
-  /** Start of the previous equal-length period, for deltas. */
   prevSince: Date;
+  prevUntil: Date;
+  compare: CompareMode;
 };
 
-/**
- * Resolve the time window a report covers.
- *
- * A preset key ("24h", "7d", …) is measured back from now. A custom window is
- * an explicit from/to pair (ms epoch or ISO). Custom is clamped to sane bounds
- * — from before to, at least a minute wide, at most a year — so a bad pair can
- * neither invert nor scan the whole collection.
- */
-export function resolveWindow(rangeKey: string, from?: unknown, to?: unknown): Window {
+const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+
+export function resolveWindow(
+  rangeKey: string,
+  from?: unknown,
+  to?: unknown,
+  compare: CompareMode = "previous",
+  compareFrom?: unknown,
+  compareTo?: unknown,
+): Window {
   const now = Date.now();
   const toMs = (v: unknown): number | null => {
     if (v == null || v === "") return null;
@@ -51,39 +48,58 @@ export function resolveWindow(rangeKey: string, from?: unknown, to?: unknown): W
     return Number.isFinite(n) ? n : null;
   };
 
+  // Resolve the current window first; the baseline is derived from its bounds.
+  let start: number;
+  let end: number;
+  let key: string;
+
   const f = toMs(from);
   const t = toMs(to);
   if (rangeKey === "custom" && f != null && t != null) {
-    const YEAR = 365 * 24 * 60 * 60 * 1000;
-    let start = Math.min(f, t);
-    let end = Math.max(f, t);
+    start = Math.min(f, t);
+    end = Math.max(f, t);
     if (end - start < 60_000) end = start + 60_000;
-    if (end - start > YEAR) start = end - YEAR;
-    const windowMs = end - start;
-    return {
-      rangeKey: "custom",
-      since: new Date(start),
-      until: new Date(end),
-      windowMs,
-      prevSince: new Date(start - windowMs),
-    };
+    if (end - start > YEAR_MS) start = end - YEAR_MS;
+    key = "custom";
+  } else {
+    const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
+    key = RANGES[rangeKey] ? rangeKey : "24h";
+    end = now;
+    start = now - windowMs;
   }
 
-  const windowMs = RANGES[rangeKey] ?? RANGES["24h"];
+  const windowMs = end - start;
+
+  // Default: the equal-length period ending where the current one begins.
+  let prevStart = start - windowMs;
+  let prevEnd = start;
+  let mode: CompareMode = "previous";
+
+  if (compare === "yoy") {
+    prevStart = start - YEAR_MS;
+    prevEnd = prevStart + windowMs;
+    mode = "yoy";
+  } else if (compare === "custom") {
+    const cf = toMs(compareFrom);
+    const ct = toMs(compareTo);
+    if (cf != null) {
+      prevStart = ct != null ? Math.min(cf, ct) : cf;
+      prevEnd = prevStart + windowMs;
+      mode = "custom";
+    }
+  }
+
   return {
-    rangeKey: RANGES[rangeKey] ? rangeKey : "24h",
-    since: new Date(now - windowMs),
-    until: new Date(now),
+    rangeKey: key,
+    since: new Date(start),
+    until: new Date(end),
     windowMs,
-    prevSince: new Date(now - windowMs * 2),
+    prevSince: new Date(prevStart),
+    prevUntil: new Date(prevEnd),
+    compare: mode,
   };
 }
 
-/**
- * A dashboard-wide filter. Every key narrows the whole report to matching
- * events, so the numbers describe "this segment" rather than all traffic.
- * Only the fields below can be filtered; anything else is ignored.
- */
 export type StatsFilter = Partial<{
   country: string;
   device: string;
@@ -150,7 +166,7 @@ async function topBy(match: Match, field: string, limit = 8) {
     { $match: match },
     { $group: { _id: `$${field}`, count: { $sum: 1 } } },
     { $sort: { count: -1 } },
-    { $limit: limit },
+    ...(limit > 0 ? [{ $limit: limit }] : []),
     { $project: { _id: 0, key: "$_id", count: 1 } },
   ]);
 }
@@ -261,14 +277,6 @@ async function topClicks(match: Match, limit = 10) {
   ]);
 }
 
-/**
- * How far down each page people actually get.
- *
- * Averaged per path from the engagement records, which carry the furthest point
- * reached. Pages nobody scrolled on are excluded rather than counted as zero —
- * a page with no engagement record has no depth, which is not the same as a
- * page people abandoned at the top.
- */
 async function scrollDepth(match: Match, limit = 10) {
   return Event.aggregate([
     { $match: { ...match, type: "engagement", scrollDepth: { $gt: 0 } } },
@@ -297,14 +305,6 @@ async function scrollDepth(match: Match, limit = 10) {
   ]);
 }
 
-/**
- * First-time versus repeat visitors.
- *
- * A visitor counts as returning if their hash was seen before this window
- * opened. The hash rotates daily for privacy, so this measures "came back
- * within the retention of the hash", not lifetime loyalty — worth knowing
- * before reading too much into it.
- */
 async function newVsReturning(siteIds: string[], since: Date, until: Date, fMatch: Match = {}) {
   const inSites = { $in: siteIds };
   const [current, earlier] = await Promise.all([
@@ -324,13 +324,11 @@ async function newVsReturning(siteIds: string[], since: Date, until: Date, fMatc
   };
 }
 
-/** Traffic by hour of day and day of week, for a when-are-people-here heatmap. */
 async function heatmap(match: Match) {
   const rows = await Event.aggregate([
     { $match: match },
     {
       $group: {
-        // Mongo numbers the week 1–7 from Sunday; shift to 0–6 for the client.
         _id: { day: { $dayOfWeek: "$ts" }, hour: { $hour: "$ts" } },
         count: { $sum: 1 },
       },
@@ -347,17 +345,10 @@ async function heatmap(match: Match) {
   return rows as { day: number; hour: number; count: number }[];
 }
 
-/**
- * Per landing page: how many sessions it started, and whether those sessions
- * went anywhere. A page can pull plenty of traffic and still leak all of it.
- */
 async function landingPages(siteIds: string[], since: Date, until: Date, fMatch: Match = {}, limit = 10) {
   const inSites = { $in: siteIds };
   const window = { siteId: inSites, ts: { $gte: since, $lt: until }, ...fMatch };
 
-  // The entry path lives on the pageview and the bounce outcome on the
-  // engagement record, so neither alone can answer this — roll the session up
-  // first, then group the sessions by where they started.
   const rows = await Event.aggregate([
     { $match: { ...window, type: { $in: ["pageview", "engagement"] } } },
     {
@@ -405,21 +396,10 @@ async function landingPages(siteIds: string[], since: Date, until: Date, fMatch:
   }[];
 }
 
-/**
- * Custom events fired via `rta.track(name, props)`.
- *
- * Per named event: how many times it fired, how many distinct visitors fired it,
- * and its conversion rate — the share of all visitors in the window who did it at
- * least once. Conversion is against total visitors rather than event count, so a
- * visitor who fires the same event ten times still counts once.
- */
 async function customEvents(match: Match, limit = 12) {
   const rows = await Event.aggregate([
     { $match: { ...match, type: "custom", name: { $nin: [null, ""] } } },
     {
-      // A revenue-bearing event carries a numeric `props.value`. Coerce it to a
-      // number defensively — clients may send it as a string, and a missing or
-      // unparseable value contributes 0 rather than failing the whole pipeline.
       $addFields: {
         _value: {
           $convert: { input: "$props.value", to: "double", onError: 0, onNull: 0 },
@@ -454,15 +434,6 @@ async function customEvents(match: Match, limit = 12) {
   }[];
 }
 
-/**
- * Weekly retention cohorts.
- *
- * Visitors are grouped by the week they were first seen (their cohort). For each
- * cohort we then measure how many were active again in each following week. The
- * daily privacy hash caps how far this can look back — a visitor is only
- * recognisable within the hash's lifetime — so read short offsets, not lifetime
- * loyalty. Returns one row per cohort with a retention percentage per week.
- */
 export async function computeRetention(siteIds: string[], weeks = 6) {
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
   const now = Date.now();
@@ -529,14 +500,6 @@ export async function computeRetention(siteIds: string[], weeks = 6) {
 
 export type FunnelStep = { type: "page" | "event"; value: string };
 
-/**
- * Ordered-step conversion funnel.
- *
- * For each session we find the earliest timestamp it matched each step, then
- * count a session as reaching step N only if it reached every earlier step and
- * did so in order (each step no earlier than the one before). Returns one row
- * per step with how many sessions got that far and the drop-off from the prior.
- */
 export async function computeFunnel(
   siteIds: string[],
   steps: FunnelStep[],
@@ -661,24 +624,8 @@ async function livePages(siteIds: string[]) {
   return rows;
 }
 
-/**
- * Group traffic into marketing channels, the way people actually think about
- * where visitors come from — not raw referrer URLs.
- *
- * The rules mirror the common GA-style grouping and are applied in Mongo so the
- * whole window is bucketed in one pass:
- *   - Paid    — a paid utm.medium (cpc/ppc/paid…) or a gclid/fbclid-style tag
- *   - Email   — utm.medium of email/newsletter, or a webmail referrer
- *   - Social  — referrer host is a known social network
- *   - Organic Search — referrer host is a known search engine
- *   - Referral — any other non-empty referrer
- *   - Direct  — no referrer and no campaign
- * The classification is a `$switch`, first match wins, top to bottom.
- */
+
 async function channels(match: Match) {
-  // The event's own referrer is empty on everything after the landing hit, so
-  // the session's stored landing referrer is preferred when present. Without
-  // it, every in-session pageview would fall through to "Direct".
   const referrerSource = {
     $cond: [
       { $ne: [{ $ifNull: ["$utm.landingReferrer", ""] }, ""] },
@@ -687,7 +634,6 @@ async function channels(match: Match) {
     ],
   };
   const host = {
-    // hostname of the referrer, lowercased; "" when there is no referrer
     $let: {
       vars: {
         noProto: {
@@ -941,15 +887,43 @@ export async function exportEvents(
     scrollDepth: e.scrollDepth ?? 0,
   }));
 }
+ 
+async function timeseriesFor(match: Match, windowMs: number) {
+  return Event.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: {
+          $dateToString: {
+            format: windowMs <= RANGES["24h"] ? "%H:00" : "%m-%d",
+            date: "$ts",
+          },
+        },
+        views: { $sum: 1 },
+        visitors: { $addToSet: "$visitorHash" },
+      },
+    },
+    { $sort: { _id: 1 } },
+    {
+      $project: {
+        _id: 0,
+        bucket: "$_id",
+        views: 1,
+        visitors: { $size: "$visitors" },
+      },
+    },
+  ]);
+}
 
 export async function computeStats(
   siteIds: string[],
   rangeKey: string,
   filters?: StatsFilter,
-  win?: Window
+  win?: Window,
+  withCompareSeries = false,
 ) {
   const w = win ?? resolveWindow(rangeKey);
-  const { since, until, prevSince, windowMs } = w;
+  const { since, until, prevSince, prevUntil, windowMs } = w;
   const liveSince = new Date(Date.now() - LIVE_WINDOW_MS);
 
   const fMatch = filterMatch(filters);
@@ -987,9 +961,10 @@ export async function computeStats(
     channelRows,
     outboundRows,
     errorRows,
+    compareSeries,
   ] = await Promise.all([
     totals(siteIds, since, until, fMatch),
-    totals(siteIds, prevSince, since, fMatch),
+    totals(siteIds, prevSince, prevUntil, fMatch),
     Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: liveSince }, ...fMatch }),
     topBy(pageviewBase, "path"),
     topBy({ ...pageviewBase, isEntry: true }, "path"),
@@ -1006,30 +981,7 @@ export async function computeStats(
     topBy(base, "utm.campaign"),
     topClicks(base),
     Event.countDocuments({ ...base, type: "click" }),
-    Event.aggregate([
-      { $match: pageviewBase },
-      {
-        $group: {
-          _id: {
-            $dateToString: {
-              format: windowMs <= RANGES["24h"] ? "%H:00" : "%m-%d",
-              date: "$ts",
-            },
-          },
-          views: { $sum: 1 },
-          visitors: { $addToSet: "$visitorHash" },
-        },
-      },
-      { $sort: { _id: 1 } },
-      {
-        $project: {
-          _id: 0,
-          bucket: "$_id",
-          views: 1,
-          visitors: { $size: "$visitors" },
-        },
-      },
-    ]),
+    timeseriesFor(pageviewBase, windowMs),
     livePages(siteIds),
     scrollDepth(base),
     newVsReturning(siteIds, since, until, fMatch),
@@ -1040,6 +992,12 @@ export async function computeStats(
     channels({ ...pageviewBase, isEntry: true }),
     outboundClicks(base),
     topErrors(base),
+    withCompareSeries
+      ? timeseriesFor(
+          { siteId: inSites, ts: { $gte: prevSince, $lt: prevUntil }, ...fMatch, type: "pageview" },
+          windowMs,
+        )
+      : Promise.resolve(null),
   ]);
 
   // Conversion is against total visitors in the window, known only now that the
@@ -1070,7 +1028,7 @@ export async function computeStats(
     avgTimeOnPageMs: current.avgTimeOnPageMs,
     pagesPerSession: current.pagesPerSession,
 
-    // change vs. the previous equal-length period
+    // change vs. the baseline period
     deltas: {
       pageviews: delta(current.pageviews, previous.pageviews),
       visitors: delta(current.visitors, previous.visitors),
@@ -1078,6 +1036,21 @@ export async function computeStats(
       bounceRate: delta(current.bounceRate, previous.bounceRate),
       avgSessionMs: delta(current.avgSessionMs, previous.avgSessionMs),
       pagesPerSession: delta(current.pagesPerSession, previous.pagesPerSession),
+    },
+
+    comparison: {
+      mode: w.compare,
+      since: prevSince,
+      until: prevUntil,
+      pageviews: previous.pageviews,
+      visitors: previous.visitors,
+      sessions: previous.sessions,
+      bounceRate: previous.bounceRate,
+      avgSessionMs: previous.avgSessionMs,
+      avgTimeOnPageMs: previous.avgTimeOnPageMs,
+      pagesPerSession: previous.pagesPerSession,
+      // null unless the caller asked for the overlay.
+      timeseries: compareSeries,
     },
 
     // breakdowns
@@ -1133,4 +1106,76 @@ export async function computeStats(
 
     timeseries,
   };
+}
+
+const COMPARABLE_DIMENSIONS: Record<string, { field: string; type?: string }> = {
+  path: { field: "path", type: "pageview" },
+  referrer: { field: "referrer" },
+  device: { field: "device", type: "pageview" },
+  browser: { field: "browser", type: "pageview" },
+  os: { field: "os", type: "pageview" },
+  country: { field: "country", type: "pageview" },
+  language: { field: "language", type: "pageview" },
+  utmSource: { field: "utm.source" },
+  utmMedium: { field: "utm.medium" },
+  utmCampaign: { field: "utm.campaign" },
+};
+
+export const COMPARABLE_DIMENSION_KEYS = Object.keys(COMPARABLE_DIMENSIONS);
+
+export type BreakdownComparisonRow = {
+  key: string;
+  count: number;
+  previous: number;
+  delta: number | null;
+};
+
+export async function compareBreakdown(
+  siteIds: string[],
+  dimension: string,
+  win: Window,
+  filters?: StatsFilter,
+  limit = 8,
+): Promise<BreakdownComparisonRow[]> {
+  const dim = COMPARABLE_DIMENSIONS[dimension];
+  if (!dim) throw new Error(`not a comparable dimension: ${dimension}`);
+
+  const fMatch = filterMatch(filters);
+  const inSites = { $in: siteIds };
+  const typeMatch = dim.type ? { type: dim.type } : {};
+
+
+  const [currentRows, previousRows] = await Promise.all([
+    topBy(
+      { siteId: inSites, ts: { $gte: win.since, $lt: win.until }, ...typeMatch, ...fMatch },
+      dim.field,
+      0,
+    ),
+    topBy(
+      { siteId: inSites, ts: { $gte: win.prevSince, $lt: win.prevUntil }, ...typeMatch, ...fMatch },
+      dim.field,
+      0,
+    ),
+  ]);
+
+  const prevByKey = new Map<string, number>();
+  for (const r of previousRows as { key: string; count: number }[]) {
+    prevByKey.set(r.key ?? "", r.count);
+  }
+
+  const rows: BreakdownComparisonRow[] = (currentRows as { key: string; count: number }[]).map(
+    (r) => {
+      const key = r.key ?? "";
+      const previous = prevByKey.get(key) ?? 0;
+      prevByKey.delete(key);
+      return { key, count: r.count, previous, delta: delta(r.count, previous) };
+    },
+  );
+
+  for (const [key, previous] of prevByKey) {
+    rows.push({ key, count: 0, previous, delta: delta(0, previous) });
+  }
+
+  rows.sort((a, b) => Math.max(b.count, b.previous) - Math.max(a.count, a.previous));
+  return rows.slice(0, limit);
 }

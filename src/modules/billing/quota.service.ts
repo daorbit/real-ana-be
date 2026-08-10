@@ -6,6 +6,7 @@ import {
   MAX_SITES_PER_WORKSPACE,
   type RangeKey,
   type Frequency,
+  type CompareModeKey,
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import {
@@ -151,6 +152,16 @@ export async function canUseRange(
       error: `this workspace's plan only supports ${plan.allowedRanges.join("/")} ranges — upgrade for 7d, 30d, and custom ranges`,
     };
   return { ok: true };
+}
+
+export async function canUseCompare(
+  workspaceId: string,
+  mode: string,
+): Promise<boolean> {
+  if (mode === "previous") return true;
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return false;
+  return plan.compareModes.includes(mode as CompareModeKey);
 }
 
 /**
@@ -363,6 +374,7 @@ export async function quotaSummary(workspaceId: string) {
     },
     maxSitesPerWorkspace: MAX_SITES_PER_WORKSPACE,
     allowedRanges: plan.allowedRanges,
+    compareModes: plan.compareModes,
     // Sent with the profile for the same reason as allowedRanges: the report
     // form has to know before it's submitted, and a 402 after filling it in
     // reads as a bug rather than a plan boundary.

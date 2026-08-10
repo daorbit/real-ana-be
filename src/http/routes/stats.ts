@@ -2,7 +2,11 @@ import { Router, Response } from "express";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
-import { computeStats } from "../../modules/analytics/stats.service.js";
+import {
+  computeStats,
+  resolveWindow,
+  parseCompareMode,
+} from "../../modules/analytics/stats.service.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -22,7 +26,20 @@ router.get("/:siteId/stats", async (req: AuthedRequest, res: Response) => {
     userId: req.userId,
   });
   if (!member) return res.status(404).json({ error: "site not found" });
-  const stats = await computeStats([siteId], String(req.query.range ?? "24h"));
+
+  // Resolved rather than left to computeStats's default so a custom range and a
+  // chosen comparison baseline both reach it — passing only the range key
+  // silently dropped `from`/`to` and served the last 24h instead.
+  const rangeKey = String(req.query.range ?? "24h");
+  const win = resolveWindow(
+    rangeKey,
+    req.query.from,
+    req.query.to,
+    parseCompareMode(req.query.compare),
+    req.query.compareFrom,
+    req.query.compareTo,
+  );
+  const stats = await computeStats([siteId], rangeKey, undefined, win, win.compare !== "previous");
   res.json(stats);
 });
 
