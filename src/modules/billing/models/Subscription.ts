@@ -59,6 +59,17 @@ const subscriptionSchema = new Schema(
     auditsUsed: { type: Number, default: 0 },
     crawlsUsed: { type: Number, default: 0 },
     /**
+     * Analytics events ingested this cycle.
+     *
+     * Unlike every other counter here, this one is not incremented once per
+     * unit at the moment it is spent: events arrive thousands at a time from
+     * anonymous browsers, and a conditional write per event would double the
+     * cost of the hottest path in the product. `collect` batches increments in
+     * memory and flushes them, so this trails real usage slightly by design —
+     * see `modules/billing/event-quota.ts`.
+     */
+    eventsUsed: { type: Number, default: 0 },
+    /**
      * Orbit questions spent this cycle.
      *
      * Incremented only once a model has actually answered — a timeout, a

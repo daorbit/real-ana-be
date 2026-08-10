@@ -13,6 +13,19 @@ export type PlanCatalogEntry = {
   description: string;
   monthlyAuditQuota: number;
   monthlyCrawlQuota: number;
+  /**
+   * Analytics events a workspace may ingest per cycle.
+   *
+   * This is the meter that matches what the product actually costs us to run:
+   * ingest is per-event write load and storage, where history depth is the same
+   * single query either way. Metering events rather than date ranges is what
+   * lets Free see a useful window without giving away the expensive part.
+   *
+   * Over quota, ingest is refused — but the dashboard keeps working and the
+   * events already collected stay readable. Losing the numbers you already paid
+   * for is a worse outcome than a gap in new ones.
+   */
+  monthlyEventQuota: number;
   features: string[];
   /** Display order on the pricing page; lower first. */
   sortOrder: number;
@@ -51,12 +64,22 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
   {
     slug: "free",
     name: "Free",
-    description: "Try SEO audits and crawls on a couple of sites.",
+    description: "Real analytics for one small site, free forever.",
     monthlyAuditQuota: 3,
     monthlyCrawlQuota: 1,
+    monthlyEventQuota: 10_000,
     features: [],
     sortOrder: 0,
-    allowedRanges: ["1h", "24h"],
+    /**
+     * 7d, where this used to stop at 24h.
+     *
+     * A day of history is not enough to form the habit that makes anyone
+     * upgrade — no week-over-week read, no weekend/weekday shape, and every
+     * comparison feature invisible. History is also the cheap thing to serve:
+     * the same query either way. The event quota above is the real limit, and
+     * it is the one that tracks what a workspace costs us.
+     */
+    allowedRanges: ["1h", "24h", "7d"],
     maxReportSchedules: 1,
     // Owner only: mailing a free account's chosen third parties is the part
     // that costs us deliverability reputation, so it's the part that's paid.
@@ -71,6 +94,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     description: "For a single site in production.",
     monthlyAuditQuota: 10,
     monthlyCrawlQuota: 10,
+    monthlyEventQuota: 250_000,
     features: ["Email support", "Scheduled reports by email", "Custom comparison periods"],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -86,6 +110,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     description: "For teams running SEO across several sites.",
     monthlyAuditQuota: 50,
     monthlyCrawlQuota: 50,
+    monthlyEventQuota: 2_000_000,
     features: [
       "Priority support",
       "Competitor tracking",

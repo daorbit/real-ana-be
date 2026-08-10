@@ -9,6 +9,7 @@ import {
   type CompareModeKey,
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
+import { invalidateSite } from "./event-quota.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
   resolveOrbitPlan,
@@ -52,10 +53,18 @@ export async function activatePlanPeriod(
         currentPeriodEnd: periodEnd,
         auditsUsed: 0,
         crawlsUsed: 0,
+        eventsUsed: 0,
       },
     },
     { upsert: true }
   );
+
+  // Ingest caches its allow/deny decision per site for a minute, so without
+  // this a workspace that just bought its way out of an exhausted quota would
+  // keep dropping events after paying. Done here rather than at each call site
+  // so no future purchase path can forget it.
+  const sites = await Site.find({ workspaceId }).select("siteId");
+  for (const s of sites) invalidateSite(s.get("siteId") as string);
 }
 
 /**
@@ -375,6 +384,17 @@ export async function quotaSummary(workspaceId: string) {
       planQuota: plan.monthlyCrawlQuota,
       used: sub.crawlsUsed,
       addonCredits: sub.addonCrawlCredits,
+    },
+    /**
+     * Ingested events this cycle.
+     *
+     * No `addonCredits`: events are not sold as a top-up pack, so the only way
+     * past this line is a plan change. `used` trails real ingest by up to one
+     * flush interval — see `event-quota.ts`.
+     */
+    events: {
+      planQuota: plan.monthlyEventQuota,
+      used: (sub.eventsUsed as number) ?? 0,
     },
     sites: {
       quota: MAX_SITES_PER_WORKSPACE,

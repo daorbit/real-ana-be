@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { visitorHash, clientIp, country, parseUA } from "../../modules/analytics/enrich.js";
+import { canIngest, countEvent, maybeFlush } from "../../modules/billing/event-quota.js";
 
 const router = Router();
 
@@ -61,16 +62,37 @@ router.post("/", async (req, res) => {
     const { siteId, type, name } = body ?? {};
     if (!siteId) return res.status(400).json({ error: "siteId required" });
 
-    // Verify site exists (reject unknown keys to avoid junk data)
-    const site = await Site.findOne({ siteId }).select("trackerVersion");
-    if (!site) return res.status(404).json({ error: "unknown siteId" });
+    /**
+     * Existence and quota in one cached check.
+     *
+     * This replaces an unconditional `Site.findOne` per event: the decision is
+     * memoised per site, so a site comfortably inside its allowance costs no
+     * database read at all, and an unknown key is cached as a rejection rather
+     * than re-querying on every junk beacon.
+     */
+    const { allowed, workspaceId } = await canIngest(String(siteId));
+    if (!workspaceId) return res.status(404).json({ error: "unknown siteId" });
+    if (!allowed) {
+      // 429, not 402: this is the tracker on a visitor's browser, not the
+      // customer's dashboard. Nobody on this end can act on a billing error,
+      // and a well-behaved beacon should simply stop rather than retry.
+      return res.status(429).json({ error: "event quota exhausted" });
+    }
 
     // Record the tracker version so the dashboard can flag sites still running
     // a script that predates the metrics it now shows. Only ever moves forward:
     // a stale tab running the old script must not undo a completed upgrade.
+    //
+    // The "only forward" rule is now the query's condition rather than a
+    // comparison against a document we just read, since the quota check above
+    // no longer fetches one. Same guarantee, and it holds under concurrency
+    // where a read-then-write did not.
     const reported = num(body.v, 100);
-    if (reported > (site.trackerVersion ?? 1)) {
-      await Site.updateOne({ siteId }, { trackerVersion: reported });
+    if (reported > 1) {
+      await Site.updateOne(
+        { siteId, trackerVersion: { $lt: reported } },
+        { trackerVersion: reported },
+      );
     }
 
     const ua = req.headers["user-agent"] ?? "";
@@ -128,8 +150,19 @@ router.post("/", async (req, res) => {
       ts: new Date(),
     });
 
+    // Counted only once the event is actually stored, so a failed write is not
+    // billed. Buffered in memory — see `event-quota.ts` for why this is not a
+    // write of its own.
+    countEvent(workspaceId);
+
     // 204 keeps the beacon lightweight
     res.status(204).end();
+
+    // After the response, so metering never adds latency to the beacon. Awaited
+    // rather than fired and forgotten: on a serverless host the process can be
+    // frozen the moment the response goes out, and an unawaited flush would be
+    // usage that silently never lands.
+    await maybeFlush();
   } catch {
     res.status(500).json({ error: "collect failed" });
   }
