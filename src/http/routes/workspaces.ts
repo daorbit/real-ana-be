@@ -30,6 +30,7 @@ import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey } from "../middleware/api-key.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
@@ -690,6 +691,10 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   await Membership.deleteMany({ workspaceId: ws.id });
   await WorkspaceInvite.deleteMany({ workspaceId: ws.id });
   await ws.deleteOne();
+  // Ingest caches "this site may collect" for a minute. Without this a deleted
+  // site keeps accepting beacons until that expires, writing events keyed to a
+  // site that no longer exists — rows nothing can read or clean up.
+  for (const id of ids) invalidateSite(id);
   res.status(204).end();
 });
 
@@ -711,6 +716,9 @@ router.delete(
     await CompetitorSnapshot.deleteMany({ siteId: site.siteId });
     await CrawlReport.deleteMany({ siteId: site.siteId });
     await site.deleteOne();
+    // See the workspace delete above: a cached allow decision would otherwise
+    // let this site keep ingesting for up to a minute after it is gone.
+    invalidateSite(site.siteId as string);
     res.status(204).end();
   },
 );

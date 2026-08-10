@@ -155,14 +155,16 @@ router.post("/", async (req, res) => {
     // write of its own.
     countEvent(workspaceId);
 
+    // Before the response, not after. Anything deferred past `res.end()` may
+    // never run: a serverless function can be frozen the instant the response
+    // goes out, and a long-running process can be restarted or killed with
+    // buffered counts still in memory. This only does real work once the buffer
+    // is old or large enough (see `maybeFlush`), so the overwhelming majority of
+    // beacons still return without an extra write.
+    await maybeFlush();
+
     // 204 keeps the beacon lightweight
     res.status(204).end();
-
-    // After the response, so metering never adds latency to the beacon. Awaited
-    // rather than fired and forgotten: on a serverless host the process can be
-    // frozen the moment the response goes out, and an unawaited flush would be
-    // usage that silently never lands.
-    await maybeFlush();
   } catch {
     res.status(500).json({ error: "collect failed" });
   }

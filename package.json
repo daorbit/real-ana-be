@@ -8,7 +8,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "npm run build && node dist/index.js",
-    "start:dist": "node dist/index.js"
+    "start:dist": "node dist/index.js",
+    "backfill:events": "tsx scripts/backfill-event-usage.ts"
   },
   "dependencies": {
     "@types/node-cron": "^3.0.11",

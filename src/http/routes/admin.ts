@@ -11,6 +11,9 @@ import { getDemoDailyLimit, setDemoDailyLimit } from "../../config/AppSetting.js
 import { demoUsageSnapshot } from "../../modules/billing/demo-limit.js";
 import { Plan } from "../../modules/billing/models/Plan.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
+import { Membership } from "../../modules/workspace/models/Membership.js";
+import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
+import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { AddonPack } from "../../modules/billing/models/AddonPack.js";
 import { Coupon } from "../../modules/billing/models/Coupon.js";
 import {
@@ -288,8 +291,20 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   });
   await Goal.deleteMany({ workspaceId: { $in: wsIds } });
   await Project.deleteMany({ workspaceId: { $in: wsIds } });
+  // The same cascade the workspace delete route performs. Left behind, a
+  // subscription holds the unique index on a dead workspaceId (so the id can
+  // never be reused) and still counts as an active plan carrying its own
+  // event usage; a stale membership or invite would grant access to a
+  // workspace that no longer exists.
+  await Subscription.deleteMany({ workspaceId: { $in: wsIds } });
+  await Membership.deleteMany({ $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }] });
+  await WorkspaceInvite.deleteMany({ workspaceId: { $in: wsIds } });
   await Workspace.deleteMany({ userId: target.id });
   await target.deleteOne();
+  // Ingest caches its allow decision per site, so without this the deleted
+  // account's sites keep collecting for up to a minute after the account is
+  // gone — writing events that belong to nothing.
+  for (const id of siteIds) invalidateSite(id as string);
 
   console.log(`[admin] ${req.userId} deleted user ${target.id} (${target.email})`);
 

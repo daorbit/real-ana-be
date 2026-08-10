@@ -20,12 +20,22 @@ async function start() {
   });
 
   // Buffered usage lives in memory, so a restart would drop whatever has not
-  // been written yet. Flush on the way out.
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  // been written yet. Flush on the way out. SIGUSR2 is included for `tsx watch`
+  // and nodemon, which restart with that rather than SIGTERM — without it every
+  // hot reload in development silently discards the buffer.
+  for (const signal of ["SIGTERM", "SIGINT", "SIGUSR2"] as const) {
     process.once(signal, () => {
       flushEventUsage()
         .catch((e) => console.error("[event-quota] final flush failed:", e))
-        .finally(() => process.exit(0));
+        .finally(() => {
+          // Re-raise rather than `process.exit(0)`. The handler's only job is to
+          // get the buffer written; deciding what the signal *means* belongs to
+          // whoever sent it. Exiting zero on SIGUSR2 would swallow a watcher's
+          // restart, and on SIGTERM it would report a clean exit for what may
+          // have been a kill.
+          process.removeAllListeners(signal);
+          process.kill(process.pid, signal);
+        });
     });
   }
 }

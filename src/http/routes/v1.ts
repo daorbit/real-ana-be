@@ -7,6 +7,7 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Marker, MARKER_KINDS } from "../../modules/analytics/models/Marker.js";
 import { requireApiKey, ApiKeyRequest } from "../middleware/api-key.js";
 import { computeStats, parseFilters } from "../../modules/analytics/stats.service.js";
+import { invalidateSite } from "../../modules/billing/event-quota.js";
 
 const router = Router();
 router.use(requireApiKey);
@@ -156,6 +157,9 @@ router.delete("/sites/:siteId", async (req: ApiKeyRequest, res: Response) => {
   if (!site) return res.status(404).json({ error: "site not found" });
   await Event.deleteMany({ siteId });
   await site.deleteOne();
+  // Drop the cached ingest decision, or this site keeps collecting for up to a
+  // minute after the API said it was gone.
+  invalidateSite(siteId);
   res.status(204).end();
 });
 
