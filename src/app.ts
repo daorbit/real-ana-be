@@ -40,6 +40,12 @@ app.set("trust proxy", true);
 // globally — every other endpoint takes small JSON, and a generous body limit on
 // all of them is free memory for anyone who wants to spend ours.
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
+// Form uploads carry a base64 file for the same reason, and are capped at
+// `MAX_UPLOAD_MB` (25) once parsed. The limit here is deliberately a little
+// higher: base64 inflates by about a third, so a 25MB file is roughly 34MB on
+// the wire, and rejecting it at the parser would surface as a broken upload
+// rather than the size message the route gives.
+app.use("/api/public/forms/:formKey/upload", express.json({ limit: "36mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.

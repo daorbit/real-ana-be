@@ -1,10 +1,15 @@
 import {
   Form,
   CHOICE_TYPES,
+  COMPOSITE_PARTS,
   FIELD_TYPES,
   MAX_FIELDS_PER_FORM,
   MAX_OPTIONS_PER_FIELD,
+  MAX_UPLOAD_MB,
   ABSOLUTE_MAX_FIELD_LENGTH,
+  UPLOAD_TYPES,
+  isCompositeType,
+  isInputType,
   slugifyFieldKey,
   type FieldType,
 } from "./models/Form.js";
@@ -36,6 +41,20 @@ export type FieldInput = {
   maxLength?: unknown;
   hidden?: unknown;
   width?: unknown;
+  min?: unknown;
+  max?: unknown;
+  step?: unknown;
+  currency?: unknown;
+  ratingMax?: unknown;
+  pattern?: unknown;
+  patternMessage?: unknown;
+  minDate?: unknown;
+  maxDate?: unknown;
+  maxFileMb?: unknown;
+  acceptedTypes?: unknown;
+  parts?: unknown;
+  content?: unknown;
+  level?: unknown;
 };
 
 /** Row widths a field may take, in twelfths: a third, a half, or the full row. */
@@ -53,6 +72,20 @@ export type CleanField = {
   order: number;
   hidden: boolean;
   width: number;
+  min: number | null;
+  max: number | null;
+  step: number | null;
+  currency: string;
+  ratingMax: number;
+  pattern: string;
+  patternMessage: string;
+  minDate: string;
+  maxDate: string;
+  maxFileMb: number;
+  acceptedTypes: string[];
+  parts: string[];
+  content: string;
+  level: number;
 };
 
 function str(v: unknown, max: number): string {
@@ -116,13 +149,36 @@ export function cleanFields(input: unknown): Result<CleanField[]> {
         ? 2_000
         : 500;
 
+    // A pattern is written by the owner and matched against a stranger's input,
+    // so it is compiled once here: an invalid regex must fail at save time, in
+    // front of the person who can fix it, rather than silently at ingest.
+    const pattern = str(raw.pattern, 200);
+    if (type === "regex" && pattern) {
+      try {
+        new RegExp(pattern);
+      } catch {
+        return { ok: false, error: `the pattern on "${label}" is not a valid regular expression` };
+      }
+    }
+
+    const parts = Array.isArray(raw.parts)
+      ? (raw.parts as unknown[]).map((p) => str(p, 20)).filter(Boolean)
+      : [];
+    if (isCompositeType(type) && parts.length) {
+      const known = (COMPOSITE_PARTS[type] ?? []).map((p) => p.key);
+      const unknown = parts.find((p) => !known.includes(p));
+      if (unknown) return { ok: false, error: `"${label}" has no part called "${unknown}"` };
+    }
+
     fields.push({
       key,
       label,
       type,
       help: str(raw.help, 300),
       placeholder: str(raw.placeholder, 200),
-      required: Boolean(raw.required),
+      // Layout elements collect nothing, so "required" is meaningless on one
+      // and would make a form unsubmittable if it were ever honoured.
+      required: isInputType(type) ? Boolean(raw.required) : false,
       options,
       maxLength,
       order: index,
@@ -131,10 +187,45 @@ export function cleanFields(input: unknown): Result<CleanField[]> {
       // does not divide a row cleanly would render as a gap, and a gap the
       // builder cannot explain reads as a bug rather than a choice.
       width: (FIELD_WIDTHS as readonly number[]).includes(Number(raw.width)) ? Number(raw.width) : 12,
+      min: numberOrNull(raw.min),
+      max: numberOrNull(raw.max),
+      step: numberOrNull(raw.step),
+      currency: str(raw.currency, 3).toUpperCase(),
+      ratingMax: clamp(Number(raw.ratingMax), 2, 10, 5),
+      pattern,
+      patternMessage: str(raw.patternMessage, 200),
+      minDate: str(raw.minDate, 40),
+      maxDate: str(raw.maxDate, 40),
+      // Bounded here as well as in the schema: this is the number the public
+      // upload endpoint checks a file against, so it cannot be whatever the
+      // builder sent.
+      maxFileMb: clamp(Number(raw.maxFileMb), 1, MAX_UPLOAD_MB, 5),
+      acceptedTypes: Array.isArray(raw.acceptedTypes)
+        ? (raw.acceptedTypes as unknown[]).map((t) => str(t, 40)).filter(Boolean).slice(0, 20)
+        : [],
+      parts,
+      content: str(raw.content, 2_000),
+      level: [1, 2, 3].includes(Number(raw.level)) ? Number(raw.level) : 2,
     });
   }
 
+  // Checked after the loop rather than inside it: a form may legitimately hold
+  // only layout elements while it is being built, and refusing that would mean
+  // a heading cannot be the first thing you drop onto a blank canvas.
+  if (!fields.some((f) => isInputType(f.type)))
+    return { ok: false, error: "a form needs at least one field that collects an answer" };
+
   return { ok: true, value: fields };
+}
+
+function numberOrNull(v: unknown): number | null {
+  const n = Number(v);
+  return v === null || v === undefined || v === "" || !Number.isFinite(n) ? null : n;
+}
+
+function clamp(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.trunc(n), min), max);
 }
 
 /**
@@ -306,6 +397,23 @@ export function presentPublicForm(form: InstanceType<typeof Form>, showBranding:
         // A textarea in a third of a row is unusable whatever the builder said,
         // so the render-time floor is here rather than trusted from storage.
         width: f.type === "textarea" ? 12 : (f.width ?? 12),
+        // Everything the hosted page needs to render and pre-validate this
+        // field. Client-side validation is a courtesy — `validate-answer.ts`
+        // re-checks all of it, and that is the copy that decides.
+        min: f.min ?? null,
+        max: f.max ?? null,
+        step: f.step ?? null,
+        currency: f.currency ?? "",
+        ratingMax: f.ratingMax ?? 5,
+        pattern: f.pattern ?? "",
+        patternMessage: f.patternMessage ?? "",
+        minDate: f.minDate ?? "",
+        maxDate: f.maxDate ?? "",
+        maxFileMb: f.maxFileMb ?? 5,
+        acceptedTypes: f.acceptedTypes ?? [],
+        parts: f.parts ?? [],
+        content: f.content ?? "",
+        level: f.level ?? 2,
       })),
     settings: {
       submitText: settings?.submitText ?? "Submit",

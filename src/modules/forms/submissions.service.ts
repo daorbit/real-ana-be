@@ -1,4 +1,5 @@
-import { Form, CHOICE_TYPES, type FieldType } from "./models/Form.js";
+import { Form, isInputType } from "./models/Form.js";
+import { coerceAnswer, flattenAnswer, type FieldSpec } from "./validate-answer.js";
 import { Submission } from "./models/Submission.js";
 import {
   checkRates,
@@ -38,55 +39,6 @@ function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.trim().slice(0, max) : "";
 }
 
-function looksLikeEmail(v: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v);
-}
-
-/**
- * Coerce and bound one answer against its field definition.
- *
- * Every value that reaches storage passes through here, so this is where the
- * length ceiling actually applies — the field's `maxLength` was already bounded
- * by `ABSOLUTE_MAX_FIELD_LENGTH` when the form was saved, which is what stops a
- * form owner from opening their own endpoint up to unbounded writes.
- */
-function coerceAnswer(
-  field: { key: string; label: string; type: FieldType; required: boolean; options: string[]; maxLength: number },
-  raw: unknown,
-): { ok: true; value: unknown } | { ok: false; error: string } {
-  if (field.type === "checkbox") {
-    const checked = raw === true || raw === "true" || raw === "on" || raw === "1";
-    if (field.required && !checked) return { ok: false, error: `"${field.label}" is required` };
-    return { ok: true, value: checked };
-  }
-
-  const text = str(raw, field.maxLength);
-
-  if (!text) {
-    if (field.required) return { ok: false, error: `"${field.label}" is required` };
-    return { ok: true, value: "" };
-  }
-
-  if (field.type === "email" && !looksLikeEmail(text))
-    return { ok: false, error: `"${field.label}" does not look like an email address` };
-
-  if (field.type === "number") {
-    const n = Number(text);
-    if (!Number.isFinite(n)) return { ok: false, error: `"${field.label}" must be a number` };
-    return { ok: true, value: n };
-  }
-
-  if (field.type === "tel" && !/^[+()\-.\s\d]{5,}$/.test(text))
-    return { ok: false, error: `"${field.label}" does not look like a phone number` };
-
-  // Choice fields are checked against the offered options rather than trusted:
-  // the select on the page is a suggestion, and the POST behind it is not.
-  if (CHOICE_TYPES.includes(field.type) && !field.options.includes(text))
-    return { ok: false, error: `"${text}" is not one of the options for "${field.label}"` };
-
-  return { ok: true, value: text };
-}
-
 export async function ingest(
   form: InstanceType<typeof Form>,
   body: Record<string, unknown>,
@@ -111,8 +63,11 @@ export async function ingest(
   if (timing !== "ok")
     return { status: "rejected", code: 400, error: "This form could not be verified. Refresh the page and try again." };
 
-  const fields = ((form.get("fields") as Parameters<typeof coerceAnswer>[0][]) ?? []).filter(
-    (f) => !(f as { hidden?: boolean }).hidden,
+  // Layout elements are dropped here rather than filtered at every use below:
+  // a heading has no key to store an answer under, and a required-check against
+  // one would refuse every submission to a form that has a divider on it.
+  const fields = ((form.get("fields") as (FieldSpec & { hidden?: boolean })[]) ?? []).filter(
+    (f) => !f.hidden && isInputType(f.type),
   );
   const submitted = (body.data ?? {}) as Record<string, unknown>;
   if (typeof submitted !== "object" || Array.isArray(submitted))
@@ -250,7 +205,10 @@ export function csvCell(value: unknown): string {
 
 /** One CSV of every submission to a form, newest first. */
 export async function buildCsv(form: InstanceType<typeof Form>): Promise<string> {
-  const fields = ((form.get("fields") as { key: string; label: string }[]) ?? []).slice();
+  // Layout elements carry no answer, so they get no column. Retired fields do
+  // keep theirs: their answers are still stored, and a column that disappears
+  // takes the meaning of the data under it with it.
+  const fields = ((form.get("fields") as FieldSpec[]) ?? []).filter((f) => isInputType(f.type));
   const submissions = await Submission.find({ formId: form.id }).sort({ createdAt: -1 }).limit(50_000);
 
   const header = ["Submitted at", ...fields.map((f) => f.label), "Referrer", "UTM source", "UTM medium", "UTM campaign"];
@@ -259,7 +217,9 @@ export async function buildCsv(form: InstanceType<typeof Form>): Promise<string>
     const utm = (s.get("utm") as Record<string, string>) ?? {};
     return [
       (s.get("createdAt") as Date)?.toISOString() ?? "",
-      ...fields.map((f) => data[f.key]),
+      // Flattened, so a composite answer reads as "Ada Lovelace" rather than
+      // as an object literal in a spreadsheet cell.
+      ...fields.map((f) => flattenAnswer(f, data[f.key])),
       s.get("referrer") ?? "",
       utm.source ?? "",
       utm.medium ?? "",
@@ -268,6 +228,19 @@ export async function buildCsv(form: InstanceType<typeof Form>): Promise<string>
   });
 
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+/**
+ * Remove every file uploaded to one form.
+ *
+ * Keyed on the folder the upload endpoint writes to, so this needs no index of
+ * stored URLs — which is what makes it usable from a delete path that has
+ * already removed the rows holding them.
+ */
+export async function deleteFormUploads(formKey: string): Promise<void> {
+  if (!formKey) return;
+  const { deleteByPrefix } = await import("../../infra/storage/cloudinary.js");
+  await deleteByPrefix(`quantalog/forms/${formKey}`);
 }
 
 /**

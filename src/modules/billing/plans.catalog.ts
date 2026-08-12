@@ -70,7 +70,14 @@ export type PlanCatalogEntry = {
    */
   monthlySubmissionQuota: number;
   formsCsvExport: boolean;
-  /** Reserved for v2. Present so the ladder does not need reshaping when uploads land. */
+  /**
+   * Whether a published form may carry a file or image upload field.
+   *
+   * Paid-only, and the one forms limit that is about our costs rather than the
+   * customer's scale: an upload field on a free hosted form is unauthenticated
+   * write access to storage we are billed for. Checked at publish, not at save,
+   * so the field can still be built and previewed on any plan.
+   */
   formsFileUploads: boolean;
   /**
    * Whether the hosted page may drop the "Powered by Quantalog" line.
@@ -137,7 +144,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxForms: 5,
     monthlySubmissionQuota: 2_000,
     formsCsvExport: true,
-    formsFileUploads: false,
+    formsFileUploads: true,
     formsRemoveBranding: true,
   },
   {
@@ -163,7 +170,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     maxForms: 25,
     monthlySubmissionQuota: 20_000,
     formsCsvExport: true,
-    formsFileUploads: false,
+    formsFileUploads: true,
     formsRemoveBranding: true,
   },
 ];

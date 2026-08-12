@@ -119,6 +119,42 @@ export async function deleteImage(publicId: string): Promise<void> {
   }
 }
 
+/**
+ * Delete every asset under one prefix.
+ *
+ * For a deleted form: its uploads all live under `quantalog/forms/<formKey>/`,
+ * so one call clears them rather than a request per stored URL — which would
+ * mean reading every submission back just to find the files.
+ *
+ * Best-effort like `deleteImage`, and for the same reason: the rows that
+ * referenced these files are already gone, so a failure here leaves orphaned
+ * storage rather than a broken delete. Cloudinary caps this at 100 assets per
+ * call, which is why it loops.
+ */
+export async function deleteByPrefix(prefix: string): Promise<void> {
+  if (!cloudinaryConfigured() || !prefix) return;
+
+  try {
+    // The admin API is Basic-authed rather than signature-authed, unlike the
+    // upload endpoints above.
+    const auth = Buffer.from(`${API_KEY()}:${API_SECRET()}`).toString("base64");
+    for (let page = 0; page < 20; page += 1) {
+      const { data } = await axios.delete(
+        `https://api.cloudinary.com/v1_1/${CLOUD_NAME()}/resources/image/upload`,
+        {
+          params: { prefix },
+          headers: { Authorization: `Basic ${auth}` },
+          timeout: 15_000,
+        },
+      );
+      // `partial` means the 100-asset ceiling was hit and there is more to do.
+      if (!data?.partial) break;
+    }
+  } catch (e) {
+    console.error("[cloudinary] prefix delete failed:", e instanceof Error ? e.message : e);
+  }
+}
+
 /** Formats Cloudinary accepts and browsers render. SVG is excluded: it can carry script. */
 const ALLOWED_MIME = new Set([
   "image/png",

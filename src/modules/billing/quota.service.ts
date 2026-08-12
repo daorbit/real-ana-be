@@ -298,6 +298,26 @@ export async function canExportSubmissions(
   return { ok: true };
 }
 
+/**
+ * Whether this workspace's plan may publish a form that accepts uploads.
+ *
+ * Paid-only because an upload field on a free hosted form is unauthenticated
+ * write access to storage we are billed for — the one part of forms whose cost
+ * does not scale with the customer's own success.
+ */
+export async function canUseFormUploads(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to collect file uploads" };
+  if (!plan.formsFileUploads)
+    return {
+      ok: false,
+      error: "file uploads are a paid feature — upgrade this workspace, or remove the upload field before publishing",
+    };
+  return { ok: true };
+}
+
 /** Whether this workspace's plan includes WhatsApp report delivery at all. */
 export async function canUseWhatsAppReports(
   workspaceId: string,

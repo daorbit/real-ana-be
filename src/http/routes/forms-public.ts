@@ -1,10 +1,17 @@
 import { Router, Request, Response } from "express";
-import { Form } from "../../modules/forms/models/Form.js";
+import { Form, MAX_UPLOAD_MB, UPLOAD_TYPES } from "../../modules/forms/models/Form.js";
 import { presentPublicForm } from "../../modules/forms/forms.service.js";
 import { ingest } from "../../modules/forms/submissions.service.js";
-import { hashIp, issueTimingToken } from "../../modules/forms/antispam.js";
+import {
+  checkUploadDataUrl,
+  checkUploadRate,
+  hashIp,
+  issueTimingToken,
+} from "../../modules/forms/antispam.js";
+import type { FieldSpec } from "../../modules/forms/validate-answer.js";
 import { clientIp } from "../../modules/analytics/enrich.js";
-import { currentPlan } from "../../modules/billing/quota.service.js";
+import { currentPlan, canUseFormUploads } from "../../modules/billing/quota.service.js";
+import { cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
 
 /**
  * The hosted form: rendering it, and taking what someone types into it.
@@ -105,6 +112,69 @@ router.post("/:formKey/submit", async (req: Request, res: Response) => {
     redirectUrl: result.redirectUrl || null,
     successMessage: result.successMessage || "",
   });
+});
+
+/**
+ * Accept one file for an upload field and return its storage URL.
+ *
+ * The most dangerous endpoint in this module: unauthenticated, and it writes
+ * bytes to storage we pay for. Everything below is a lock on that, in order —
+ *
+ *  - the form must be *published*. A draft's upload field is not a way in.
+ *  - the field must exist on that form and actually be an upload field, so the
+ *    size and type limits are the ones its owner set rather than the caller's.
+ *  - the workspace's plan must include uploads, re-checked here and not only at
+ *    publish: a plan can lapse while a form stays live.
+ *  - the per-IP submission limit applies to uploads too, counted against the
+ *    same window — otherwise the cheap way past it is to upload without ever
+ *    submitting.
+ *  - the size ceiling is `MAX_UPLOAD_MB`, ours, on top of the form's own.
+ *
+ * The browser sends a data URL rather than multipart, matching the avatar path
+ * this reuses; nothing touches the filesystem, which is read-only on the
+ * serverless target anyway.
+ */
+router.post("/:formKey/upload", async (req: Request, res: Response) => {
+  const form = await loadPublicForm(String(req.params.formKey));
+  if (!form || form.get("status") !== "published")
+    return res.status(404).json({ error: "form not found" });
+
+  if (!cloudinaryConfigured())
+    return res.status(503).json({ error: "File uploads are not available right now." });
+
+  const fieldKey = String(req.body?.fieldKey ?? "");
+  const field = ((form.get("fields") as FieldSpec[]) ?? []).find(
+    (f) => f.key === fieldKey && UPLOAD_TYPES.includes(f.type) && !(f as { hidden?: boolean }).hidden,
+  );
+  if (!field) return res.status(400).json({ error: "That field does not take a file." });
+
+  const uploads = await canUseFormUploads(String(form.get("workspaceId")));
+  if (!uploads.ok) return res.status(402).json({ error: "This form cannot accept files." });
+
+  const ipHashValue = hashIp(clientIp(req));
+  const rates = await checkUploadRate(form.id, ipHashValue);
+  if (!rates.ok) return res.status(429).json({ error: rates.error });
+
+  // The form owner's cap, bounded by ours.
+  const maxBytes = Math.min(field.maxFileMb ?? 5, MAX_UPLOAD_MB) * 1024 * 1024;
+  const dataUrl = String(req.body?.file ?? "");
+
+  const checked = checkUploadDataUrl(dataUrl, maxBytes, field.type === "image");
+  if ("error" in checked) return res.status(400).json({ error: checked.error });
+
+  try {
+    const result = await uploadImage({
+      file: dataUrl,
+      // Foldered per form so a workspace's uploads can be found and deleted
+      // together when the form or the workspace goes.
+      folder: `quantalog/forms/${form.get("formKey")}`,
+      publicId: `${fieldKey}_${Date.now().toString(36)}`,
+    });
+    res.status(201).json({ ok: true, url: result.url });
+  } catch (e) {
+    console.error("[forms] upload failed:", (e as Error)?.message);
+    res.status(502).json({ error: "That file could not be uploaded. Try again." });
+  }
 });
 
 export default router;

@@ -14,20 +14,108 @@ import { nanoid } from "nanoid";
  * the prefix means a glance at a log line says what kind of id it is.
  */
 
-export const FIELD_TYPES = [
+/**
+ * Field types that store one scalar answer.
+ *
+ * Grouped by how the value is validated rather than by how it is rendered — a
+ * `url` and a `regex` field look identical on the page and are checked
+ * completely differently, which is the distinction that matters here.
+ */
+export const SCALAR_FIELD_TYPES = [
   "text",
   "email",
   "tel",
   "textarea",
+  "url",
+  "regex",
   "select",
   "checkbox",
   "radio",
   "number",
+  "decimal",
+  "currency",
+  "date",
+  "time",
+  "datetime",
+  "rating",
+  "slider",
+  "yesno",
+  "terms",
+  "file",
+  "image",
+] as const;
+
+/**
+ * Field types whose answer is several named parts.
+ *
+ * Stored as an object under one key — `data.full_name = { first, last }` —
+ * rather than as several sibling fields, because the parts belong together:
+ * asking for a name is one question, and splitting it into two independent
+ * fields means a CSV where nothing ties the halves back to one person.
+ */
+export const COMPOSITE_FIELD_TYPES = ["name", "address"] as const;
+
+/**
+ * Elements that render but collect nothing.
+ *
+ * They carry a key like any other element so ordering, selection and editing
+ * work unchanged, but the key is never used to store an answer — a heading has
+ * nothing to say when the form is submitted. `isInputType` below is what every
+ * ingest, CSV and dedup path uses to tell the two apart.
+ */
+export const LAYOUT_FIELD_TYPES = [
+  "heading",
+  "description",
+  "divider",
+  "spacer",
+  "section",
+  "pagebreak",
+] as const;
+
+export const FIELD_TYPES = [
+  ...SCALAR_FIELD_TYPES,
+  ...COMPOSITE_FIELD_TYPES,
+  ...LAYOUT_FIELD_TYPES,
 ] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
 /** Types whose answer is chosen from `options` rather than typed. */
 export const CHOICE_TYPES: FieldType[] = ["select", "radio"];
+
+/** Types that upload a file and store its URL. Plan-gated and off by default. */
+export const UPLOAD_TYPES: FieldType[] = ["file", "image"];
+
+/** Whether a field of this type contributes an answer to `Submission.data`. */
+export function isInputType(type: FieldType): boolean {
+  return !(LAYOUT_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+export function isCompositeType(type: FieldType): boolean {
+  return (COMPOSITE_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * The parts of each composite type, in the order they render.
+ *
+ * Fixed rather than configurable: these exist so the common questions have one
+ * shape across every form, which is what makes a submission from one form
+ * comparable to a submission from another. A form needing a different breakdown
+ * builds it from ordinary fields.
+ */
+export const COMPOSITE_PARTS: Record<string, { key: string; label: string; width: number }[]> = {
+  name: [
+    { key: "first", label: "First", width: 6 },
+    { key: "last", label: "Last", width: 6 },
+  ],
+  address: [
+    { key: "line1", label: "Address line 1", width: 12 },
+    { key: "line2", label: "Address line 2", width: 12 },
+    { key: "city", label: "City", width: 6 },
+    { key: "state", label: "State / Region", width: 6 },
+    { key: "postal", label: "Postal code", width: 6 },
+    { key: "country", label: "Country", width: 6 },
+  ],
+};
 
 export const FORM_STATUSES = ["draft", "published", "closed"] as const;
 export type FormStatus = (typeof FORM_STATUSES)[number];
@@ -46,6 +134,16 @@ export const MAX_FIELDS_PER_FORM = 50;
 
 /** Choices one select/radio field may offer. */
 export const MAX_OPTIONS_PER_FIELD = 50;
+
+/**
+ * The largest file the public upload endpoint will accept, whatever a form's
+ * own `maxFileMb` says.
+ *
+ * Ours, not the owner's. Uploads arrive from an unauthenticated endpoint and
+ * land in storage we pay for, so the ceiling has to be one a form owner cannot
+ * raise.
+ */
+export const MAX_UPLOAD_MB = 25;
 
 const fieldSchema = new Schema(
   {
@@ -90,6 +188,62 @@ const fieldSchema = new Schema(
      * column.
      */
     hidden: { type: Boolean, default: false },
+
+    /**
+     * Numeric bounds, for the types where a range is the validation.
+     *
+     * Shared across number/decimal/currency/rating/slider rather than a field
+     * per type: they differ in how they are rendered and in nothing else, and
+     * five near-identical pairs of columns would drift apart.
+     */
+    min: { type: Number, default: null },
+    max: { type: Number, default: null },
+    /** Slider granularity, and the decimal places a decimal/currency answer keeps. */
+    step: { type: Number, default: null },
+    /** Currency fields only. ISO 4217, shown beside the input. */
+    currency: { type: String, trim: true, maxlength: 3, default: "" },
+    /** Rating fields only: how many stars are offered. */
+    ratingMax: { type: Number, default: 5, min: 2, max: 10 },
+
+    /**
+     * The pattern a `regex` field must match.
+     *
+     * Stored as a string and compiled per submission, with a length cap and a
+     * timeout at the call site: a pattern is written by the form's owner but
+     * matched against a stranger's input, which is where catastrophic
+     * backtracking turns a validation rule into an outage.
+     */
+    pattern: { type: String, trim: true, maxlength: 200, default: "" },
+    /** Shown when `pattern` fails, since a regex is not an error message. */
+    patternMessage: { type: String, trim: true, maxlength: 200, default: "" },
+
+    /**
+     * Date/time bounds, as ISO strings.
+     *
+     * Strings rather than Dates: "no date before today" is a rule that has to
+     * survive being stored, and a Date pinned at save time would mean a form
+     * built in March still refusing April next year.
+     */
+    minDate: { type: String, trim: true, maxlength: 40, default: "" },
+    maxDate: { type: String, trim: true, maxlength: 40, default: "" },
+
+    /** Upload fields: what may be sent, and how large. Bounded again server-side. */
+    maxFileMb: { type: Number, default: 5, min: 1, max: 25 },
+    acceptedTypes: { type: [String], default: [] },
+
+    /**
+     * Which parts of a composite field are shown.
+     *
+     * Address line 2 and country are noise on a form that only needs a city, so
+     * the parts are opt-out. Empty means every part, which is what an existing
+     * field written before this column existed should do.
+     */
+    parts: { type: [String], default: [] },
+
+    /** Layout elements: the text they render. Never stored as an answer. */
+    content: { type: String, trim: true, maxlength: 2_000, default: "" },
+    /** Heading level, for `heading` elements. */
+    level: { type: Number, enum: [1, 2, 3], default: 2 },
   },
   { _id: false },
 );

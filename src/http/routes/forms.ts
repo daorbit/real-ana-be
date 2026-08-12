@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import { Form } from "../../modules/forms/models/Form.js";
+import { Form, UPLOAD_TYPES, isInputType } from "../../modules/forms/models/Form.js";
 import { Submission } from "../../modules/forms/models/Submission.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { resolveAccess, isDenied, requireWorkspace } from "../../modules/workspace/access.service.js";
@@ -11,8 +11,16 @@ import {
   presentForm,
   type CleanField,
 } from "../../modules/forms/forms.service.js";
-import { buildCsv, presentSubmission } from "../../modules/forms/submissions.service.js";
-import { canCreateForm, canExportSubmissions } from "../../modules/billing/quota.service.js";
+import {
+  buildCsv,
+  deleteFormUploads,
+  presentSubmission,
+} from "../../modules/forms/submissions.service.js";
+import {
+  canCreateForm,
+  canExportSubmissions,
+  canUseFormUploads,
+} from "../../modules/billing/quota.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 
 /**
@@ -207,9 +215,22 @@ formRouter.post("/:id/publish", async (req: AuthedRequest, res: Response) => {
   const form = await loadForm(req, res, "editor");
   if (!form) return;
 
-  const fields = ((form.get("fields") as CleanField[]) ?? []).filter((f) => !f.hidden);
+  const fields = ((form.get("fields") as CleanField[]) ?? []).filter(
+    (f) => !f.hidden && isInputType(f.type),
+  );
+  // Layout elements do not count: a form of three headings and a divider
+  // collects nothing, and publishing it would hand out a link to a page with no
+  // way to answer.
   if (!fields.length)
-    return res.status(400).json({ error: "add at least one field before publishing this form" });
+    return res.status(400).json({ error: "add at least one field that collects an answer before publishing" });
+
+  // Upload fields are checked at publish rather than at save, so a form can be
+  // built and previewed on any plan — the limit applies when it would actually
+  // start accepting files onto storage we pay for.
+  if (fields.some((f) => UPLOAD_TYPES.includes(f.type))) {
+    const uploads = await canUseFormUploads(String(form.get("workspaceId")));
+    if (!uploads.ok) return res.status(402).json({ error: uploads.error });
+  }
 
   // Excludes itself, so re-publishing a form that is already live is never
   // blocked by the cap it is already counted against.
@@ -263,6 +284,11 @@ formRouter.delete("/:id", async (req: AuthedRequest, res: Response) => {
 
   await Submission.deleteMany({ formId: form.id });
   await form.deleteOne();
+  // Uploaded files outlive the rows that referenced them unless they are told
+  // not to. Best-effort and after the delete: an orphaned asset costs storage,
+  // where a failed cleanup blocking the delete would leave the customer unable
+  // to remove a form at all.
+  void deleteFormUploads(String(form.get("formKey")));
   res.json({ ok: true });
 });
 

@@ -1,5 +1,6 @@
 import { Submission } from "./models/Submission.js";
-import { Form } from "./models/Form.js";
+import { Form, isInputType } from "./models/Form.js";
+import { flattenAnswer, type FieldSpec } from "./validate-answer.js";
 import { mailConfigured, sendOne, broadcastHtml } from "../../infra/mail/mailer.js";
 
 /**
@@ -27,18 +28,12 @@ export const NOTIFY_WINDOW_MS = 60 * 60 * 1000;
  * string through it renders correctly *and* cannot carry markup into the form
  * owner's inbox.
  */
-function renderAnswers(
-  fields: { key: string; label: string }[],
-  data: Record<string, unknown>,
-): string {
+function renderAnswers(fields: FieldSpec[], data: Record<string, unknown>): string {
   return fields
-    .filter((f) => data[f.key] !== undefined && data[f.key] !== "")
-    .map((f) => {
-      const value = Array.isArray(data[f.key])
-        ? (data[f.key] as unknown[]).join(", ")
-        : String(data[f.key] ?? "");
-      return `${f.label}: ${value}`;
-    })
+    .filter((f) => isInputType(f.type))
+    .map((f) => ({ label: f.label, value: flattenAnswer(f, data[f.key]) }))
+    .filter((row) => row.value !== "")
+    .map((row) => `${row.label}: ${row.value}`)
     .join("\n");
 }
 
@@ -90,7 +85,7 @@ Individual notifications are paused for this form until the rate settles, so you
       for (const email of recipients)
         await sendOne({ email }, `${formName}: submissions paused for the hour`, text, broadcastHtml(text));
     } else {
-      const fields = (form.get("fields") as { key: string; label: string }[]) ?? [];
+      const fields = (form.get("fields") as FieldSpec[]) ?? [];
       // Blank line between the opening line and the answers: `broadcastHtml`
       // splits on it, so the answers land as their own paragraph.
       const text = `New submission on "${formName}".\n\n${renderAnswers(fields, data)}`;
