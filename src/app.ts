@@ -25,6 +25,8 @@ import reportsPublicRoutes from "./http/routes/reports-public.js";
 import contactPublicRoutes from "./http/routes/contact-public.js";
 import newsletterPublicRoutes from "./http/routes/newsletter-public.js";
 import supportRoutes from "./http/routes/support.js";
+import { workspaceFormsRouter, formRouter } from "./http/routes/forms.js";
+import formsPublicRoutes from "./http/routes/forms-public.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 
@@ -100,6 +102,15 @@ app.use("/api/public/reports", openCors, reportsPublicRoutes);
 app.use("/api/public/contact", openCors, contactPublicRoutes);
 // The newsletter dialog on the same site. Same origin story, same write-only shape.
 app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
+// Hosted lead forms: the schema a public page renders, and the submissions it
+// takes. Open CORS because the page lives in the marketing app and may itself
+// be iframed onto a customer's own domain — there is no allowlist to keep,
+// which is the main reason the hosted route came before an embed script.
+//
+// No `X-Frame-Options` is set anywhere in this app, so nothing has to be
+// exempted for the iframe case; if a global frame header is ever added, this
+// route is the one that must opt out of it.
+app.use("/api/public/forms", openCors, formsPublicRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
@@ -116,6 +127,11 @@ app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
+// Lead forms. Creating and listing are workspace-scoped; everything about one
+// form is addressed by its own id, since a form id already resolves to its
+// workspace and repeating it in the path only lets the two disagree.
+app.use("/api/workspaces/:wid/forms", dashboardCors, workspaceFormsRouter);
+app.use("/api/forms", dashboardCors, formRouter);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);
 // Accepting an invitation. Not under /workspaces: the recipient has no access

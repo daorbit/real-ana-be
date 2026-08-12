@@ -28,6 +28,8 @@ import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
+import { Form } from "../../modules/forms/models/Form.js";
+import { Submission } from "../../modules/forms/models/Submission.js";
 import { generateKey } from "../middleware/api-key.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
@@ -681,6 +683,12 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   // authenticating against /v1 for a tenant that no longer exists.
   await ApiKey.deleteMany({ workspaceId: ws.id });
   await Project.deleteMany({ workspaceId: ws.id });
+  // Forms and everything they collected. A hard delete, not a soft one: these
+  // rows are names, email addresses and phone numbers, and orphaning them under
+  // a dead workspace id leaves personal data nothing points at — exactly the
+  // rows a later deletion request would fail to find.
+  await Form.deleteMany({ workspaceId: ws.id });
+  await Submission.deleteMany({ workspaceId: ws.id });
   // The plan was bought for this workspace, so it goes with it. Left behind it
   // would hold the unique index on `workspaceId` against a dead id, and count
   // as an active plan in the account's billing summary.

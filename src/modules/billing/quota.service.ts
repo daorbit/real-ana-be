@@ -54,6 +54,10 @@ export async function activatePlanPeriod(
         auditsUsed: 0,
         crawlsUsed: 0,
         eventsUsed: 0,
+        // Reset here and nowhere else, for the same reason as the counters
+        // above: a purchase path that forgets one leaves a workspace paying for
+        // a cycle it starts already over.
+        submissionsUsed: 0,
       },
     },
     { upsert: true }
@@ -201,6 +205,95 @@ export async function canCreateReportSchedule(
     return {
       ok: false,
       error: `this workspace's plan allows ${plan.maxReportSchedules} scheduled report${plan.maxReportSchedules === 1 ? "" : "s"} — upgrade to add more`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether `workspaceId` may publish one more form.
+ *
+ * Counts *published* forms only. A draft collects nothing and costs nothing, so
+ * capping drafts would only stop someone drafting the form they are about to
+ * upgrade for. `excludeId` lets a re-publish of an existing form skip counting
+ * itself.
+ */
+export async function canCreateForm(
+  workspaceId: string,
+  excludeId?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to publish forms" };
+
+  // Imported lazily: `forms` reads this module for its own guards, and a static
+  // import in both directions would be circular at load time.
+  const { Form } = await import("../forms/models/Form.js");
+  const count = await Form.countDocuments({
+    workspaceId,
+    status: "published",
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  });
+
+  if (count >= plan.maxForms)
+    return {
+      ok: false,
+      error: `this workspace's plan allows ${plan.maxForms} published form${plan.maxForms === 1 ? "" : "s"} — upgrade to publish more`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether this workspace is still inside its submission allowance.
+ *
+ * Note the shape: this never refuses a submission. `ok: false` means "store it,
+ * flag it, and do not send the notification" — the ingest path treats it as a
+ * degraded accept, not a rejection. See `monthlySubmissionQuota` for why.
+ */
+export async function canAcceptSubmission(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  // No live plan is still not a refusal. A workspace whose period lapsed on a
+  // Friday must not silently stop capturing leads over the weekend.
+  if (!plan)
+    return { ok: false, error: "this workspace has no active plan — submissions are captured but notifications are paused" };
+
+  const sub = await Subscription.findOne({ workspaceId }).select("submissionsUsed");
+  const used = (sub?.get("submissionsUsed") as number) ?? 0;
+  if (used >= plan.monthlySubmissionQuota)
+    return {
+      ok: false,
+      error: `this workspace has used its ${plan.monthlySubmissionQuota} submissions for the cycle — leads are still being captured, but email notifications are paused until you upgrade`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Record one accepted submission against the cycle.
+ *
+ * Unconditional `$inc`, unlike `spendQuota`: there is nothing to lose a race
+ * over when going past the line is permitted. The count keeps rising past the
+ * allowance so the banner can say how far over the workspace is.
+ */
+export async function recordSubmissionUsage(workspaceId: string): Promise<void> {
+  await Subscription.updateOne({ workspaceId }, { $inc: { submissionsUsed: 1 } });
+}
+
+/**
+ * Whether this workspace's plan may export submissions as CSV.
+ *
+ * Refused server-side as well as hidden in the UI, the same reasoning as
+ * `canConfigureReport`: the export is the whole value of the stored leads, so a
+ * hidden button is only the polite half of the limit.
+ */
+export async function canExportSubmissions(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to export submissions" };
+  if (!plan.formsCsvExport)
+    return {
+      ok: false,
+      error: "CSV export is a paid feature — upgrade this workspace to download your submissions",
     };
   return { ok: true };
 }
@@ -356,6 +449,9 @@ export async function quotaSummary(workspaceId: string) {
   if (!plan) return null;
 
   const siteCount = await Site.countDocuments({ workspaceId });
+  // Lazy for the same cycle reason as `canCreateForm` above.
+  const { Form } = await import("../forms/models/Form.js");
+  const formCount = await Form.countDocuments({ workspaceId, status: "published" });
   // Lazy for the same cycle reason as `planAllowance` above.
   const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
   const orbitPlan = await effectiveOrbitPlan(workspaceId);
@@ -399,6 +495,24 @@ export async function quotaSummary(workspaceId: string) {
     sites: {
       quota: MAX_SITES_PER_WORKSPACE,
       used: siteCount,
+    },
+    /**
+     * Forms and lead capture.
+     *
+     * `used` here counts published forms, matching what `canCreateForm`
+     * enforces. The submission figure can exceed its quota by design — the
+     * limit is soft — so the dashboard must render `used > planQuota` as an
+     * upgrade prompt rather than clamping it to the maximum.
+     */
+    forms: {
+      planQuota: plan.maxForms,
+      used: formCount,
+      submissions: {
+        planQuota: plan.monthlySubmissionQuota,
+        used: (sub.get("submissionsUsed") as number) ?? 0,
+      },
+      csvExport: plan.formsCsvExport,
+      removeBranding: plan.formsRemoveBranding,
     },
     maxSitesPerWorkspace: MAX_SITES_PER_WORKSPACE,
     allowedRanges: plan.allowedRanges,

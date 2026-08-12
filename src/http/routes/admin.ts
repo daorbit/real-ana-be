@@ -6,6 +6,8 @@ import { Event } from "../../modules/analytics/models/Event.js";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
+import { Form } from "../../modules/forms/models/Form.js";
+import { Submission } from "../../modules/forms/models/Submission.js";
 import { ContactMessage } from "../../modules/support/models/ContactMessage.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../../config/AppSetting.js";
 import { demoUsageSnapshot } from "../../modules/billing/demo-limit.js";
@@ -291,6 +293,11 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   });
   await Goal.deleteMany({ workspaceId: { $in: wsIds } });
   await Project.deleteMany({ workspaceId: { $in: wsIds } });
+  // Same cascade as the workspace delete route. Submissions are personal data,
+  // so an account deletion that left them behind would be the one place the
+  // product keeps names and phone numbers for an account that no longer exists.
+  await Form.deleteMany({ workspaceId: { $in: wsIds } });
+  await Submission.deleteMany({ workspaceId: { $in: wsIds } });
   // The same cascade the workspace delete route performs. Left behind, a
   // subscription holds the unique index on a dead workspaceId (so the id can
   // never be reused) and still counts as an active plan carrying its own

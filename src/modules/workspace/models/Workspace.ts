@@ -89,6 +89,17 @@ const workspaceSchema = new Schema(
       engagement: { type: Boolean, default: false },
       visitorSplit: { type: Boolean, default: false },
     },
+
+    /**
+     * How long form submissions are kept, in days. `0` means keep until
+     * deleted, which is the default: silently destroying leads a customer
+     * believes they still have is a worse failure than storing them too long.
+     *
+     * Deliberately separate from anything governing `Event`. Events are
+     * cookieless and non-identifying; submissions hold names, addresses and
+     * phone numbers, so one retention rule cannot serve both.
+     */
+    submissionRetentionDays: { type: Number, default: 0, min: 0, max: 3650 },
   },
   { timestamps: true }
 );

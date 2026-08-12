@@ -53,6 +53,32 @@ export type PlanCatalogEntry = {
    * to be worth anything, which is exactly the customer who has been paying.
    */
   compareModes: CompareModeKey[];
+
+  /** Published forms a workspace may hold. Drafts are free — an unpublished form collects nothing. */
+  maxForms: number;
+  /**
+   * Submissions a workspace may take per cycle.
+   *
+   * Soft, unlike every other quota here: over the line submissions are still
+   * stored and flagged, and it is the *notifications* that stop. A dropped
+   * analytics event is a gap in a chart; a dropped lead is lost revenue, and a
+   * customer who loses one does not upgrade, they leave. This inverts the
+   * pressure correctly — they upgrade to get their notifications back.
+   *
+   * The consequence, stated rather than hidden: submission volume is not a hard
+   * cost ceiling. `maxForms` and the per-form and per-IP rate limits are.
+   */
+  monthlySubmissionQuota: number;
+  formsCsvExport: boolean;
+  /** Reserved for v2. Present so the ladder does not need reshaping when uploads land. */
+  formsFileUploads: boolean;
+  /**
+   * Whether the hosted page may drop the "Powered by Quantalog" line.
+   *
+   * Free keeps it deliberately: free hosted forms sitting on other people's
+   * sites are the cheapest acquisition this product has.
+   */
+  formsRemoveBranding: boolean;
 };
 
 /** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
@@ -87,6 +113,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["monthly"],
     whatsappReports: false,
     compareModes: ["previous"],
+    maxForms: 1,
+    monthlySubmissionQuota: 100,
+    formsCsvExport: false,
+    formsFileUploads: false,
+    formsRemoveBranding: false,
   },
   {
     slug: "starter",
@@ -103,6 +134,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["weekly", "monthly"],
     whatsappReports: false,
     compareModes: ["previous", "custom"],
+    maxForms: 5,
+    monthlySubmissionQuota: 2_000,
+    formsCsvExport: true,
+    formsFileUploads: false,
+    formsRemoveBranding: true,
   },
   {
     slug: "pro",
@@ -124,6 +160,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["daily", "weekly", "monthly"],
     whatsappReports: true,
     compareModes: ["previous", "yoy", "custom"],
+    maxForms: 25,
+    monthlySubmissionQuota: 20_000,
+    formsCsvExport: true,
+    formsFileUploads: false,
+    formsRemoveBranding: true,
   },
 ];
 

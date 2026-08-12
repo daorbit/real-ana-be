@@ -92,4 +92,31 @@ router.get("/reports", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Delete form submissions past each workspace's retention window.
+ *
+ * Only touches workspaces that set one — the default is to keep submissions
+ * until they are deleted by hand, because quietly destroying leads a customer
+ * believes they still have is a worse failure than storing them too long.
+ *
+ * Separate from anything that ages out `Event`: events are cookieless and
+ * non-identifying, submissions are names and phone numbers, and one rule cannot
+ * serve both.
+ */
+router.get("/submission-retention", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const { sweepRetention } = await import("../../modules/forms/submissions.service.js");
+    const summary = await sweepRetention();
+    console.log(
+      `[cron] submission retention: ${summary.deleted} deleted across ${summary.workspaces} workspaces`,
+    );
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] submission retention failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 export default router;

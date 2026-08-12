@@ -78,6 +78,15 @@ const subscriptionSchema = new Schema(
      * someone stop asking.
      */
     orbitUsed: { type: Number, default: 0 },
+    /**
+     * Form submissions accepted this cycle.
+     *
+     * Counted past the plan's allowance rather than stopping at it: the quota
+     * is soft (submissions over the line are stored and flagged, not refused),
+     * so this doubles as the "how far over are they" figure the upgrade banner
+     * shows.
+     */
+    submissionsUsed: { type: Number, default: 0 },
 
     /**
      * When the Orbit period ends, tracked separately from the analytics one.

@@ -4,6 +4,7 @@
   "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }],
   "crons": [
     { "path": "/api/cron/fx-sync", "schedule": "0 2 * * *" },
-    { "path": "/api/cron/reports", "schedule": "0 8 * * *" }
+    { "path": "/api/cron/reports", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/submission-retention", "schedule": "0 3 * * *" }
   ]
 }
