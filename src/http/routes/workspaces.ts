@@ -35,6 +35,8 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
+import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
+import { quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -335,6 +337,75 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   await ws.save();
 
   res.json(shareState(ws));
+});
+
+/**
+ * Languages the share composer may translate a caption into.
+ *
+ * An allowlist rather than free text: the language name is interpolated into a
+ * model prompt, so accepting whatever the client sends would hand a caller the
+ * instructions. Keys match the interface languages we already ship.
+ */
+const CAPTION_LANGUAGES: Record<string, string> = {
+  en: "English",
+  hi: "Hindi",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  pt: "Portuguese",
+  ar: "Arabic",
+  ja: "Japanese",
+  ru: "Russian",
+  zh: "Simplified Chinese",
+  id: "Indonesian",
+};
+
+/** Long enough for a LinkedIn caption, short enough to bound the model call. */
+const MAX_CAPTION_CHARS = 3000;
+
+/**
+ * Translate a share caption.
+ *
+ * Runs through Orbit's model plumbing — the fallback chain, timeouts and output
+ * sanitising — with its own system prompt, because the support prompt correctly
+ * refuses "translate this" as an off-topic request. Admin-only for the same
+ * reason the rest of sharing is: this is metered model spend on the workspace.
+ *
+ * Failure is never fatal to the composer: the client keeps the original caption
+ * and shows a notice, so a missing API key degrades the feature rather than the
+ * page.
+ */
+router.post("/:wid/share/caption/translate", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Translation is not available on this server." });
+  }
+
+  const caption = String(req.body?.caption ?? "").trim().slice(0, MAX_CAPTION_CHARS);
+  if (!caption) return res.status(400).json({ error: "Nothing to translate." });
+
+  const language = CAPTION_LANGUAGES[String(req.body?.language ?? "")];
+  if (!language) return res.status(400).json({ error: "Unsupported language." });
+
+  const result = await askOrbit(
+    // The caption is fenced so a caption that itself reads like an instruction
+    // is treated as content to translate rather than as a new task.
+    `Translate the caption between the markers into ${language}.\n\n<<<CAPTION\n${caption}\nCAPTION>>>`,
+    {
+      systemPrompt:
+        "You translate social media captions. Return only the translated caption in the `reply` field and an empty `suggestions` array. " +
+        "Preserve the original line breaks, emoji, hashtags and any URL exactly as they appear — translate the words around them, never the URL itself. " +
+        "Keep hashtags as single words without spaces. Add no commentary, quotes or explanation.",
+      host: quantalogOrbitHost,
+      tenantId: access.workspace.id,
+    },
+  );
+
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
 });
 
 // Install status for a site — has the tracking script ever reported?
