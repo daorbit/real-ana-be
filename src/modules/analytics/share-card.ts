@@ -28,6 +28,16 @@ export type ShareCardInput = {
   live: number | null;
 };
 
+/**
+ * Every label on the card uses the generic `sans-serif` family.
+ *
+ * Naming Inter here looked right and rendered wrong: the server has no such
+ * font installed, and the renderer fell through the whole list to a *serif*
+ * default — so the workspace name and the footer URL came out in a bookish
+ * face while the numbers did not. A generic family is honest about what is
+ * actually available and renders consistently wherever this runs.
+ */
+
 /** Compact figures — a card reading `1,482,904` is noise at feed size. */
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
@@ -86,9 +96,9 @@ function cardSvg(input: ShareCardInput): string {
     <rect x="${x}" y="${tileY}" width="${tileWidth}" height="${tileHeight}" rx="22"
           fill="rgba(255,255,255,0.045)" stroke="rgba(255,255,255,0.08)" stroke-width="1.5" />
     <text x="${x + 28}" y="${tileY + 78}" fill="${tile.accent}" font-size="56" font-weight="800"
-          font-family="Inter, 'DejaVu Sans', sans-serif">${esc(tile.value)}</text>
+          font-family="sans-serif">${esc(tile.value)}</text>
     <text x="${x + 28}" y="${tileY + 120}" fill="#8d94a5" font-size="22" font-weight="600"
-          font-family="Inter, 'DejaVu Sans', sans-serif">${esc(tile.label)}</text>`;
+          font-family="sans-serif">${esc(tile.label)}</text>`;
     })
     .join("");
 
@@ -138,16 +148,16 @@ function cardSvg(input: ShareCardInput): string {
           stroke-linecap="round" stroke-linejoin="round" fill="none" />
   </g>
   <text x="146" y="103" fill="#f4f6f8" font-size="30" font-weight="700"
-        font-family="Inter, 'DejaVu Sans', sans-serif">Quantalog</text>
+        font-family="sans-serif">Quantalog</text>
 
   <rect x="${CARD_WIDTH - 72 - 210}" y="74" width="210" height="40" rx="20" fill="rgba(52,211,153,0.14)" />
   <text x="${CARD_WIDTH - 72 - 105}" y="101" fill="#6ee7b7" font-size="20" font-weight="600"
-        text-anchor="middle" font-family="Inter, 'DejaVu Sans', sans-serif">LIVE DASHBOARD</text>
+        text-anchor="middle" font-family="sans-serif">LIVE DASHBOARD</text>
 
   <text x="72" y="236" fill="#ffffff" font-size="64" font-weight="800"
-        font-family="Inter, 'DejaVu Sans', sans-serif">${esc(fit(input.workspace, 26))}</text>
+        font-family="sans-serif">${esc(fit(input.workspace, 26))}</text>
   <text x="72" y="276" fill="#8d94a5" font-size="26" font-weight="500"
-        font-family="Inter, 'DejaVu Sans', sans-serif">${esc(input.rangeLabel)}</text>
+        font-family="sans-serif">${esc(input.rangeLabel)}</text>
 ${tileMarkup}
 
   <path d="${area}" fill="url(#sparkArea)" />
@@ -155,7 +165,7 @@ ${tileMarkup}
         stroke-linecap="round" stroke-linejoin="round" />
 
   <text x="72" y="598" fill="#6b7280" font-size="22" font-weight="500"
-        font-family="Inter, 'DejaVu Sans', sans-serif">${esc(fit(prettyLink(input.url), 76))}</text>
+        font-family="sans-serif">${esc(fit(prettyLink(input.url), 76))}</text>
 </svg>`;
 }
 
