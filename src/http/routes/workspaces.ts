@@ -35,6 +35,8 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
+import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
+import { quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -335,6 +337,100 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   await ws.save();
 
   res.json(shareState(ws));
+});
+
+/** Long enough for a LinkedIn caption, short enough to bound the model call. */
+const MAX_CAPTION_CHARS = 3000;
+
+/** The networks a caption can be written for, and how each one wants to read. */
+const CAPTION_TONES: Record<string, string> = {
+  linkedin:
+    "LinkedIn: a professional but human first-person post. Three or four short paragraphs, a concrete hook in the first line, and three or four relevant hashtags at the end.",
+  facebook:
+    "Facebook: warm and conversational, two or three short paragraphs, at most two hashtags.",
+  twitter:
+    "X (Twitter): one punchy post under 240 characters including the link, at most two hashtags.",
+  whatsapp:
+    "WhatsApp: a short direct message to a colleague. Two or three sentences, no hashtags.",
+  telegram:
+    "Telegram: brief and informative, two or three sentences, no hashtags.",
+};
+
+/**
+ * Write a share caption.
+ *
+ * Runs through Orbit's model plumbing — the fallback chain, the timeouts, the
+ * output sanitising — with its own system prompt, because under the support
+ * prompt the model correctly refuses "write me a post" as off-topic.
+ *
+ * Admin-only, like the rest of sharing: this is metered model spend against the
+ * workspace, and the caption describes numbers only an admin can publish.
+ *
+ * Everything the model is told comes from the server's own record of the
+ * workspace, not from the request. A client that could supply the figures could
+ * also supply instructions, and the caption goes out under the user's name.
+ */
+router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Caption writing is not available on this server." });
+  }
+
+  if (!ws.get("shareEnabled") || !ws.get("shareToken")) {
+    return res.status(400).json({ error: "Turn the public dashboard on first." });
+  }
+
+  const platform = String(req.body?.platform ?? "linkedin");
+  const tone = CAPTION_TONES[platform];
+  if (!tone) return res.status(400).json({ error: "Unsupported platform." });
+
+  // The figures come from the same place the public page gets them, so the
+  // caption cannot claim numbers the link does not actually show.
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const siteIds = sites.map((s) => s.siteId as string);
+  const stats = siteIds.length
+    ? await computeStats(siteIds, "30d", {}, resolveWindow("30d"))
+    : null;
+
+  const publicUrl = `${process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in"}/share/${ws.get("shareToken")}`;
+
+  // Only panels the owner published may be described. Mentioning a breakdown
+  // that is switched off would send people to a page missing what was promised.
+  const panels = readPanels(ws.get("sharePanels"));
+  const visible = Object.entries(panels)
+    .filter(([, on]) => on)
+    .map(([key]) => key)
+    .join(", ");
+
+  const facts = [
+    `Workspace name: ${ws.get("name")}`,
+    `Public dashboard URL: ${publicUrl}`,
+    stats && panels.totals
+      ? `Last 30 days: ${stats.visitors} visitors, ${stats.pageviews} pageviews.`
+      : "Visitor totals are not published on this dashboard — do not quote any figures.",
+    `Sections the page shows: ${visible || "none"}.`,
+  ].join("\n");
+
+  const result = await askOrbit(
+    `Write the caption.\n\n${facts}`,
+    {
+      systemPrompt:
+        "You write social media captions for people sharing their public web-analytics dashboard, which is hosted on a product called Quantalog. " +
+        `Write for ${tone}\n\n` +
+        "Rules: write in the first person as the dashboard's owner. Use only the facts given — never invent figures, dates or claims. " +
+        "Include the dashboard URL exactly as provided, on its own line. Do not use markdown, headings, bullet characters or quotation marks around the caption. " +
+        "Return the caption in the `reply` field and an empty `suggestions` array.",
+      host: quantalogOrbitHost,
+      tenantId: ws.id,
+    },
+  );
+
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
 });
 
 // Install status for a site — has the tracking script ever reported?
