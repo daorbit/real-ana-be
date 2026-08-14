@@ -859,6 +859,44 @@ router.put("/:wid/layout", async (req: AuthedRequest, res: Response) => {
   res.json({ layout: ws?.homeLayout ?? [] });
 });
 
+/**
+ * Appearance (theme) settings, workspace-scoped — same shape as the client's
+ * ThemePrefs. Stored as a plain object rather than validated field-by-field:
+ * the FE owns what the keys mean and what a valid value looks like for each
+ * one, and a strict schema here would need editing every time Appearance
+ * grows a new control. The size cap and plain-object check are the only
+ * gates, matching how `homeLayout` above trusts its item shape beyond a
+ * basic type check.
+ */
+function parseThemePrefs(body: unknown): Record<string, unknown> | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  if (JSON.stringify(body).length > 4000) return null;
+  return body as Record<string, unknown>;
+}
+
+router.get("/:wid/theme", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  // null, not {}, so the client can tell "never customised" from "reset".
+  res.json({ theme: ws.themePrefs ?? null });
+});
+
+router.put("/:wid/theme", async (req: AuthedRequest, res: Response) => {
+  const theme = parseThemePrefs(req.body);
+  if (!theme)
+    return res.status(400).json({ error: "theme must be a plain object" });
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  const ws = await Workspace.findByIdAndUpdate(
+    access.workspace.id,
+    { themePrefs: theme },
+    { new: true },
+  );
+  res.json({ theme: ws?.themePrefs ?? null });
+});
+
 // ---- API keys (platform integration) ----
 // Create a key — returns the raw secret ONCE.
 router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {

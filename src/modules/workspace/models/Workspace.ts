@@ -25,6 +25,22 @@ const workspaceSchema = new Schema(
     homeLayout: { type: [placedSchema], default: undefined },
 
     /**
+     * Appearance settings (mode, accent, background, radius, density, etc).
+     * Mirrors the FE's ThemePrefs shape exactly, kept as Mixed rather than a
+     * strict subschema so a new Appearance option ships without a migration
+     * here — the FE remains the source of truth for what the keys mean and
+     * their defaults, this is just storage. Undefined means "never set from
+     * this workspace"; the client falls back to localStorage, then its own
+     * built-in defaults, same as homeLayout above.
+     *
+     * Workspace-level rather than per-user: appearance is a property of the
+     * dashboard everyone on the team looks at, not a personal account
+     * preference — a teammate opening the same workspace on another device
+     * should see the same theme, not their own.
+     */
+    themePrefs: { type: Schema.Types.Mixed, default: undefined },
+
+    /**
      * Public share link.
      *
      * `shareToken` is the entire credential for an unauthenticated read-only
