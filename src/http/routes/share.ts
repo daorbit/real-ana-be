@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
+import { renderShareCardPng } from "../../modules/analytics/share-card.js";
 
 /**
  * Public, unauthenticated read-only dashboards.
@@ -19,6 +20,165 @@ const router = Router();
 
 /** Ranges a public viewer may request. Anything else falls back to 30 days. */
 const PUBLIC_RANGES = new Set(["24h", "7d", "30d"]);
+
+/** Where the dashboard itself lives, for canonical links and redirects. */
+function appOrigin(): string {
+  return process.env.PUBLIC_APP_URL || process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in";
+}
+
+/**
+ * Look up a live share token and its headline figures.
+ *
+ * Shared by the card image and the preview page, both of which need exactly the
+ * published numbers and nothing else. Returns `null` for an unknown or disabled
+ * token, which every caller turns into a 404.
+ */
+async function loadShared(token: string) {
+  if (!token.startsWith("pk_") || token.length > 64) return null;
+
+  const ws = await Workspace.findOne({ shareToken: token, shareEnabled: true })
+    .select("name sharePanels");
+  if (!ws) return null;
+
+  const raw = (ws.get("sharePanels") ?? {}) as Record<string, unknown>;
+  const totals = raw.totals === undefined ? true : Boolean(raw.totals);
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const siteIds = sites.map((s) => s.siteId as string);
+
+  // Figures are only read when the owner published them. A card cannot quote a
+  // number the dashboard itself withholds.
+  const stats =
+    totals && siteIds.length
+      ? await computeStats(siteIds, "30d", {}, resolveWindow("30d"))
+      : null;
+
+  return {
+    name: ws.get("name") as string,
+    totals,
+    visitors: stats?.visitors ?? 0,
+    pageviews: stats?.pageviews ?? 0,
+    live: stats && stats.live > 0 ? stats.live : null,
+  };
+}
+
+/**
+ * The preview card as a PNG.
+ *
+ * Referenced by `og:image` on the page below, so the fetcher is a social
+ * network's scraper rather than a browser. Cached hard: the numbers move, but a
+ * preview image regenerated on every scrape would have us rendering a card each
+ * time a post is viewed in a feed.
+ */
+router.get("/:token/card.png", async (req: Request, res: Response) => {
+  const shared = await loadShared(String(req.params.token ?? ""));
+  if (!shared) return res.status(404).json({ error: "not found" });
+
+  try {
+    const png = await renderShareCardPng({
+      workspace: shared.name,
+      url: `${appOrigin()}/share/${req.params.token}`,
+      rangeLabel: "Last 30 days",
+      visitors: shared.visitors,
+      pageviews: shared.pageviews,
+      live: shared.live,
+    });
+
+    res.type("png");
+    res.set("Cache-Control", "public, max-age=3600, s-maxage=3600");
+    res.send(png);
+  } catch (e) {
+    console.error("[share] card render failed:", (e as Error).message);
+    res.status(500).json({ error: "could not render card" });
+  }
+});
+
+/**
+ * The link-preview page for a shared dashboard.
+ *
+ * Social scrapers do not run JavaScript, so the single-page app serves them the
+ * site's generic tags no matter which dashboard was linked — which is why a
+ * shared link previewed as the marketing page rather than the workspace. This
+ * route answers that fetch with tags built for the specific token, and sends
+ * anyone with a browser on to the dashboard itself.
+ *
+ * The redirect is what keeps the URL usable by both: a person following the
+ * link lands on the real page, a scraper reads the head and never follows it.
+ */
+router.get("/:token/preview", async (req: Request, res: Response) => {
+  const token = String(req.params.token ?? "");
+  const shared = await loadShared(token);
+  const target = `${appOrigin()}/share/${token}`;
+
+  // An unknown token gets the generic page rather than an error: a 404 in a
+  // feed renders as a broken card, and the link itself already 404s honestly
+  // when someone opens it.
+  if (!shared) return res.redirect(302, target);
+
+  const title = `${shared.name} — live analytics`;
+  const description = shared.totals
+    ? `${shared.visitors.toLocaleString()} visitors and ${shared.pageviews.toLocaleString()} pageviews in the last 30 days. A public, read-only dashboard on Quantalog.`
+    : `A public, read-only analytics dashboard for ${shared.name}, on Quantalog.`;
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(title)}</title>
+<meta name="description" content="${escapeHtml(description)}" />
+<link rel="canonical" href="${escapeHtml(target)}" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Quantalog" />
+<meta property="og:url" content="${escapeHtml(target)}" />
+<meta property="og:title" content="${escapeHtml(title)}" />
+<meta property="og:description" content="${escapeHtml(description)}" />
+<meta property="og:image" content="${escapeHtml(`${publicApiOrigin(req)}/api/share/${token}/card.png`)}" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="${escapeHtml(`Analytics summary for ${shared.name}`)}" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="${escapeHtml(title)}" />
+<meta name="twitter:description" content="${escapeHtml(description)}" />
+<meta name="twitter:image" content="${escapeHtml(`${publicApiOrigin(req)}/api/share/${token}/card.png`)}" />
+
+<meta http-equiv="refresh" content="0; url=${escapeHtml(target)}" />
+</head>
+<body>
+<p>Redirecting to <a href="${escapeHtml(target)}">${escapeHtml(title)}</a>…</p>
+</body>
+</html>`;
+
+  res.type("html");
+  // Short cache: the description carries figures, and a scraper re-reading a
+  // day-old card should not quote last week's numbers.
+  res.set("Cache-Control", "public, max-age=600, s-maxage=600");
+  res.send(html);
+});
+
+/** Escape text bound for an HTML attribute or text node. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * This API's own public origin, for building the `og:image` URL.
+ *
+ * Read from the request rather than configuration so the tags are correct
+ * behind whichever host actually served them, with the proxy headers honoured
+ * because the scraper's fetch arrives through one.
+ */
+function publicApiOrigin(req: Request): string {
+  if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL;
+  const proto = String(req.headers["x-forwarded-proto"] ?? req.protocol ?? "https").split(",")[0];
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
+  return `${proto}://${host}`;
+}
 
 router.get("/:token", async (req: Request, res: Response) => {
   const token = String(req.params.token ?? "");
