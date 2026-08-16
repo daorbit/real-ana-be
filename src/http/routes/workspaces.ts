@@ -28,6 +28,8 @@ import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
+import { Form } from "../../modules/forms/models/Form.js";
+import { Submission } from "../../modules/forms/models/Submission.js";
 import { generateKey } from "../middleware/api-key.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
@@ -777,6 +779,12 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   // authenticating against /v1 for a tenant that no longer exists.
   await ApiKey.deleteMany({ workspaceId: ws.id });
   await Project.deleteMany({ workspaceId: ws.id });
+  // Submissions carry names/emails/phone numbers — a different data class
+  // from events, and one with no separate retention story here: deleting the
+  // workspace must hard-delete them along with everything else, not leave
+  // them reachable by a form id that no longer resolves to any owner.
+  await Submission.deleteMany({ workspaceId: ws.id });
+  await Form.deleteMany({ workspaceId: ws.id });
   // The plan was bought for this workspace, so it goes with it. Left behind it
   // would hold the unique index on `workspaceId` against a dead id, and count
   // as an active plan in the account's billing summary.

@@ -78,6 +78,16 @@ const subscriptionSchema = new Schema(
      * someone stop asking.
      */
     orbitUsed: { type: Number, default: 0 },
+    /**
+     * Lead-form submissions accepted this cycle.
+     *
+     * Unlike events, going over this does not refuse the write — see
+     * `quota.service.ts#canAcceptSubmission`. It only gates notification email
+     * and the CSV export banner, so undercounting here costs nothing beyond a
+     * late upgrade banner, which is why it is a plain increment rather than the
+     * batched-flush treatment `eventsUsed` needs.
+     */
+    submissionsUsed: { type: Number, default: 0 },
 
     /**
      * When the Orbit period ends, tracked separately from the analytics one.

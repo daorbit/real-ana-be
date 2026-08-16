@@ -9,6 +9,8 @@ import {
   type CompareModeKey,
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
+import { Form } from "../forms/models/Form.js";
+import { Form } from "../forms/models/Form.js";
 import { invalidateSite } from "./event-quota.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
@@ -54,6 +56,7 @@ export async function activatePlanPeriod(
         auditsUsed: 0,
         crawlsUsed: 0,
         eventsUsed: 0,
+        submissionsUsed: 0,
       },
     },
     { upsert: true }
@@ -252,6 +255,62 @@ export async function canConfigureReport(
       error: `this workspace's plan allows ${plan.maxReportRecipients} recipient${plan.maxReportRecipients === 1 ? "" : "s"} per report — upgrade to send to more people`,
     };
 
+  return { ok: true };
+}
+
+/**
+ * Whether `workspaceId` may hold one more published form.
+ *
+ * `excludeId` lets an edit (e.g. re-publishing) re-check without the form
+ * being edited counting against itself, matching `canCreateReportSchedule`.
+ * Draft forms don't count — the cap is on how many forms are live and
+ * collecting, not on how many exist.
+ */
+export async function canCreateForm(
+  workspaceId: string,
+  excludeId?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to create forms" };
+
+  const count = await Form.countDocuments({
+    workspaceId,
+    status: "published",
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  });
+  if (count >= plan.maxForms)
+    return {
+      ok: false,
+      error: `this workspace's plan allows ${plan.maxForms} published form${plan.maxForms === 1 ? "" : "s"} — upgrade to publish more`,
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether this workspace's plan still has submission quota this cycle.
+ *
+ * Deliberately advisory, not a gate on the write: the caller in
+ * `forms-public.ts` always accepts and stores the submission regardless of
+ * this result — see the module comment there. This exists so the route can
+ * flag `overQuota` and skip the notification email without a second lookup.
+ */
+export async function canAcceptSubmission(workspaceId: string): Promise<boolean> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return false;
+
+  const sub = await Subscription.findOne({ workspaceId }).select("submissionsUsed");
+  const used = (sub?.get("submissionsUsed") as number) ?? 0;
+  return used < plan.monthlySubmissionQuota;
+}
+
+/** Whether this workspace's plan includes CSV export of form submissions. */
+export async function canExportSubmissions(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan" };
+  if (!plan.formsCsvExport)
+    return { ok: false, error: "CSV export is a paid-plan feature — upgrade this workspace to export submissions" };
   return { ok: true };
 }
 

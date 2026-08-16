@@ -53,6 +53,15 @@ export type PlanCatalogEntry = {
    * to be worth anything, which is exactly the customer who has been paying.
    */
   compareModes: CompareModeKey[];
+  /** Published lead forms a workspace may hold at once. */
+  maxForms: number;
+  /** Form submissions accepted per cycle before notifications pause — see `quota.service.ts`. */
+  monthlySubmissionQuota: number;
+  formsCsvExport: boolean;
+  /** Reserved for a later file-upload field type. */
+  formsFileUploads: boolean;
+  /** Whether the hosted form page drops the "Powered by Quantalog" line. */
+  formsRemoveBranding: boolean;
 };
 
 /** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
@@ -87,6 +96,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["monthly"],
     whatsappReports: false,
     compareModes: ["previous"],
+    maxForms: 1,
+    monthlySubmissionQuota: 100,
+    formsCsvExport: false,
+    formsFileUploads: false,
+    formsRemoveBranding: false,
   },
   {
     slug: "starter",
@@ -103,6 +117,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["weekly", "monthly"],
     whatsappReports: false,
     compareModes: ["previous", "custom"],
+    maxForms: 5,
+    monthlySubmissionQuota: 2_000,
+    formsCsvExport: true,
+    formsFileUploads: false,
+    formsRemoveBranding: true,
   },
   {
     slug: "pro",
@@ -124,6 +143,11 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     allowedReportFrequencies: ["daily", "weekly", "monthly"],
     whatsappReports: true,
     compareModes: ["previous", "yoy", "custom"],
+    maxForms: 25,
+    monthlySubmissionQuota: 20_000,
+    formsCsvExport: true,
+    formsFileUploads: false,
+    formsRemoveBranding: true,
   },
 ];
 
