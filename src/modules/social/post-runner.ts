@@ -111,6 +111,15 @@ async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string
       if (e.kind === "rate-limit") {
         throw new Error("LinkedIn is rate limiting posts. This run was skipped.");
       }
+      if (e.kind === "version") {
+        // The deployment is pinned to a retired LinkedIn API version. An
+        // operator has to bump `LINKEDIN_API_VERSION`; the schedule keeps its
+        // slot and will publish once that is done.
+        console.error("[social] LinkedIn API version is sunset — set LINKEDIN_API_VERSION");
+        throw new Error(
+          "LinkedIn publishing is temporarily unavailable while we update to their latest API.",
+        );
+      }
       throw new Error("Unable to publish the LinkedIn post.");
     }
     throw e;

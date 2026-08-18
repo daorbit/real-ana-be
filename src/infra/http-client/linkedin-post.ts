@@ -17,15 +17,19 @@ import axios from "axios";
 const REST_BASE = "https://api.linkedin.com/rest";
 
 /**
- * The dated API version LinkedIn pins requests to.
+ * The dated API version LinkedIn pins requests to, as `YYYYMM`.
  *
- * Configurable because LinkedIn retires versions on a rolling ~1 year window,
- * and the fix when that happens is a redeploy with a new value rather than a
- * code change. The default is bumped deliberately when the schema is re-checked
- * against their docs.
+ * LinkedIn supports each version for about two years and then sunsets it,
+ * answering `426 Upgrade Required` to anything still asking for it. There is no
+ * "latest" to point at — the header is mandatory and unversioned requests are
+ * rejected — so this value has to be maintained.
+ *
+ * Configurable so a sunset is fixed by setting `LINKEDIN_API_VERSION` and
+ * redeploying, without waiting on a code change. Bump the default whenever the
+ * request schema is re-checked against LinkedIn's docs.
  */
 function apiVersion(): string {
-  return process.env.LINKEDIN_API_VERSION || "202506";
+  return process.env.LINKEDIN_API_VERSION || "202608";
 }
 
 /** The headers every versioned REST call needs. */
@@ -44,7 +48,13 @@ function restHeaders(accessToken: string): Record<string, string> {
  * route responds by marking the connection invalid and telling the user to
  * reconnect rather than retrying with a credential that cannot work.
  */
-export type LinkedInErrorKind = "auth" | "permission" | "rate-limit" | "api" | "network";
+export type LinkedInErrorKind =
+  | "auth"
+  | "permission"
+  | "rate-limit"
+  | "version"
+  | "api"
+  | "network";
 
 export class LinkedInApiError extends Error {
   readonly kind: LinkedInErrorKind;
@@ -64,6 +74,12 @@ function kindForStatus(status: number): LinkedInErrorKind {
   if (status === 401) return "auth";
   if (status === 403) return "permission";
   if (status === 429) return "rate-limit";
+  // LinkedIn retires each dated version roughly two years after release and
+  // answers 426 once ours is past its sunset. Called out separately because the
+  // fix is a deployment setting — `LINKEDIN_API_VERSION` — not anything the user
+  // can do, and a generic "could not publish" would send them hunting in the
+  // wrong place. See the version note above.
+  if (status === 426) return "version";
   return "api";
 }
 

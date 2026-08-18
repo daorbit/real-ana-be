@@ -617,6 +617,13 @@ router.post(
         if (e.kind === "rate-limit") {
           throw badRequest("LinkedIn is rate limiting posts right now. Please try again shortly.");
         }
+        if (e.kind === "version") {
+          // Nothing the user can do — the deployment is pinned to a retired API
+          // version. Logged loudly above; said plainly here.
+          throw badRequest(
+            "LinkedIn publishing is temporarily unavailable while we update to their latest API. Please try again later.",
+          );
+        }
         throw badRequest(
           e.message.startsWith("image")
             ? "Unable to upload the image to LinkedIn."
