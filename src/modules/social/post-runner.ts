@@ -75,6 +75,11 @@ async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string
 
   if (!conn) throw new Error("LinkedIn is not connected. Reconnect it to resume this schedule.");
   if (!conn.providerUserId) throw new Error("LinkedIn connection is incomplete. Please reconnect LinkedIn.");
+  // A sign-in-only connection carries no publishing grant; see `canPublish` in
+  // the LinkedIn routes for why the two are now separate consents.
+  if (!(conn.scope ?? "").split(/[\s,]+/).includes("w_member_social")) {
+    throw new Error("Reconnect LinkedIn and allow posting to resume this schedule.");
+  }
   if (conn.expiresAt.getTime() <= Date.now()) {
     throw new Error("Your LinkedIn connection has expired. Please reconnect LinkedIn.");
   }

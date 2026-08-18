@@ -16,12 +16,26 @@ const USERINFO_URL = "https://api.linkedin.com/v2/userinfo";
 const REVOKE_URL = "https://www.linkedin.com/oauth/v2/revoke";
 
 /**
- * `w_member_social` is requested alongside the OpenID trio now, even though
- * posting is not implemented yet: scopes are granted at authorisation time, and
- * asking for it later would mean sending every connected user back through the
- * consent screen a second time.
+ * Identity only. What signing in with LinkedIn asks for.
+ *
+ * Deliberately without `w_member_social`: LinkedIn renders that scope on the
+ * consent screen as "create, modify, and delete posts, comments, and reactions
+ * on your behalf" — the full reach of the only publishing permission it offers,
+ * not what this app does with it. Asking for that in order to *log in* demands
+ * a frightening-sounding grant for something that has nothing to do with
+ * posting, and it is the wrong trade at the moment someone is deciding whether
+ * to trust the product at all.
  */
-export const LINKEDIN_SCOPES = ["openid", "profile", "email", "w_member_social"];
+export const LINKEDIN_LOGIN_SCOPES = ["openid", "profile", "email"];
+
+/**
+ * Identity plus publishing. What connecting an account to post from asks for.
+ *
+ * The extra scope is requested here and only here, at the point where someone
+ * has asked to publish — so the permission arrives attached to the feature that
+ * needs it, and the consent wording is answerable rather than baffling.
+ */
+export const LINKEDIN_PUBLISH_SCOPES = [...LINKEDIN_LOGIN_SCOPES, "w_member_social"];
 
 export type LinkedInProfile = {
   /** LinkedIn's stable member identifier. */
@@ -93,12 +107,20 @@ export function missingLinkedInConfig(): string[] {
  * and the redirect URI contains a scheme and slashes, both of which have to
  * survive intact.
  */
-export function buildAuthorizeUrl(state: string): string {
+export function buildAuthorizeUrl(
+  state: string,
+  /**
+   * `login` asks for identity alone; `connect` adds the publishing scope. See
+   * the two scope lists above for why they are not the same request.
+   */
+  intent: "login" | "connect" = "connect",
+): string {
+  const scopes = intent === "login" ? LINKEDIN_LOGIN_SCOPES : LINKEDIN_PUBLISH_SCOPES;
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId(),
     redirect_uri: linkedInRedirectUri(),
-    scope: LINKEDIN_SCOPES.join(" "),
+    scope: scopes.join(" "),
     state,
   });
   return `${AUTHORIZE_URL}?${params.toString()}`;

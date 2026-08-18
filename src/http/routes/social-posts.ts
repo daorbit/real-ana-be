@@ -173,7 +173,7 @@ router.get(
     const [posts, conn] = await Promise.all([
       ScheduledPost.find({ userId: req.userId }).sort({ createdAt: -1 }),
       SocialConnection.findOne({ userId: req.userId, provider: "linkedin" })
-        .select("name expiresAt"),
+        .select("name expiresAt scope"),
     ]);
 
     res.json({
@@ -183,8 +183,11 @@ router.get(
             connected: true,
             expired: conn.expiresAt.getTime() <= Date.now(),
             name: conn.name,
+            // Signing in with LinkedIn grants identity only, so a connection
+            // can exist that cannot post. The page needs to tell the two apart.
+            canPublish: (conn.scope ?? "").split(/[\s,]+/).includes("w_member_social"),
           }
-        : { connected: false, expired: false, name: "" },
+        : { connected: false, expired: false, name: "", canPublish: false },
     });
   }),
 );

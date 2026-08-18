@@ -197,6 +197,21 @@ function loginUrl(status: string, detail?: string, token?: string): string {
 }
 
 /**
+ * Whether a stored connection may actually publish.
+ *
+ * Signing in with LinkedIn no longer requests the publishing scope, so a
+ * connection can exist — with a valid token and a real profile — and still not
+ * be allowed to post. Checking the granted scope is what keeps that case from
+ * looking like a working connection right up until the first publish fails.
+ *
+ * The stored value is what LinkedIn *granted*, not what was asked for, so this
+ * also catches a member who declined the permission on the consent screen.
+ */
+function canPublish(scope: string | undefined): boolean {
+  return (scope ?? "").split(/[\s,]+/).includes("w_member_social");
+}
+
+/**
  * Read the `mode` claim without verifying the signature.
  *
  * Used only to decide which page a failure redirects to, before the state has
@@ -338,7 +353,8 @@ router.get(
       { expiresIn: STATE_TTL },
     );
 
-    res.redirect(buildAuthorizeUrl(state));
+    // Signing in asks for identity only; connecting adds the publishing scope.
+    res.redirect(buildAuthorizeUrl(state, mode));
   }),
 );
 
@@ -491,7 +507,7 @@ router.get(
     const conn = await SocialConnection.findOne({
       userId: req.userId,
       provider: "linkedin",
-    }).select("name email picture expiresAt");
+    }).select("name email picture expiresAt scope");
 
     // Whether the deployment can run the flow at all. Reported so the panel can
     // say "not configured" in place of a button, rather than navigating the
@@ -515,6 +531,12 @@ router.get(
       connected: true,
       configured,
       expired,
+      /**
+       * False for an account that signed in with LinkedIn but never granted
+       * publishing. The panel offers "Enable posting" rather than a Post button
+       * that would fail — see `canPublish`.
+       */
+      canPublish: canPublish(conn.scope),
       profile: {
         name: conn.name,
         email: conn.email,
@@ -587,6 +609,15 @@ router.post(
 
     if (!conn) throw badRequest("Please connect your LinkedIn account first.");
     if (!conn.providerUserId) throw badRequest("Please reconnect your LinkedIn account.");
+
+    // Signing in with LinkedIn does not grant publishing, so a perfectly valid
+    // connection can exist without it. Caught here rather than at LinkedIn,
+    // which would answer 403 and read as a broken integration.
+    if (!canPublish(conn.scope)) {
+      throw forbidden("Allow posting on your LinkedIn account to publish from here.", {
+        reconnect: true,
+      });
+    }
 
     if (conn.expiresAt.getTime() <= Date.now()) {
       // 403 with a flag the client keys off to swap the button for "Reconnect".
