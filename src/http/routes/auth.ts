@@ -69,8 +69,29 @@ async function publicUser(user: InstanceType<typeof User>) {
     role: user.role,
     /** Lets the client show "connected with Google" instead of guessing. */
     googleLinked: Boolean(user.googleId),
-    /** False for Google-only accounts, which have never set one. */
+    /** The same, for LinkedIn sign-in. */
+    linkedinLinked: Boolean(user.linkedinId),
+    /** False for social-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
+    /**
+     * How this account came to exist.
+     *
+     * Derived rather than stored, so accounts created before this field existed
+     * report something sensible instead of nothing. A password is the strongest
+     * signal — it can only have been set deliberately by the account's owner —
+     * so it wins; after that, whichever provider is linked.
+     *
+     * Note this is "how they can sign in", not a marketing attribution: an
+     * account that signed up with Google and later set a password reports
+     * `email`, because that is now the primary way in.
+     */
+    signupSource: user.passwordHash
+      ? "email"
+      : user.googleId
+        ? "google"
+        : user.linkedinId
+          ? "linkedin"
+          : "email",
     // No billing here. A plan belongs to a workspace, not to an account, so it
     // travels with the workspace (see `GET /api/workspaces`) — this endpoint
     // answers "who am I", and an account that can reach a workspace it does not
