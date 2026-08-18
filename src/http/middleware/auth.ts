@@ -4,7 +4,32 @@ import { User } from "../../modules/identity/models/User.js";
 import { asyncHandler } from "./async-handler.js";
 import { forbidden } from "../../shared/errors/index.js";
 
-const SECRET = process.env.JWT_SECRET ?? "dev-secret";
+/**
+ * The signing key for every session token this app issues.
+ *
+ * Read through a function rather than captured at module load, and refusing to
+ * invent a value outside development. The previous form —
+ * `process.env.JWT_SECRET ?? "dev-secret"` — was silently catastrophic in
+ * production: with the variable unset, the server happily signed and accepted
+ * tokens keyed on a string that is published in this repository, so anyone
+ * could mint a session for any account. It also failed invisibly, because
+ * tokens signed with the fallback verify perfectly against the fallback.
+ *
+ * The fallback is kept for local development only, where an unset variable is
+ * ordinary and no real session is at stake. Anywhere else, a missing secret is
+ * a fatal misconfiguration and is treated as one.
+ */
+export function jwtSecret(): string {
+  const value = process.env.JWT_SECRET;
+  if (value) return value;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JWT_SECRET is not set. Refusing to sign or verify tokens with a default key.",
+    );
+  }
+  return "dev-secret";
+}
 
 export interface AuthedRequest extends Request {
   userId?: string;
@@ -17,7 +42,7 @@ export interface AuthedRequest extends Request {
 type Payload = { userId: string; impersonatorId?: string; demo?: boolean };
 
 export function signToken(userId: string): string {
-  return jwt.sign({ userId }, SECRET, { expiresIn: "7d" });
+  return jwt.sign({ userId }, jwtSecret(), { expiresIn: "7d" });
 }
 
 /**
@@ -28,7 +53,7 @@ export function signToken(userId: string): string {
  * browsing session by much.
  */
 export function signDemoToken(userId: string): string {
-  return jwt.sign({ userId, demo: true }, SECRET, { expiresIn: "12h" });
+  return jwt.sign({ userId, demo: true }, jwtSecret(), { expiresIn: "12h" });
 }
 
 /**
@@ -39,7 +64,7 @@ export function signDemoToken(userId: string): string {
  * around in a browser.
  */
 export function signImpersonationToken(userId: string, impersonatorId: string): string {
-  return jwt.sign({ userId, impersonatorId }, SECRET, { expiresIn: "1h" });
+  return jwt.sign({ userId, impersonatorId }, jwtSecret(), { expiresIn: "1h" });
 }
 
 export function requireAuth(
@@ -51,7 +76,7 @@ export function requireAuth(
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "no token" });
   try {
-    const payload = jwt.verify(token, SECRET) as Payload;
+    const payload = jwt.verify(token, jwtSecret()) as Payload;
     req.userId = payload.userId;
     req.impersonatorId = payload.impersonatorId;
     req.isDemo = payload.demo === true;

@@ -20,7 +20,7 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { decryptSecret, encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
-import { requireAuth, blockDemoWrites, signToken, AuthedRequest } from "../middleware/auth.js";
+import { requireAuth, blockDemoWrites, signToken, jwtSecret, AuthedRequest } from "../middleware/auth.js";
 import { badRequest, forbidden } from "../../shared/errors/index.js";
 
 /**
@@ -56,7 +56,12 @@ const router = Router();
 // per-route middleware would run.
 router.options("*", dashboardCors);
 
-const STATE_SECRET = process.env.JWT_SECRET ?? "dev-secret";
+/**
+ * The state token is signed with the same key as every other JWT here, via the
+ * one function that owns it — so an unset `JWT_SECRET` fails loudly in
+ * production rather than silently falling back to a published default. See
+ * `jwtSecret`.
+ */
 /** Long enough to read a consent screen, short enough that a leaked URL goes stale. */
 const STATE_TTL = "10m";
 /** The share card is a 1200x630 PNG; the ceiling is generous but bounded. */
@@ -130,7 +135,20 @@ const REASON_TEXT: Record<string, string> = {
   denied: "You cancelled the LinkedIn authorisation.",
 };
 
-function closePopup(res: Response, status: string, detail?: string): void {
+function closePopup(
+  res: Response,
+  status: string,
+  detail?: string,
+  /**
+   * Our own diagnostic text, shown in small print under the message.
+   *
+   * Only ever a message this server wrote — never a LinkedIn response body, a
+   * token, or a secret. It exists because the person who sees this page cannot
+   * see the server log, and "please try again" alone has cost several rounds of
+   * guessing at what actually failed.
+   */
+  diagnostic?: string,
+): void {
   const ok = status === "connected";
   const target = ok ? studioUrl(status) : studioUrl(status, detail);
   const message = (detail && REASON_TEXT[detail]) || "Something went wrong connecting LinkedIn.";
@@ -149,6 +167,11 @@ function closePopup(res: Response, status: string, detail?: string): void {
          <p style="color:#65676b;margin:8px 0 0">You can close this window.</p>`
       : `<p style="font-size:15px;font-weight:600;margin:0">Could not connect LinkedIn</p>
          <p style="color:#65676b;margin:8px 0 16px">${escapeHtml(message)}</p>
+         ${diagnostic
+           ? `<p style="color:#8a8d91;font-size:12px;margin:0 0 16px;word-break:break-word">
+                ${escapeHtml(diagnostic)}
+              </p>`
+           : ""}
          <button onclick="window.close()"
            style="border:1px solid #ccd0d5;background:#fff;border-radius:6px;
                   padding:7px 16px;font:inherit;cursor:pointer">Close</button>`}
@@ -332,7 +355,7 @@ router.get(
       if (!token) return closePopup(res, "error", "not_signed_in");
 
       try {
-        const payload = jwt.verify(token, STATE_SECRET) as { userId: string; demo?: boolean };
+        const payload = jwt.verify(token, jwtSecret()) as { userId: string; demo?: boolean };
         // A demo session is read-only and has no real user row to attach a
         // connection to, so it is refused here rather than failing at the upsert.
         if (payload.demo) return closePopup(res, "error", "demo");
@@ -349,7 +372,7 @@ router.get(
         nonce: randomBytes(16).toString("hex"),
         kind: "linkedin-oauth",
       } satisfies StatePayload,
-      STATE_SECRET,
+      jwtSecret(),
       { expiresIn: STATE_TTL },
     );
 
@@ -381,10 +404,10 @@ router.get(
      * End the flow the way it began: a sign-in redirects the page it started
      * from, a connect closes its popup.
      */
-    const fail = (status: string, reason?: string) =>
+    const fail = (status: string, reason?: string, diagnostic?: string) =>
       wantedLogin
         ? res.redirect(loginUrl(status, reason))
-        : closePopup(res, status, reason);
+        : closePopup(res, status, reason, diagnostic);
 
     // The user pressed Cancel on the consent screen. A normal outcome, not an
     // error worth logging.
@@ -400,7 +423,7 @@ router.get(
     let userId: string | undefined;
     let mode: StateMode;
     try {
-      const payload = jwt.verify(state, STATE_SECRET) as StatePayload;
+      const payload = jwt.verify(state, jwtSecret()) as StatePayload;
       // The `kind` claim stops any other token this app signs — a login token
       // above all — from being replayed here as state.
       if (!safeEqual(payload.kind ?? "", "linkedin-oauth")) throw new Error("wrong kind");
@@ -420,8 +443,11 @@ router.get(
     } catch (e) {
       // The message is safe to log — the clients above build it from a status
       // code only, never from the request body or the response.
-      console.error("[linkedin] connect failed:", e instanceof Error ? e.message : e);
-      return fail("error", "linkedin_failed");
+      // Our own message, which now names LinkedIn's `error_description` — see
+      // `exchangeCodeForToken`. Safe to show: no response body, no secret.
+      const why = e instanceof Error ? e.message : String(e);
+      console.error("[linkedin] connect failed:", why);
+      return fail("error", "linkedin_failed", why);
     }
 
     // A login flow has no user yet: find one by LinkedIn subject, fall back to
@@ -465,21 +491,26 @@ router.get(
       // a validation error, a missing encryption key — reads identically, and
       // this runs on a server whose only witness is the log.
       const err = e as { name?: string; message?: string; code?: unknown; codeName?: string };
-      console.error(
-        "[linkedin] could not save connection:",
-        [
-          err?.name,
-          err?.message,
-          err?.code !== undefined ? `code=${String(err.code)}` : "",
-          err?.codeName,
-        ]
-          .filter(Boolean)
-          .join(" | "),
-      );
+      const detail = [
+        err?.name,
+        err?.message,
+        err?.code !== undefined ? `code=${String(err.code)}` : "",
+        err?.codeName,
+      ]
+        .filter(Boolean)
+        .join(" | ");
+
+      console.error("[linkedin] could not save connection:", detail);
+
+      // Carried to the page as well as the log while this is being diagnosed.
+      // The server's logs are not reachable from where the failure is seen, and
+      // a message that says only "please try again" has sent us round the same
+      // loop several times. It is our own error text — no LinkedIn response
+      // body, no token, no secret.
       // On a login flow the sign-in itself succeeded; failing to store the
       // posting token must not cost the user their session, so they are still
       // let in and simply arrive without LinkedIn connected for posting.
-      if (!issuedToken) return closePopup(res, "error", "save_failed");
+      if (!issuedToken) return closePopup(res, "error", "save_failed", detail);
     }
 
     // A login hands the freshly signed token to the app, which stores it and
