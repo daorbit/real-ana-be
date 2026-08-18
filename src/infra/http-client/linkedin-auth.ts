@@ -150,9 +150,21 @@ export async function exchangeCodeForToken(code: string): Promise<LinkedInToken>
   });
 
   if (status !== 200 || !data?.access_token) {
-    // Deliberately no response body in the message: it echoes the request on
-    // some failures, and the request carried the client secret.
-    throw new Error(`linkedin token exchange failed (status ${status})`);
+    // LinkedIn's own `error` / `error_description` are named explicitly rather
+    // than dumping the response: those two fields are diagnostic and safe,
+    // while the whole body echoes the request on some failures — and the
+    // request carried the client secret.
+    //
+    // Worth being specific here because every cause looks the same from
+    // outside: a code already used, a code older than its 30-minute life, a
+    // `redirect_uri` that differs by one character from the registered one, or
+    // a client secret that was rotated. The description names which.
+    const detail = [data?.error, data?.error_description]
+      .filter((v) => typeof v === "string" && v)
+      .join(": ");
+    throw new Error(
+      `linkedin token exchange failed (status ${status})${detail ? ` — ${detail}` : ""}`,
+    );
   }
 
   // LinkedIn documents ~60 days. The fallback keeps a missing field from
@@ -181,7 +193,15 @@ export async function fetchLinkedInProfile(accessToken: string): Promise<LinkedI
   });
 
   if (status !== 200 || !data?.sub) {
-    throw new Error(`linkedin userinfo failed (status ${status})`);
+    // Same reasoning as the exchange above: name LinkedIn's error fields, not
+    // the whole body. A 403 here usually means the app is missing the "Sign In
+    // with LinkedIn using OpenID Connect" product.
+    const detail = [data?.error, data?.message, data?.error_description]
+      .filter((v) => typeof v === "string" && v)
+      .join(": ");
+    throw new Error(
+      `linkedin userinfo failed (status ${status})${detail ? ` — ${detail}` : ""}`,
+    );
   }
 
   const given = String(data.given_name ?? "").trim();
