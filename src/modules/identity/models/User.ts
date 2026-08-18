@@ -21,6 +21,16 @@ const userSchema = new Schema(
     /** Google's stable subject id. Set the first time the account signs in with Google. */
     googleId: { type: String, trim: true, default: "" },
     /**
+     * LinkedIn's stable OpenID subject. Set the first time the account signs in
+     * with LinkedIn.
+     *
+     * Kept here beside `googleId` rather than being read from the connection
+     * collection: that row exists to hold a posting token and can be
+     * disconnected, and losing the ability to log in as a side effect of
+     * revoking posting access would be a surprising way to lose an account.
+     */
+    linkedinId: { type: String, trim: true, default: "" },
+    /**
      * Display name, derived from firstName/lastName whenever those are set.
      *
      * Kept as its own field rather than composed at read time: it predates the

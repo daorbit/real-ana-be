@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { randomBytes } from "node:crypto";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
+import { User } from "../../modules/identity/models/User.js";
 import {
   buildAuthorizeUrl,
   exchangeCodeForToken,
@@ -18,7 +19,7 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { decryptSecret, encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
-import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import { requireAuth, blockDemoWrites, signToken, AuthedRequest } from "../middleware/auth.js";
 import { badRequest, forbidden } from "../../shared/errors/index.js";
 
 /**
@@ -60,7 +61,27 @@ const STATE_TTL = "10m";
 /** The share card is a 1200x630 PNG; the ceiling is generous but bounded. */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-type StatePayload = { userId: string; nonce: string; kind: "linkedin-oauth" };
+/**
+ * What the flow is for.
+ *
+ * `connect` attaches LinkedIn to the account already signed in, and carries
+ * that account's id. `login` signs someone in — there is no session yet, so
+ * there is no `userId` to carry, and the account is found or created from the
+ * verified profile at the far end.
+ *
+ * Both share one authorize/callback pair because LinkedIn matches the redirect
+ * URI byte for byte against a registered list: a second callback path would
+ * mean a second registration in the developer portal for no behavioural gain.
+ */
+type StateMode = "connect" | "login";
+
+type StatePayload = {
+  /** Absent on a login flow, which has no signed-in user yet. */
+  userId?: string;
+  mode: StateMode;
+  nonce: string;
+  kind: "linkedin-oauth";
+};
 
 /**
  * Where the browser is sent once the flow finishes, with the outcome in the
@@ -70,21 +91,103 @@ type StatePayload = { userId: string; nonce: string; kind: "linkedin-oauth" };
  * takes its destination from a parameter is exactly the bug OAuth callbacks are
  * known for.
  */
+function studioBase(): string {
+  return (process.env.STUDIO_BASE_URL ?? "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
+}
+
 function studioUrl(status: string, detail?: string): string {
-  const base = (process.env.STUDIO_BASE_URL ?? "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
   const params = new URLSearchParams({ linkedin: status });
   if (detail) params.set("reason", detail);
-  return `${base}/?${params.toString()}`;
+  return `${studioBase()}/?${params.toString()}`;
 }
 
 /**
- * Start the flow.
+ * Where a sign-in attempt returns to: the login page, which knows how to store
+ * a token and route onward.
+ */
+function loginUrl(status: string, detail?: string, token?: string): string {
+  const base = studioBase();
+  const params = new URLSearchParams({ linkedinLogin: status });
+  if (detail) params.set("reason", detail);
+  if (token) params.set("token", token);
+  return `${base}/login?${params.toString()}`;
+}
+
+/**
+ * Read the `mode` claim without verifying the signature.
  *
- * Authenticated with the JWT in the query string rather than a header, because
- * this endpoint is reached by assigning to `window.location` — a navigation,
- * which cannot carry one. The token is the same one the app already holds; it
- * travels over TLS, is immediately exchanged for the state token, and the URL
- * it appears in is replaced by the redirect rather than being kept.
+ * Used only to decide which page a failure redirects to, before the state has
+ * been validated — the failure paths need a destination even when the state is
+ * the thing that is wrong. Nothing is authorised on the strength of this: the
+ * signature is still checked before the state is acted on, and the worst a
+ * forged value achieves is an error message on the other page.
+ */
+function peekMode(state: string): StateMode {
+  try {
+    const decoded = jwt.decode(state) as StatePayload | null;
+    return decoded?.mode === "login" ? "login" : "connect";
+  } catch {
+    return "connect";
+  }
+}
+
+/**
+ * Find or create the account behind a verified LinkedIn profile.
+ *
+ * Matched on the LinkedIn subject first, then on the email address. That second
+ * step is what links LinkedIn to an account someone already has rather than
+ * creating a parallel one — the same behaviour as the Google route, and safe
+ * for the same reason: the profile came from an authorization-code exchange
+ * against our own client secret, so the address is one LinkedIn vouches for.
+ *
+ * Throws when LinkedIn returned no email and there is no existing subject
+ * match, since an account here is keyed by address and there is nothing to
+ * create one from.
+ */
+async function resolveLoginUser(profile: {
+  sub: string;
+  name: string;
+  givenName: string;
+  familyName: string;
+  email: string;
+  picture: string;
+}) {
+  const bySub = await User.findOne({ linkedinId: profile.sub });
+  if (bySub) return bySub;
+
+  if (!profile.email) throw new Error("linkedin returned no email to sign in with");
+
+  const existing = await User.findOne({ email: profile.email });
+  if (existing) {
+    existing.linkedinId = profile.sub;
+    // Only fills a gap: a picture the user chose here is not replaced.
+    if (!existing.avatarUrl) existing.avatarUrl = profile.picture;
+    await existing.save();
+    return existing;
+  }
+
+  const [first, ...rest] = profile.name.split(" ");
+  // No passwordHash, and `role` left to the schema default — a LinkedIn signup
+  // can no more ask to be an admin than a password signup can.
+  return User.create({
+    email: profile.email,
+    name: profile.name || profile.email.split("@")[0],
+    firstName: profile.givenName || first || "",
+    lastName: profile.familyName || rest.join(" "),
+    linkedinId: profile.sub,
+    avatarUrl: profile.picture,
+  });
+}
+
+/**
+ * Start the flow, for either connecting or signing in.
+ *
+ * `?mode=login` needs no credential: nobody is signed in yet, which is the
+ * point. The default, `connect`, is authenticated with the app's JWT in the
+ * query string rather than a header, because this endpoint is reached by
+ * assigning to `window.location` — a navigation, which cannot carry one. That
+ * token travels over TLS, is exchanged immediately for the state token, and the
+ * URL it appeared in is replaced by the redirect rather than kept.
  */
 router.get(
   "/",
@@ -93,22 +196,32 @@ router.get(
       return res.redirect(studioUrl("error", "not_configured"));
     }
 
-    const token = String(req.query.token ?? "");
-    if (!token) return res.redirect(studioUrl("error", "not_signed_in"));
+    const mode: StateMode = req.query.mode === "login" ? "login" : "connect";
 
-    let userId: string;
-    try {
-      const payload = jwt.verify(token, STATE_SECRET) as { userId: string; demo?: boolean };
-      // A demo session is read-only and has no real user row to attach a
-      // connection to, so it is refused here rather than failing at the upsert.
-      if (payload.demo) return res.redirect(studioUrl("error", "demo"));
-      userId = payload.userId;
-    } catch {
-      return res.redirect(studioUrl("error", "not_signed_in"));
+    let userId: string | undefined;
+
+    if (mode === "connect") {
+      const token = String(req.query.token ?? "");
+      if (!token) return res.redirect(studioUrl("error", "not_signed_in"));
+
+      try {
+        const payload = jwt.verify(token, STATE_SECRET) as { userId: string; demo?: boolean };
+        // A demo session is read-only and has no real user row to attach a
+        // connection to, so it is refused here rather than failing at the upsert.
+        if (payload.demo) return res.redirect(studioUrl("error", "demo"));
+        userId = payload.userId;
+      } catch {
+        return res.redirect(studioUrl("error", "not_signed_in"));
+      }
     }
 
     const state = jwt.sign(
-      { userId, nonce: randomBytes(16).toString("hex"), kind: "linkedin-oauth" } satisfies StatePayload,
+      {
+        ...(userId ? { userId } : {}),
+        mode,
+        nonce: randomBytes(16).toString("hex"),
+        kind: "linkedin-oauth",
+      } satisfies StatePayload,
       STATE_SECRET,
       { expiresIn: STATE_TTL },
     );
@@ -127,28 +240,42 @@ router.get(
 router.get(
   "/callback",
   asyncHandler(async (req: Request, res: Response) => {
+    const code = String(req.query.code ?? "");
+    const state = String(req.query.state ?? "");
+
+    // Read the mode before anything else, so every failure below lands the user
+    // back where they started — the login page for a sign-in, the studio for a
+    // connect. It is read without trusting it: this is only a choice of
+    // redirect target, and the signature is still verified before the state is
+    // acted on.
+    const wantedLogin = peekMode(state) === "login";
+    const fail = (status: string, reason?: string) =>
+      wantedLogin ? loginUrl(status, reason) : studioUrl(status, reason);
+
     // The user pressed Cancel on the consent screen. A normal outcome, not an
     // error worth logging.
     if (req.query.error) {
       const denied = req.query.error === "user_cancelled_login"
         || req.query.error === "user_cancelled_authorize";
-      return res.redirect(studioUrl(denied ? "cancelled" : "error", "denied"));
+      return res.redirect(fail(denied ? "cancelled" : "error", "denied"));
     }
 
-    const code = String(req.query.code ?? "");
-    const state = String(req.query.state ?? "");
-    if (!code) return res.redirect(studioUrl("error", "missing_code"));
-    if (!state) return res.redirect(studioUrl("error", "invalid_state"));
+    if (!code) return res.redirect(fail("error", "missing_code"));
+    if (!state) return res.redirect(fail("error", "invalid_state"));
 
-    let userId: string;
+    let userId: string | undefined;
+    let mode: StateMode;
     try {
       const payload = jwt.verify(state, STATE_SECRET) as StatePayload;
       // The `kind` claim stops any other token this app signs — a login token
       // above all — from being replayed here as state.
       if (!safeEqual(payload.kind ?? "", "linkedin-oauth")) throw new Error("wrong kind");
+      mode = payload.mode === "login" ? "login" : "connect";
       userId = payload.userId;
+      // A connect flow without a user is a malformed state, not a login.
+      if (mode === "connect" && !userId) throw new Error("missing user");
     } catch {
-      return res.redirect(studioUrl("error", "invalid_state"));
+      return res.redirect(fail("error", "invalid_state"));
     }
 
     let token;
@@ -160,7 +287,22 @@ router.get(
       // The message is safe to log — the clients above build it from a status
       // code only, never from the request body or the response.
       console.error("[linkedin] connect failed:", e instanceof Error ? e.message : e);
-      return res.redirect(studioUrl("error", "linkedin_failed"));
+      return res.redirect(fail("error", "linkedin_failed"));
+    }
+
+    // A login flow has no user yet: find one by LinkedIn subject, fall back to
+    // the verified email so an existing password or Google account is linked
+    // rather than duplicated, and create one only if neither matches.
+    let issuedToken: string | null = null;
+    if (mode === "login") {
+      try {
+        const resolved = await resolveLoginUser(profile);
+        userId = resolved.id;
+        issuedToken = signToken(resolved.id);
+      } catch (e) {
+        console.error("[linkedin] login failed:", e instanceof Error ? e.message : e);
+        return res.redirect(loginUrl("error", "login_failed"));
+      }
     }
 
     try {
@@ -184,8 +326,17 @@ router.get(
       );
     } catch (e) {
       console.error("[linkedin] could not save connection:", e instanceof Error ? e.message : e);
-      return res.redirect(studioUrl("error", "save_failed"));
+      // On a login flow the sign-in itself succeeded; failing to store the
+      // posting token must not cost the user their session, so they are still
+      // let in and simply arrive without LinkedIn connected for posting.
+      if (!issuedToken) return res.redirect(studioUrl("error", "save_failed"));
     }
+
+    // A login hands the freshly signed token to the app, which stores it and
+    // completes the sign-in. This is the one place a token travels in a URL:
+    // there is no session and no fetch here to answer, and the client strips it
+    // from the address bar as soon as it has been read.
+    if (issuedToken) return res.redirect(loginUrl("ok", undefined, issuedToken));
 
     res.redirect(studioUrl("connected"));
   }),
@@ -208,7 +359,13 @@ router.get(
       provider: "linkedin",
     }).select("name email picture expiresAt");
 
-    if (!conn) return res.json({ connected: false });
+    // Whether the deployment can run the flow at all. Reported so the panel can
+    // say "not configured" in place of a button, rather than navigating the
+    // whole page to an endpoint that will only bounce straight back — which
+    // reads to the user as the app reloading and losing their work.
+    const configured = linkedInConfigured();
+
+    if (!conn) return res.json({ connected: false, configured });
 
     // Reported rather than hidden, so the panel can offer "Reconnect" before
     // the user writes a caption and discovers the problem at publish time.
@@ -216,6 +373,7 @@ router.get(
 
     res.json({
       connected: true,
+      configured,
       expired,
       profile: {
         name: conn.name,
