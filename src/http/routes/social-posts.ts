@@ -7,6 +7,7 @@ import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { dashboardCors } from "../middleware/cors.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { badRequest, forbidden, notFound } from "../../shared/errors/index.js";
 
@@ -25,6 +26,12 @@ import { badRequest, forbidden, notFound } from "../../shared/errors/index.js";
  */
 
 const router = Router();
+
+// Preflight. Every write here — POST, PATCH, DELETE — carries an
+// `Authorization` header, which makes the request non-simple and sends an
+// OPTIONS first. That arrives before any per-route middleware, so without this
+// the browser reports a CORS failure and the real request is never made.
+router.options("*", dashboardCors);
 
 /** LinkedIn's commentary cap. */
 const MAX_CAPTION = 3000;

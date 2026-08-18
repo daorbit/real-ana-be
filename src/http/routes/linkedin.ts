@@ -115,29 +115,73 @@ function studioUrl(status: string, detail?: string): string {
  * flow ran as a full-page navigation (a blocked popup), and the only sensible
  * destination is back into the app.
  */
+/** What went wrong, in words, for the few reasons a user can act on. */
+const REASON_TEXT: Record<string, string> = {
+  not_signed_in:
+    "Your session could not be verified. Sign in to Quantalog again, then retry connecting LinkedIn.",
+  not_configured:
+    "LinkedIn is not set up on this deployment yet. An administrator needs to add the LinkedIn credentials.",
+  demo: "LinkedIn cannot be connected from a demo session.",
+  invalid_state:
+    "That connection attempt expired. Close this window and start again.",
+  missing_code: "LinkedIn did not return an authorisation code. Please try again.",
+  linkedin_failed: "LinkedIn could not complete the connection. Please try again.",
+  save_failed: "The connection could not be saved. Please try again.",
+  denied: "You cancelled the LinkedIn authorisation.",
+};
+
 function closePopup(res: Response, status: string, detail?: string): void {
-  const target = status === "cancelled" || status === "error"
-    ? studioUrl(status, detail)
-    : studioUrl(status);
+  const ok = status === "connected";
+  const target = ok ? studioUrl(status) : studioUrl(status, detail);
+  const message = (detail && REASON_TEXT[detail]) || "Something went wrong connecting LinkedIn.";
 
   res
     .type("html")
     .send(`<!doctype html>
 <meta charset="utf-8">
 <title>LinkedIn</title>
-<body style="font:14px system-ui;padding:24px;color:#444">Finishing up…</body>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<body style="margin:0;font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
+             display:grid;place-items:center;min-height:100vh;background:#f6f7f9;color:#1c1e21">
+  <div style="max-width:340px;padding:28px;text-align:center">
+    ${ok
+      ? `<p style="font-size:15px;font-weight:600;margin:0">LinkedIn connected</p>
+         <p style="color:#65676b;margin:8px 0 0">You can close this window.</p>`
+      : `<p style="font-size:15px;font-weight:600;margin:0">Could not connect LinkedIn</p>
+         <p style="color:#65676b;margin:8px 0 16px">${escapeHtml(message)}</p>
+         <button onclick="window.close()"
+           style="border:1px solid #ccd0d5;background:#fff;border-radius:6px;
+                  padding:7px 16px;font:inherit;cursor:pointer">Close</button>`}
+  </div>
+</body>
 <script>
   (function () {
-    var msg = { source: "quantalog-linkedin", status: ${JSON.stringify(status)} };
+    var msg = {
+      source: "quantalog-linkedin",
+      status: ${JSON.stringify(status)},
+      reason: ${JSON.stringify(detail ?? "")}
+    };
     if (window.opener && window.opener !== window) {
       // The opener validates the origin, so it is named explicitly here.
       window.opener.postMessage(msg, ${JSON.stringify(studioBase())});
-      window.close();
+      // Only a success closes itself. A failure stays on screen with the
+      // reason: a window that opens and vanishes tells the user nothing, and
+      // "nothing happened" is the hardest kind of problem to report.
+      if (${JSON.stringify(ok)}) window.close();
     } else {
       window.location.replace(${JSON.stringify(target)});
     }
   })();
 </script>`);
+}
+
+/** Escape text interpolated into the page above. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 /**

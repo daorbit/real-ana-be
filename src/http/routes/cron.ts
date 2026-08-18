@@ -49,17 +49,25 @@ function authorizeCron(req: Request, res: Response): boolean {
  * A failed run leaves yesterday's prices in place, which is the right fallback:
  * a stale price is a real price, and the admin button is still there if the
  * provider outage lasts.
+ *
+ * Split from its route so the dispatcher below can call it directly. The route
+ * remains for running the job on its own — by hand, or from a platform that has
+ * a cron slot to spare for it.
  */
+async function runFxSync(source: string) {
+  const result = await repriceAllPlans();
+  console.log(`[cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${result.snapshot.rates.USD} USD`);
+  // Awaited, not fired and forgotten: a serverless function is frozen the
+  // instant the response goes out, which would kill the send mid-flight.
+  await sendFxSuccessReport(result, source);
+  return result;
+}
+
 router.get("/fx-sync", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
   try {
-    const result = await repriceAllPlans();
-    console.log(`[cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${result.snapshot.rates.USD} USD`);
-    // Awaited, not fired and forgotten: a serverless function is frozen the
-    // instant the response goes out, which would kill the send mid-flight.
-    await sendFxSuccessReport(result, "Vercel Cron");
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, ...(await runFxSync("Vercel Cron")) });
   } catch (e) {
     const message = (e as Error).message;
     console.error("[cron] fx reprice failed, prices unchanged:", message);
@@ -97,10 +105,10 @@ router.get("/reports", async (req: Request, res: Response) => {
 /**
  * Publish scheduled LinkedIn posts that are due.
  *
- * Runs far more often than the other jobs here — a post scheduled for 09:00
- * should not go out at 14:00 — so the tick is quarter-hourly and most runs find
- * nothing to do, which is the intended shape. The runner caps how much one tick
- * will attempt; see `runDuePosts`.
+ * Not on a cron entry of its own — the dispatcher below calls the same runner.
+ * This route stays for running the job by hand, and so the job is still
+ * reachable if a slot frees up. The runner caps how much one tick will attempt;
+ * see `runDuePosts`.
  */
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
@@ -118,6 +126,76 @@ router.get("/social-posts", async (req: Request, res: Response) => {
     console.error("[cron] social post run failed:", (e as Error).message);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+/**
+ * The dispatcher: one cron entry that runs every job.
+ *
+ * The hosting plan allows two cron entries; this product has more jobs than
+ * that. Rather than dropping one to fit, `vercel.json` schedules this single
+ * tick and the jobs are called from here — so the platform sees one cron and
+ * adding a fourth job later costs a block in this handler rather than a slot
+ * nobody has.
+ *
+ * Two things make sharing a tick safe. Each job decides for itself whether it
+ * has work: report and post schedules carry their own `nextRunAt`, and the FX
+ * reprice is guarded by the hour check below, so an hourly dispatcher does not
+ * mean hourly repricing. And each job is isolated — one throwing is recorded
+ * and the rest still run, because a failing reprice must not stop anyone's
+ * scheduled post from going out.
+ *
+ * Always 200 unless the dispatcher itself is broken. A job failing is data in
+ * the body; a non-2xx would tell the platform this endpoint is unhealthy and
+ * the whole tick is in doubt.
+ */
+router.get("/run", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  const ran: Record<string, unknown> = {};
+  const errors: string[] = [];
+
+  // The reprice is a once-a-day job sharing an hourly tick, so it needs an
+  // explicit "is it that time yet" check. UTC, matching the 02:00 schedule it
+  // replaced.
+  const fxDue = new Date().getUTCHours() === Number(process.env.FX_CRON_HOUR ?? 2);
+
+  if (fxDue) {
+    try {
+      ran["fx-sync"] = await runFxSync("Vercel Cron (dispatcher)");
+    } catch (e) {
+      const message = (e as Error).message;
+      console.error("[cron] fx reprice failed, prices unchanged:", message);
+      await sendFxFailureReport(message, "Vercel Cron (dispatcher)").catch(() => {});
+      errors.push(`fx-sync: ${message}`);
+    }
+  }
+
+  try {
+    const summary = await runDueSchedules();
+    if (summary.attempted > 0) {
+      console.log(`[cron] reports: ${summary.attempted} due, ${summary.sent} sent, ${summary.failed} failed`);
+    }
+    ran.reports = summary;
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] report run failed:", message);
+    errors.push(`reports: ${message}`);
+  }
+
+  try {
+    const summary = await runDuePosts();
+    if (summary.attempted > 0) {
+      console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
+    }
+    ran["social-posts"] = summary;
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] social post run failed:", message);
+    errors.push(`social-posts: ${message}`);
+  }
+
+  if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));
+  res.json({ ok: true, ran, errors });
 });
 
 /**
