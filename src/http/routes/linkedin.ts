@@ -102,6 +102,44 @@ function studioUrl(status: string, detail?: string): string {
 }
 
 /**
+ * End the flow from inside the popup, without loading the studio into it.
+ *
+ * The popup is a disposable window whose only job is to carry the consent
+ * screen. Redirecting it to the studio makes it render a second full copy of
+ * the application just to read one query parameter — slow, and on a failure it
+ * strands the user on an error URL that looks like the app broke.
+ *
+ * This sends a few lines of HTML instead: post the outcome to the opener, close.
+ * The fallback matters as much as the happy path — when there is no opener the
+ * flow ran as a full-page navigation (a blocked popup), and the only sensible
+ * destination is back into the app.
+ */
+function closePopup(res: Response, status: string, detail?: string): void {
+  const target = status === "cancelled" || status === "error"
+    ? studioUrl(status, detail)
+    : studioUrl(status);
+
+  res
+    .type("html")
+    .send(`<!doctype html>
+<meta charset="utf-8">
+<title>LinkedIn</title>
+<body style="font:14px system-ui;padding:24px;color:#444">Finishing up…</body>
+<script>
+  (function () {
+    var msg = { source: "quantalog-linkedin", status: ${JSON.stringify(status)} };
+    if (window.opener && window.opener !== window) {
+      // The opener validates the origin, so it is named explicitly here.
+      window.opener.postMessage(msg, ${JSON.stringify(studioBase())});
+      window.close();
+    } else {
+      window.location.replace(${JSON.stringify(target)});
+    }
+  })();
+</script>`);
+}
+
+/**
  * Where a sign-in attempt returns to: the login page, which knows how to store
  * a token and route onward.
  */
@@ -192,26 +230,30 @@ async function resolveLoginUser(profile: {
 router.get(
   "/",
   asyncHandler(async (req: Request, res: Response) => {
-    if (!linkedInConfigured()) {
-      return res.redirect(studioUrl("error", "not_configured"));
-    }
-
     const mode: StateMode = req.query.mode === "login" ? "login" : "connect";
+
+    if (!linkedInConfigured()) {
+      // A login attempt has no popup to close — it starts from the login page
+      // as a full navigation — so it goes back there with the reason.
+      return mode === "login"
+        ? res.redirect(loginUrl("error", "not_configured"))
+        : closePopup(res, "error", "not_configured");
+    }
 
     let userId: string | undefined;
 
     if (mode === "connect") {
       const token = String(req.query.token ?? "");
-      if (!token) return res.redirect(studioUrl("error", "not_signed_in"));
+      if (!token) return closePopup(res, "error", "not_signed_in");
 
       try {
         const payload = jwt.verify(token, STATE_SECRET) as { userId: string; demo?: boolean };
         // A demo session is read-only and has no real user row to attach a
         // connection to, so it is refused here rather than failing at the upsert.
-        if (payload.demo) return res.redirect(studioUrl("error", "demo"));
+        if (payload.demo) return closePopup(res, "error", "demo");
         userId = payload.userId;
       } catch {
-        return res.redirect(studioUrl("error", "not_signed_in"));
+        return closePopup(res, "error", "not_signed_in");
       }
     }
 
@@ -249,19 +291,25 @@ router.get(
     // redirect target, and the signature is still verified before the state is
     // acted on.
     const wantedLogin = peekMode(state) === "login";
+    /**
+     * End the flow the way it began: a sign-in redirects the page it started
+     * from, a connect closes its popup.
+     */
     const fail = (status: string, reason?: string) =>
-      wantedLogin ? loginUrl(status, reason) : studioUrl(status, reason);
+      wantedLogin
+        ? res.redirect(loginUrl(status, reason))
+        : closePopup(res, status, reason);
 
     // The user pressed Cancel on the consent screen. A normal outcome, not an
     // error worth logging.
     if (req.query.error) {
       const denied = req.query.error === "user_cancelled_login"
         || req.query.error === "user_cancelled_authorize";
-      return res.redirect(fail(denied ? "cancelled" : "error", "denied"));
+      return fail(denied ? "cancelled" : "error", "denied");
     }
 
-    if (!code) return res.redirect(fail("error", "missing_code"));
-    if (!state) return res.redirect(fail("error", "invalid_state"));
+    if (!code) return fail("error", "missing_code");
+    if (!state) return fail("error", "invalid_state");
 
     let userId: string | undefined;
     let mode: StateMode;
@@ -275,7 +323,7 @@ router.get(
       // A connect flow without a user is a malformed state, not a login.
       if (mode === "connect" && !userId) throw new Error("missing user");
     } catch {
-      return res.redirect(fail("error", "invalid_state"));
+      return fail("error", "invalid_state");
     }
 
     let token;
@@ -287,7 +335,7 @@ router.get(
       // The message is safe to log — the clients above build it from a status
       // code only, never from the request body or the response.
       console.error("[linkedin] connect failed:", e instanceof Error ? e.message : e);
-      return res.redirect(fail("error", "linkedin_failed"));
+      return fail("error", "linkedin_failed");
     }
 
     // A login flow has no user yet: find one by LinkedIn subject, fall back to
@@ -329,7 +377,7 @@ router.get(
       // On a login flow the sign-in itself succeeded; failing to store the
       // posting token must not cost the user their session, so they are still
       // let in and simply arrive without LinkedIn connected for posting.
-      if (!issuedToken) return res.redirect(studioUrl("error", "save_failed"));
+      if (!issuedToken) return closePopup(res, "error", "save_failed");
     }
 
     // A login hands the freshly signed token to the app, which stores it and
@@ -338,7 +386,7 @@ router.get(
     // from the address bar as soon as it has been read.
     if (issuedToken) return res.redirect(loginUrl("ok", undefined, issuedToken));
 
-    res.redirect(studioUrl("connected"));
+    closePopup(res, "connected");
   }),
 );
 
