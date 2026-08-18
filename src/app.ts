@@ -28,6 +28,8 @@ import supportRoutes from "./http/routes/support.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import formRoutes from "./http/routes/forms.js";
 import formsPublicRoutes from "./http/routes/forms-public.js";
+import swaggerUi from "swagger-ui-express";
+import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 
 const app = express();
@@ -127,6 +129,38 @@ app.get("/tracker.js", openCors, (_req, res) => {
   res.type("application/javascript");
   res.sendFile(path.join(publicDir, "tracker.js"));
 });
+
+// Interactive documentation for the platform API below.
+//
+// Open CORS and no auth of its own: the page is public reference material, and
+// the key a reader pastes into "Authorize" is sent to `/v1` — which does check
+// it — not to this route. Serving it from the API's own origin is what lets
+// "Try it out" work at all: the browser calls the same host it loaded the page
+// from, so there is no preflight to fail and no key to proxy through us.
+const openApiSpec = buildOpenApiSpec();
+app.get("/openapi.json", openCors, (_req: Request, res: Response) => {
+  res.json(openApiSpec);
+});
+app.use(
+  "/docs",
+  openCors,
+  swaggerUi.serve,
+  swaggerUi.setup(openApiSpec, {
+    customSiteTitle: "Quantalog API reference",
+    // The topbar is Swagger's own branding and a URL box that only lets someone
+    // load a different API into our page.
+    customCss: ".swagger-ui .topbar { display: none }",
+    swaggerOptions: {
+      // Endpoints collapsed by default: three tags open at once is a wall of
+      // schema before the reader has chosen anything.
+      docExpansion: "list",
+      // Survives a refresh, so a reader trying several calls authorises once.
+      persistAuthorization: true,
+      defaultModelsExpandDepth: 0,
+      tryItOutEnabled: true,
+    },
+  }),
+);
 
 // Platform API (server-to-server, API-key auth, any origin)
 app.use("/v1", openCors, v1Routes);
