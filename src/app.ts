@@ -3,6 +3,7 @@ import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./http/routes/auth.js";
+import linkedinRoutes from "./http/routes/linkedin.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import collectRoutes from "./http/routes/collect.js";
 import statsRoutes from "./http/routes/stats.js";
@@ -31,6 +32,7 @@ import formsPublicRoutes from "./http/routes/forms-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
+import { dashboardCors } from "./http/middleware/cors.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -42,6 +44,10 @@ app.set("trust proxy", true);
 // globally — every other endpoint takes small JSON, and a generous body limit on
 // all of them is free memory for anyone who wants to spend ours.
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
+// Same story for a LinkedIn post: the share card is a 1200x630 PNG drawn in the
+// browser and sent as a base64 data URL, since there is no hosted copy of it to
+// give LinkedIn instead.
+app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.
@@ -50,20 +56,6 @@ app.use(express.json());
 // The tracker sends beacons as text/plain (an application/json beacon would
 // trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.
 app.use(express.text({ type: ["text/plain", "text/*"] }));
-
-const dashboardOrigins = [
-  "http://localhost:5173",
-  "https://real-ana-fe.vercel.app",
-  "https://studio-quantalog.daorbit.in",
-];
-
-// Dashboard CORS: restricted to our own frontend
-const dashboardCors = cors({
-  origin: (origin, cb) => {
-    if (!origin || dashboardOrigins.includes(origin)) return cb(null, true);
-    cb(new Error(`Origin not allowed: ${origin}`));
-  },
-});
 
 // Open CORS: tracker + collect run on arbitrary customer domains
 const openCors = cors({ origin: "*" });
@@ -186,6 +178,14 @@ app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
 // The hosted form page, iframed on arbitrary customer domains — same open,
 // unauthenticated model as `/api/collect`.
 app.use("/api/public/forms", openCors, formsPublicRoutes);
+
+// LinkedIn account connection and publishing. Mounted before `/api/auth` so
+// its paths win. The router applies CORS per route rather than taking it here:
+// its two redirect endpoints are browser navigations (one from a
+// `window.location` assignment, one from linkedin.com) which send no Origin the
+// dashboard allowlist would accept, while `/status`, `/post` and disconnect are
+// ordinary dashboard fetches that need it.
+app.use("/api/auth/linkedin", linkedinRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
