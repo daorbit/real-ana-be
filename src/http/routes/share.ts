@@ -94,6 +94,26 @@ router.get("/:token/card.png", async (req: Request, res: Response) => {
 });
 
 /**
+ * Social and chat-app link scrapers, by user agent.
+ *
+ * LinkedIn is the strict one and the reason this list exists: its crawler
+ * reads the raw HTML and treats a zero-delay `<meta http-equiv="refresh">` as
+ * a redirect to follow, landing it on the single-page app — whose generic tags
+ * are exactly what this route exists to avoid serving. Facebook, X, Slack and
+ * WhatsApp are matched too so all of them read one consistent head.
+ *
+ * Matched loosely on purpose: a crawler that renames itself and falls through
+ * to the human path still gets a page whose head is correct, just with the
+ * refresh tag attached.
+ */
+const SCRAPER_UA =
+  /linkedinbot|facebookexternalhit|facebookcatalog|twitterbot|slackbot|slack-imgproxy|whatsapp|telegrambot|discordbot|embedly|quora link preview|pinterest|redditbot|applebot|skypeuripreview|bingbot|googlebot|vkshare|w3c_validator/i;
+
+function isScraper(req: Request): boolean {
+  return SCRAPER_UA.test(String(req.headers["user-agent"] ?? ""));
+}
+
+/**
  * The link-preview page for a shared dashboard.
  *
  * Social scrapers do not run JavaScript, so the single-page app serves them the
@@ -102,8 +122,19 @@ router.get("/:token/card.png", async (req: Request, res: Response) => {
  * route answers that fetch with tags built for the specific token, and sends
  * anyone with a browser on to the dashboard itself.
  *
- * The redirect is what keeps the URL usable by both: a person following the
- * link lands on the real page, a scraper reads the head and never follows it.
+ * Crawler and browser get different pages, because what each needs breaks the
+ * other:
+ *
+ * - A browser needs to be moved on to the dashboard, which the meta refresh
+ *   does. Served to LinkedIn, that same tag reads as a redirect: it abandons
+ *   this head, follows to the app, finds the generic tags there, and the post
+ *   previews as the marketing page with no card — the bug this route was
+ *   written to fix, reintroduced by the tag that serves the browser.
+ * - A crawler needs `og:url` and the canonical to point back *here*, because a
+ *   scraper treats them as the address to attribute (and often to re-scrape).
+ *   Pointing them at the app sent LinkedIn to the tagless SPA by a second
+ *   route. Humans still land on the dashboard: only the tags differ, and the
+ *   crawler never renders them.
  */
 router.get("/:token/preview", async (req: Request, res: Response) => {
   const token = String(req.params.token ?? "");
@@ -114,6 +145,14 @@ router.get("/:token/preview", async (req: Request, res: Response) => {
   // feed renders as a broken card, and the link itself already 404s honestly
   // when someone opens it.
   if (!shared) return res.redirect(302, target);
+
+  const bot = isScraper(req);
+  const self = `${publicApiOrigin(req)}/api/share/${token}/preview`;
+  const cardUrl = `${publicApiOrigin(req)}/api/share/${token}/card.png`;
+  // A scraper attributes the post to whatever `og:url` names, so it has to be
+  // this page. A browser is leaving anyway, and the dashboard is the address
+  // worth recording.
+  const canonical = bot ? self : target;
 
   const title = `${shared.name} — live analytics`;
   const description = shared.totals
@@ -126,14 +165,16 @@ router.get("/:token/preview", async (req: Request, res: Response) => {
 <meta charset="utf-8" />
 <title>${escapeHtml(title)}</title>
 <meta name="description" content="${escapeHtml(description)}" />
-<link rel="canonical" href="${escapeHtml(target)}" />
+<link rel="canonical" href="${escapeHtml(canonical)}" />
 
 <meta property="og:type" content="website" />
 <meta property="og:site_name" content="Quantalog" />
-<meta property="og:url" content="${escapeHtml(target)}" />
+<meta property="og:url" content="${escapeHtml(canonical)}" />
 <meta property="og:title" content="${escapeHtml(title)}" />
 <meta property="og:description" content="${escapeHtml(description)}" />
-<meta property="og:image" content="${escapeHtml(`${publicApiOrigin(req)}/api/share/${token}/card.png`)}" />
+<meta property="og:image" content="${escapeHtml(cardUrl)}" />
+<meta property="og:image:secure_url" content="${escapeHtml(cardUrl)}" />
+<meta property="og:image:type" content="image/png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:image:alt" content="${escapeHtml(`Analytics summary for ${shared.name}`)}" />
@@ -141,9 +182,8 @@ router.get("/:token/preview", async (req: Request, res: Response) => {
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${escapeHtml(title)}" />
 <meta name="twitter:description" content="${escapeHtml(description)}" />
-<meta name="twitter:image" content="${escapeHtml(`${publicApiOrigin(req)}/api/share/${token}/card.png`)}" />
-
-<meta http-equiv="refresh" content="0; url=${escapeHtml(target)}" />
+<meta name="twitter:image" content="${escapeHtml(cardUrl)}" />
+${bot ? "" : `<meta http-equiv="refresh" content="0; url=${escapeHtml(target)}" />`}
 </head>
 <body>
 <p>Redirecting to <a href="${escapeHtml(target)}">${escapeHtml(title)}</a>…</p>
@@ -153,6 +193,11 @@ router.get("/:token/preview", async (req: Request, res: Response) => {
   res.type("html");
   // Short cache: the description carries figures, and a scraper re-reading a
   // day-old card should not quote last week's numbers.
+  //
+  // `Vary: User-Agent` because the two audiences get different HTML — without
+  // it a CDN can hand a crawler the browser's copy (refresh tag and all),
+  // which is the exact failure this split was written to prevent.
+  res.set("Vary", "User-Agent");
   res.set("Cache-Control", "public, max-age=600, s-maxage=600");
   res.send(html);
 });
