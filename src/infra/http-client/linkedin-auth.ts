@@ -65,7 +65,25 @@ export function linkedInRedirectUri(): string {
 
 /** Whether the deployment has enough configuration to attempt the flow at all. */
 export function linkedInConfigured(): boolean {
-  return Boolean(clientId() && clientSecret() && linkedInRedirectUri());
+  return missingLinkedInConfig().length === 0;
+}
+
+/**
+ * Which pieces of configuration are absent, by name.
+ *
+ * Names only — never values. "LinkedIn is not configured" on its own gives an
+ * operator nothing to act on: the variables live in two different Vercel
+ * projects, and the usual mistake is setting them on the frontend rather than
+ * the API, or setting them and not redeploying. Saying which one is missing
+ * turns that into a single look.
+ */
+export function missingLinkedInConfig(): string[] {
+  const missing: string[] = [];
+  if (!clientId()) missing.push("LINKEDIN_CLIENT_ID");
+  if (!clientSecret()) missing.push("LINKEDIN_CLIENT_SECRET");
+  // Either of these satisfies the redirect URI; report the pair as one item.
+  if (!linkedInRedirectUri()) missing.push("LINKEDIN_REDIRECT_URI (or PUBLIC_BASE_URL)");
+  return missing;
 }
 
 /**

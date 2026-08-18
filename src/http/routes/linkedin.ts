@@ -7,7 +7,8 @@ import {
   buildAuthorizeUrl,
   exchangeCodeForToken,
   fetchLinkedInProfile,
-  linkedInConfigured,
+  linkedInRedirectUri,
+  missingLinkedInConfig,
   revokeLinkedInToken,
 } from "../../infra/http-client/linkedin-auth.js";
 import {
@@ -218,6 +219,26 @@ async function resolveLoginUser(profile: {
 }
 
 /**
+ * Is LinkedIn set up on this deployment?
+ *
+ * Unauthenticated and open, because it answers a question about the server's
+ * own configuration rather than about any user, and the whole point is to be
+ * reachable with a browser or curl while diagnosing exactly the failure this
+ * integration is most likely to hit. It reports variable *names* and nothing
+ * else — never a value, and never a partial one.
+ */
+router.get("/config", (_req: Request, res: Response) => {
+  const missing = missingLinkedInConfig();
+  res.json({
+    configured: missing.length === 0,
+    missing,
+    // Echoed so a mismatch with the LinkedIn portal's registered value — the
+    // other classic failure — is visible without guessing. It is a public URL.
+    redirectUri: linkedInRedirectUri(),
+  });
+});
+
+/**
  * Start the flow, for either connecting or signing in.
  *
  * `?mode=login` needs no credential: nobody is signed in yet, which is the
@@ -232,7 +253,12 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const mode: StateMode = req.query.mode === "login" ? "login" : "connect";
 
-    if (!linkedInConfigured()) {
+    const missing = missingLinkedInConfig();
+    if (missing.length) {
+      // Names, never values. This is the message that tells an operator the
+      // variables went on the wrong Vercel project, or that the deployment
+      // predates them being added.
+      console.error(`[linkedin] not configured — missing: ${missing.join(", ")}`);
       // A login attempt has no popup to close — it starts from the login page
       // as a full navigation — so it goes back there with the reason.
       return mode === "login"
@@ -411,9 +437,15 @@ router.get(
     // say "not configured" in place of a button, rather than navigating the
     // whole page to an endpoint that will only bounce straight back — which
     // reads to the user as the app reloading and losing their work.
-    const configured = linkedInConfigured();
+    const missing = missingLinkedInConfig();
+    const configured = missing.length === 0;
 
-    if (!conn) return res.json({ connected: false, configured });
+    if (!conn) {
+      // The names of absent variables are safe to return and save an operator
+      // a trip through the server logs. No values, and nothing is returned once
+      // the deployment is configured.
+      return res.json({ connected: false, configured, ...(configured ? {} : { missing }) });
+    }
 
     // Reported rather than hidden, so the panel can offer "Reconnect" before
     // the user writes a caption and discovers the problem at publish time.
