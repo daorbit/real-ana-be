@@ -443,7 +443,23 @@ router.get(
         { upsert: true, new: true, setDefaultsOnInsert: true },
       );
     } catch (e) {
-      console.error("[linkedin] could not save connection:", e instanceof Error ? e.message : e);
+      // Logged with the error's name and any Mongo driver code alongside the
+      // message. "could not save connection" on its own is the least useful
+      // possible line here: every cause — a failed connection, a duplicate key,
+      // a validation error, a missing encryption key — reads identically, and
+      // this runs on a server whose only witness is the log.
+      const err = e as { name?: string; message?: string; code?: unknown; codeName?: string };
+      console.error(
+        "[linkedin] could not save connection:",
+        [
+          err?.name,
+          err?.message,
+          err?.code !== undefined ? `code=${String(err.code)}` : "",
+          err?.codeName,
+        ]
+          .filter(Boolean)
+          .join(" | "),
+      );
       // On a login flow the sign-in itself succeeded; failing to store the
       // posting token must not cost the user their session, so they are still
       // let in and simply arrive without LinkedIn connected for posting.
