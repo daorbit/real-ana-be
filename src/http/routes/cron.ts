@@ -3,6 +3,7 @@ import { repriceAllPlans } from "../../modules/billing/fx.js";
 import { sendFxSuccessReport, sendFxFailureReport } from "../../modules/billing/fx-report.js";
 import { runDueSchedules } from "../../modules/reports/report-runner.js";
 import { sweepExpiredSubmissions } from "../../modules/forms/submissions.service.js";
+import { runDuePosts } from "../../modules/social/post-runner.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -89,6 +90,32 @@ router.get("/reports", async (req: Request, res: Response) => {
     res.json({ ok: true, ...summary });
   } catch (e) {
     console.error("[cron] report run failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/**
+ * Publish scheduled LinkedIn posts that are due.
+ *
+ * Runs far more often than the other jobs here — a post scheduled for 09:00
+ * should not go out at 14:00 — so the tick is quarter-hourly and most runs find
+ * nothing to do, which is the intended shape. The runner caps how much one tick
+ * will attempt; see `runDuePosts`.
+ */
+router.get("/social-posts", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await runDuePosts();
+    // Quiet when idle: a line per empty tick every fifteen minutes buries
+    // everything else in the log.
+    if (summary.attempted > 0) {
+      console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
+    }
+    if (summary.errors.length) console.error("[cron] social errors:", summary.errors.join(" | "));
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] social post run failed:", (e as Error).message);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

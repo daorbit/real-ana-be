@@ -159,6 +159,36 @@ export async function createImagePost(
   commentary: string,
   imageUrn: string,
 ): Promise<CreatedPost> {
+  return createPost(accessToken, memberId, commentary, { media: { id: imageUrn } });
+}
+
+/**
+ * Publish a post carrying only a caption.
+ *
+ * Same call without a `content` block, which the Posts API treats as a text
+ * post. LinkedIn builds its own preview from any link in the commentary, so a
+ * scheduled post with no image still arrives with something to look at.
+ */
+export async function createTextPost(
+  accessToken: string,
+  memberId: string,
+  commentary: string,
+): Promise<CreatedPost> {
+  return createPost(accessToken, memberId, commentary, undefined);
+}
+
+/**
+ * The shared body of both post types.
+ *
+ * `content` is omitted entirely rather than sent empty: the API rejects a
+ * `content` object with no media inside it.
+ */
+async function createPost(
+  accessToken: string,
+  memberId: string,
+  commentary: string,
+  content: { media: { id: string } } | undefined,
+): Promise<CreatedPost> {
   const payload = {
     author: `urn:li:person:${memberId}`,
     commentary,
@@ -168,7 +198,7 @@ export async function createImagePost(
       targetEntities: [],
       thirdPartyDistributionChannels: [],
     },
-    content: { media: { id: imageUrn } },
+    ...(content ? { content } : {}),
     lifecycleState: "PUBLISHED",
     isReshareDisabledByAuthor: false,
   };

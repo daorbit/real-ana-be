@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./http/routes/auth.js";
 import linkedinRoutes from "./http/routes/linkedin.js";
+import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import collectRoutes from "./http/routes/collect.js";
 import statsRoutes from "./http/routes/stats.js";
@@ -48,6 +49,9 @@ app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
 // browser and sent as a base64 data URL, since there is no hosted copy of it to
 // give LinkedIn instead.
 app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
+// And for a scheduled post, whose image arrives the same way before being
+// uploaded to Cloudinary.
+app.use("/api/social/posts", express.json({ limit: "12mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.
@@ -186,6 +190,10 @@ app.use("/api/public/forms", openCors, formsPublicRoutes);
 // dashboard allowlist would accept, while `/status`, `/post` and disconnect are
 // ordinary dashboard fetches that need it.
 app.use("/api/auth/linkedin", linkedinRoutes);
+
+// Scheduled social posts. Scoped to the signed-in user rather than a workspace
+// prefix: a schedule publishes with that user's own LinkedIn token.
+app.use("/api/social/posts", dashboardCors, socialPostRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
