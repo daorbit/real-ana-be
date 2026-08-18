@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import { ScheduledPost, POST_FREQUENCIES, POST_STATUSES } from "../../modules/social/models/ScheduledPost.js";
+import { ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES } from "../../modules/social/models/ScheduledPost.js";
 import { computeNextRun } from "../../modules/social/schedule-time.js";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
@@ -46,6 +46,8 @@ function publicPost(doc: InstanceType<typeof ScheduledPost>) {
     name: doc.name,
     caption: doc.caption,
     imageUrl: doc.imageUrl,
+    mode: doc.mode,
+    runAt: doc.runAt,
     frequency: doc.frequency,
     hour: doc.hour,
     minute: doc.minute,
@@ -71,6 +73,28 @@ function publicPost(doc: InstanceType<typeof ScheduledPost>) {
  * a 400 naming the field instead of a 500 from a failed validator.
  */
 function readSchedule(body: Record<string, unknown>) {
+  const mode = String(body.mode ?? "once");
+  if (!POST_MODES.includes(mode as never)) {
+    throw badRequest(`mode must be one of ${POST_MODES.join(", ")}`);
+  }
+
+  const timezone = String(body.timezone ?? "UTC").trim() || "UTC";
+
+  // A single post is pinned to one instant, which the studio sends as an ISO
+  // string it built from the date and time the author picked in their own zone.
+  if (mode === "once") {
+    const runAt = new Date(String(body.runAt ?? ""));
+    if (Number.isNaN(runAt.getTime())) {
+      throw badRequest("runAt must be a valid date and time");
+    }
+    // A minute of slack: the studio's clock and ours are never exactly aligned,
+    // and refusing a time the user sees as "now" would be wrong.
+    if (runAt.getTime() < Date.now() - 60 * 1000) {
+      throw badRequest("Pick a time in the future.");
+    }
+    return { mode: "once" as const, runAt, timezone };
+  }
+
   const frequency = String(body.frequency ?? "");
   if (!POST_FREQUENCIES.includes(frequency as never)) {
     throw badRequest(`frequency must be one of ${POST_FREQUENCIES.join(", ")}`);
@@ -99,13 +123,19 @@ function readSchedule(body: Record<string, unknown>) {
   }
 
   return {
+    mode: "repeat" as const,
     frequency: frequency as (typeof POST_FREQUENCIES)[number],
     hour,
     minute,
     weekday,
     dayOfMonth,
-    timezone: String(body.timezone ?? "UTC").trim() || "UTC",
+    timezone,
   };
+}
+
+/** When a validated schedule first fires, whichever mode it is in. */
+function firstRun(schedule: ReturnType<typeof readSchedule>): Date {
+  return schedule.mode === "once" ? schedule.runAt : computeNextRun(schedule);
 }
 
 /** The caption, checked for presence and length. */
@@ -218,7 +248,7 @@ router.post(
       imagePublicId,
       ...schedule,
       status: "active",
-      nextRunAt: computeNextRun(schedule),
+      nextRunAt: firstRun(schedule),
     });
 
     res.status(201).json(publicPost(doc));
@@ -269,10 +299,17 @@ router.patch(
       }
     }
 
-    // The cadence is all-or-nothing: changing one field without the others
+    // The schedule is all-or-nothing: changing one field without the others
     // would compute a next run from a mix of old and new values.
-    if (req.body?.frequency !== undefined || req.body?.hour !== undefined) {
+    if (
+      req.body?.mode !== undefined
+      || req.body?.runAt !== undefined
+      || req.body?.frequency !== undefined
+      || req.body?.hour !== undefined
+    ) {
       const schedule = readSchedule({
+        mode: req.body.mode ?? doc.mode,
+        runAt: req.body.runAt ?? doc.runAt?.toISOString(),
         frequency: req.body.frequency ?? doc.frequency,
         hour: req.body.hour ?? doc.hour,
         minute: req.body.minute ?? doc.minute,
@@ -280,13 +317,21 @@ router.patch(
         dayOfMonth: req.body.dayOfMonth ?? doc.dayOfMonth,
         timezone: req.body.timezone ?? doc.timezone,
       });
+      // Cleared rather than left behind, so a post switched from one mode to the
+      // other does not keep a stale time from the mode it left.
+      doc.set(schedule.mode === "once" ? { frequency: undefined } : { runAt: null });
       doc.set(schedule);
-      doc.nextRunAt = computeNextRun(schedule);
+      doc.nextRunAt = firstRun(schedule);
+      // Rescheduling a post that already went out is how someone reposts it;
+      // it has to leave `sent` or the runner will never look at it again.
+      if (doc.status === "sent") doc.status = "active";
     }
 
-    // Resuming a paused schedule needs a fresh slot: the stored one is in the
-    // past by however long it was paused, and would fire on the next tick.
-    if (doc.status === "active" && doc.nextRunAt.getTime() <= Date.now()) {
+    // Resuming a paused repeat needs a fresh slot: the stored one is in the past
+    // by however long it was paused, and would fire on the next tick. A one-off
+    // is left alone — its time is a specific moment, not a cadence, and moving
+    // it silently would publish at a time nobody chose.
+    if (doc.status === "active" && doc.mode === "repeat" && doc.nextRunAt.getTime() <= Date.now()) {
       doc.nextRunAt = computeNextRun({
         frequency: doc.frequency,
         hour: doc.hour,

@@ -161,21 +161,27 @@ export async function runDuePosts(now: Date = new Date()): Promise<RunSummary> {
       summary.errors.push(`${post.id}: ${message}`);
     }
 
-    // Always advances, success or failure — see the note at the top.
-    post.set({
-      lastRunAt: now,
-      nextRunAt: computeNextRun(
-        {
-          frequency: post.frequency,
-          hour: post.hour,
-          minute: post.minute,
-          timezone: post.timezone,
-          weekday: post.weekday,
-          dayOfMonth: post.dayOfMonth,
-        },
-        now,
-      ),
-    });
+    // Always leaves the due window, success or failure — see the note at the
+    // top. A one-off has no next slot, so it retires into `sent`; a repeat
+    // advances to its next cadence.
+    post.set(
+      post.mode === "once"
+        ? { lastRunAt: now, status: "sent" }
+        : {
+            lastRunAt: now,
+            nextRunAt: computeNextRun(
+              {
+                frequency: post.frequency as never,
+                hour: post.hour,
+                minute: post.minute,
+                timezone: post.timezone,
+                weekday: post.weekday,
+                dayOfMonth: post.dayOfMonth,
+              },
+              now,
+            ),
+          },
+    );
 
     try {
       await post.save();

@@ -19,7 +19,24 @@ import mongoose, { Schema, InferSchemaType } from "mongoose";
 export const POST_FREQUENCIES = ["daily", "weekly", "monthly"] as const;
 export type PostFrequency = (typeof POST_FREQUENCIES)[number];
 
-export const POST_STATUSES = ["active", "paused"] as const;
+/**
+ * How a post is timed.
+ *
+ * `once` is the ordinary case and the default: a distinct post, written for a
+ * moment, published at a date and time the author picked. `repeat` exists for
+ * genuinely evergreen content and is deliberately the exception — republishing
+ * the same words on a cadence is what an audience reads as spam, and LinkedIn
+ * itself deprioritises duplicate commentary.
+ */
+export const POST_MODES = ["once", "repeat"] as const;
+export type PostMode = (typeof POST_MODES)[number];
+
+/**
+ * `sent` is terminal, and only a `once` post reaches it: there is no next slot
+ * to advance to, so the runner marks it published rather than leaving a row
+ * that is forever due.
+ */
+export const POST_STATUSES = ["active", "paused", "sent"] as const;
 export type PostStatus = (typeof POST_STATUSES)[number];
 
 const scheduledPostSchema = new Schema(
@@ -62,7 +79,21 @@ const scheduledPostSchema = new Schema(
     /** Cloudinary's handle, so replacing or deleting a schedule can clean up. */
     imagePublicId: { type: String, trim: true, default: "" },
 
-    frequency: { type: String, enum: POST_FREQUENCIES, required: true },
+    mode: { type: String, enum: POST_MODES, required: true, default: "once" },
+
+    /**
+     * The instant a `once` post publishes, in UTC.
+     *
+     * A real timestamp rather than wall-clock parts, because a single post is
+     * pinned to a moment: "Tuesday the 24th at 14:20" does not need to survive
+     * a daylight saving change the way a recurring cadence does. The zone the
+     * author picked it in is still stored, so the studio can show it back to
+     * them in their own clock.
+     */
+    runAt: { type: Date, default: null },
+
+    /** Recurrence, used only when `mode` is "repeat". */
+    frequency: { type: String, enum: POST_FREQUENCIES, default: "weekly" },
     /**
      * Local hour and minute the user chose, with the zone they chose it in.
      *
@@ -70,8 +101,8 @@ const scheduledPostSchema = new Schema(
      * clock promise: "every Monday at 9am" must stay 9am across a daylight
      * saving change, which a fixed UTC offset would not.
      */
-    hour: { type: Number, required: true, min: 0, max: 23 },
-    minute: { type: Number, required: true, min: 0, max: 59, default: 0 },
+    hour: { type: Number, min: 0, max: 23, default: 9 },
+    minute: { type: Number, min: 0, max: 59, default: 0 },
     /** IANA zone. Empty falls back to UTC at scheduling time. */
     timezone: { type: String, trim: true, default: "UTC" },
     /** 0-6, Sunday first. Weekly only. */
