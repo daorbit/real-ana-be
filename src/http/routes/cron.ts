@@ -156,20 +156,15 @@ router.get("/run", async (req: Request, res: Response) => {
   const ran: Record<string, unknown> = {};
   const errors: string[] = [];
 
-  // The reprice is a once-a-day job sharing an hourly tick, so it needs an
-  // explicit "is it that time yet" check. UTC, matching the 02:00 schedule it
-  // replaced.
-  const fxDue = new Date().getUTCHours() === Number(process.env.FX_CRON_HOUR ?? 2);
-
-  if (fxDue) {
-    try {
-      ran["fx-sync"] = await runFxSync("Vercel Cron (dispatcher)");
-    } catch (e) {
-      const message = (e as Error).message;
-      console.error("[cron] fx reprice failed, prices unchanged:", message);
-      await sendFxFailureReport(message, "Vercel Cron (dispatcher)").catch(() => {});
-      errors.push(`fx-sync: ${message}`);
-    }
+  // Unconditional: this route is only reached when someone asks for it, and an
+  // hour check here would silently skip the reprice they came to run.
+  try {
+    ran["fx-sync"] = await runFxSync("manual run");
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] fx reprice failed, prices unchanged:", message);
+    await sendFxFailureReport(message, "manual run").catch(() => {});
+    errors.push(`fx-sync: ${message}`);
   }
 
   try {
