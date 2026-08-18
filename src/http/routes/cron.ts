@@ -105,10 +105,17 @@ router.get("/reports", async (req: Request, res: Response) => {
 /**
  * Publish scheduled LinkedIn posts that are due.
  *
- * Not on a cron entry of its own — the dispatcher below calls the same runner.
- * This route stays for running the job by hand, and so the job is still
- * reachable if a slot frees up. The runner caps how much one tick will attempt;
- * see `runDuePosts`.
+ * Runs once a day, which is the most the Hobby plan allows: any expression that
+ * would fire more often than daily is rejected at deploy time, not at run time.
+ * That is a real constraint on this feature rather than a detail — a post set
+ * for 09:00 goes out on the day's single tick, so the hour someone picks is
+ * honoured only to the day unless the plan is upgraded, where a per-minute
+ * schedule would make the stored time exact.
+ *
+ * Each schedule still carries its own `nextRunAt`, so daily, weekly and monthly
+ * cadences all work from one entry — the tick asks "what is due", not "what is
+ * scheduled for now". The runner caps how much one tick attempts; see
+ * `runDuePosts`.
  */
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
@@ -129,24 +136,19 @@ router.get("/social-posts", async (req: Request, res: Response) => {
 });
 
 /**
- * The dispatcher: one cron entry that runs every job.
+ * Run every job in one request.
  *
- * The hosting plan allows two cron entries; this product has more jobs than
- * that. Rather than dropping one to fit, `vercel.json` schedules this single
- * tick and the jobs are called from here — so the platform sees one cron and
- * adding a fourth job later costs a block in this handler rather than a slot
- * nobody has.
+ * Not what `vercel.json` schedules — each job has its own daily entry, because
+ * the plan allows a hundred of them and separate entries keep one job's failure
+ * out of another's logs. This exists for the times a person wants the lot run
+ * now: after a deploy, or when catching up work a failed day missed.
  *
- * Two things make sharing a tick safe. Each job decides for itself whether it
- * has work: report and post schedules carry their own `nextRunAt`, and the FX
- * reprice is guarded by the hour check below, so an hourly dispatcher does not
- * mean hourly repricing. And each job is isolated — one throwing is recorded
- * and the rest still run, because a failing reprice must not stop anyone's
- * scheduled post from going out.
+ * Each job is isolated, so one throwing is recorded and the rest still run —
+ * a failing reprice must not stop anyone's scheduled post from going out.
  *
- * Always 200 unless the dispatcher itself is broken. A job failing is data in
- * the body; a non-2xx would tell the platform this endpoint is unhealthy and
- * the whole tick is in doubt.
+ * Always 200 unless the handler itself is broken. A job failing is data in the
+ * body; a non-2xx would say the endpoint is unhealthy, which is a different
+ * claim.
  */
 router.get("/run", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
