@@ -1,0 +1,61 @@
+# Publishes due LinkedIn posts on a tight interval.
+#
+# Vercel's Hobby plan caps cron jobs at one run per day with per-hour precision
+# (+/-59 min), which cannot honour a time the author picked in the studio: a post
+# stored for 12:00 goes out whenever the day's single tick lands. The schedule in
+# vercel.json stays as the daily safety net; this workflow is what actually makes
+# the stored time approximately true, by calling the same endpoint every 15
+# minutes. Nothing server-side changes -- the route already authenticates on
+# CRON_SECRET and does not care who calls it.
+#
+# Delete this file and restore a */15 schedule in vercel.json if the project
+# moves to Pro, where per-minute cron is allowed natively.
+name: social-posts cron
+
+on:
+  schedule:
+    # Every 25 minutes. GitHub queues rather than guarantees this -- runs can be
+    # minutes late under load, and are paused entirely on repos with no activity
+    # for 60 days. Both are acceptable here: the runner publishes whatever is
+    # due, so a late tick catches up rather than skipping.
+    #
+    # Note this does not divide evenly into an hour: the ticks land at :00, :25
+    # and :50, then the next hour starts again at :00, so one gap each hour is
+    # 10 minutes rather than 25. Harmless -- the runner asks what is due rather
+    # than what is scheduled for now -- but it is why the times drift rather
+    # than repeating on the clock.
+    - cron: "*/25 * * * *"
+  # Lets a person run it now from the Actions tab when catching up a missed window.
+  workflow_dispatch:
+
+# A slow run must not overlap the next tick: two ticks publishing at once would
+# race on the same due rows.
+concurrency:
+  group: social-posts-cron
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish due posts
+        env:
+          API_BASE: ${{ secrets.API_BASE }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${API_BASE:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "API_BASE and CRON_SECRET repository secrets must both be set." >&2
+            exit 1
+          fi
+
+          # --fail-with-body so a non-2xx still prints what the API said before
+          # the step fails; the route returns its error in the JSON body.
+          # Retries cover a cold start timing out rather than a real fault.
+          curl --silent --show-error --fail-with-body \
+               --retry 3 --retry-delay 10 --retry-connrefused \
+               --max-time 120 \
+               -H "Authorization: Bearer ${CRON_SECRET}" \
+               "${API_BASE}/api/cron/social-posts"

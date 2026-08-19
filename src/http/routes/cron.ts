@@ -105,12 +105,16 @@ router.get("/reports", async (req: Request, res: Response) => {
 /**
  * Publish scheduled LinkedIn posts that are due.
  *
- * Runs once a day, which is the most the Hobby plan allows: any expression that
- * would fire more often than daily is rejected at deploy time, not at run time.
- * That is a real constraint on this feature rather than a detail — a post set
- * for 09:00 goes out on the day's single tick, so the hour someone picks is
- * honoured only to the day unless the plan is upgraded, where a per-minute
- * schedule would make the stored time exact.
+ * Runs once a day, which is the most the Hobby plan allows: a more frequent
+ * expression is rejected at deploy time, not at run time, so a quarter-hourly
+ * schedule here would fail the deployment outright. Hobby also gives no better than
+ * per-hour precision (±59 min), so even this single tick is not punctual.
+ *
+ * That is a real constraint on the feature rather than a detail. A post stored
+ * for 12:00 in the author's zone goes out on whenever the day's one tick lands,
+ * which can be hours off. Honouring the picked time needs either the Pro plan
+ * (per-minute schedules) or an external pinger hitting this route on a tighter
+ * interval with the same `CRON_SECRET` — the handler does not care which.
  *
  * Each schedule still carries its own `nextRunAt`, so daily, weekly and monthly
  * cadences all work from one entry — the tick asks "what is due", not "what is
@@ -122,8 +126,8 @@ router.get("/social-posts", async (req: Request, res: Response) => {
 
   try {
     const summary = await runDuePosts();
-    // Quiet when idle: a line per empty tick every fifteen minutes buries
-    // everything else in the log.
+    // Quiet when idle: a line per empty tick buries everything else in the
+    // log, and most ticks have nothing due.
     if (summary.attempted > 0) {
       console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
     }
