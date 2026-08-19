@@ -108,6 +108,15 @@ const subscriptionSchema = new Schema(
     addonCrawlCredits: { type: Number, default: 0 },
     /** Extra Orbit questions bought as a pack. Same rules: no expiry, spent last. */
     addonOrbitCredits: { type: Number, default: 0 },
+    /**
+     * Extra scheduled-post slots bought as a pack.
+     *
+     * Not a credit like the three above: nothing is drawn down. A scheduled
+     * post holds a slot while it is queued and frees it once it has sent, so
+     * this is a permanent addition to the plan's cap rather than a balance
+     * that runs out. Buying twice raises the cap twice.
+     */
+    addonPostSlots: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

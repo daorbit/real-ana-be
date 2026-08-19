@@ -220,6 +220,9 @@ const ADDON_CREDIT_FIELD: Record<AddonType, string> = {
   audit: "addonAuditCredits",
   crawl: "addonCrawlCredits",
   orbit: "addonOrbitCredits",
+  // Not a credit balance: this raises the cap on how many posts may be queued
+  // at once, and is never spent down. Incremented the same way regardless.
+  "post-slots": "addonPostSlots",
 };
 
 /** One addon line as it is stored on a purchase and credited on payment. */

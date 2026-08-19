@@ -7,7 +7,13 @@ import { CURRENCIES } from "../currency.js";
  * is a single charge, not a recurring one, so credits don't reset or expire on
  * their own; they're drawn down as they're used.
  */
-export const ADDON_TYPES = ["audit", "crawl", "orbit"] as const;
+/**
+ * `post-slots` differs from the other three: they are consumable credits spent
+ * per use, where a post slot is held while a post is queued and released when
+ * it sends. Buying it raises the workspace's cap permanently rather than
+ * adding a balance to draw down.
+ */
+export const ADDON_TYPES = ["audit", "crawl", "orbit", "post-slots"] as const;
 export type AddonType = (typeof ADDON_TYPES)[number];
 
 const priceFields = Object.fromEntries(

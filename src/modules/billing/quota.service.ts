@@ -10,7 +10,7 @@ import {
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { Form } from "../forms/models/Form.js";
-import { Form } from "../forms/models/Form.js";
+import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { invalidateSite } from "./event-quota.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
@@ -283,6 +283,54 @@ export async function canCreateForm(
       ok: false,
       error: `this workspace's plan allows ${plan.maxForms} published form${plan.maxForms === 1 ? "" : "s"} — upgrade to publish more`,
     };
+  return { ok: true };
+}
+
+/**
+ * Whether `workspaceId` may add one more scheduled social post.
+ *
+ * Counts what is queued rather than what has ever been sent: a post that has
+ * already published is history and holds nothing open, so it does not spend a
+ * slot. `excludeId` lets an edit re-check the cap without the post being
+ * edited counting against itself, matching `canCreateForm`.
+ */
+export async function canCreateScheduledPost(
+  workspaceId: string,
+  excludeId?: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to schedule posts" };
+
+  // Bought slots add to the plan's own cap and never expire, so a workspace
+  // that has paid for room keeps it across renewals and downgrades.
+  const sub = await Subscription.findOne({ workspaceId });
+  const bought = (sub?.get("addonPostSlots") as number) ?? 0;
+  const cap = plan.maxScheduledPosts + bought;
+
+  if (cap === 0)
+    return { ok: false, error: "this workspace's plan does not include scheduled posts — upgrade to use them" };
+
+  const count = await ScheduledPost.countDocuments({
+    workspaceId,
+    status: { $ne: "sent" },
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  });
+  if (count >= cap)
+    return {
+      ok: false,
+      error: `this workspace can hold ${cap} scheduled post${cap === 1 ? "" : "s"} — upgrade or buy more slots to schedule beyond that`,
+    };
+  return { ok: true };
+}
+
+/** Whether this workspace's plan allows a post to repeat rather than go out once. */
+export async function canUseRepeatingPosts(
+  workspaceId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan" };
+  if (!plan.repeatingPosts)
+    return { ok: false, error: "repeating posts are not included in this workspace's plan — upgrade to use them" };
   return { ok: true };
 }
 

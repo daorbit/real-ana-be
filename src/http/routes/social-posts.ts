@@ -11,6 +11,9 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { badRequest, forbidden, notFound } from "../../shared/errors/index.js";
+import {
+  canCreateScheduledPost, canUseRepeatingPosts,
+} from "../../modules/billing/quota.service.js";
 
 /**
  * Scheduled LinkedIn posts: the studio's own CRUD surface.
@@ -252,6 +255,17 @@ router.post(
 
     const caption = readCaption(req.body?.caption);
     const schedule = readSchedule(req.body ?? {});
+
+    // Checked after the schedule parses, so a malformed request is refused for
+    // being malformed rather than reported as a plan limit.
+    const allowed = await canCreateScheduledPost(workspaceId);
+    if (!allowed.ok) throw forbidden(allowed.error);
+
+    if (schedule.mode === "repeat") {
+      const repeats = await canUseRepeatingPosts(workspaceId);
+      if (!repeats.ok) throw forbidden(repeats.error);
+    }
+
     const name = String(req.body?.name ?? "").trim() || "Scheduled post";
     const { imageUrl, imagePublicId } = await storeImage(
       String(req.body?.image ?? ""),
@@ -342,6 +356,14 @@ router.patch(
         dayOfMonth: req.body.dayOfMonth ?? doc.dayOfMonth,
         timezone: req.body.timezone ?? doc.timezone,
       });
+      // Switching an existing post onto a cadence is the same entitlement as
+      // creating one that way, so it is checked here too rather than only at
+      // create — otherwise the limit is one edit away from being bypassed.
+      if (schedule.mode === "repeat" && doc.mode !== "repeat") {
+        const repeats = await canUseRepeatingPosts(String(doc.workspaceId));
+        if (!repeats.ok) throw forbidden(repeats.error);
+      }
+
       // Cleared rather than left behind, so a post switched from one mode to the
       // other does not keep a stale time from the mode it left.
       doc.set(schedule.mode === "once" ? { frequency: undefined } : { runAt: null });

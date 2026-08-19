@@ -62,6 +62,26 @@ export type PlanCatalogEntry = {
   formsFileUploads: boolean;
   /** Whether the hosted form page drops the "Powered by Quantalog" line. */
   formsRemoveBranding: boolean;
+  /**
+   * Scheduled social posts a workspace may hold at once.
+   *
+   * Counted rather than metered per publish: the cost here is the stored queue
+   * and the connection it publishes through, not the individual send. Free gets
+   * enough to see the feature work on a real post; the paid draw is running a
+   * content calendar rather than one post at a time.
+   *
+   * Zero switches the feature off entirely, which is what the composer reads to
+   * decide whether to offer it at all.
+   */
+  maxScheduledPosts: number;
+  /**
+   * Whether a post may repeat on a cadence rather than going out once.
+   *
+   * The paid half of scheduling: a repeating post publishes unattended forever
+   * from one row, which is the thing worth paying for, where a single post is
+   * the thing worth trying.
+   */
+  repeatingPosts: boolean;
 };
 
 /** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
@@ -101,6 +121,10 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     formsCsvExport: false,
     formsFileUploads: false,
     formsRemoveBranding: false,
+    // Enough to schedule a post and watch it publish itself, which is the
+    // whole argument for the feature. A calendar needs the paid tier.
+    maxScheduledPosts: 3,
+    repeatingPosts: false,
   },
   {
     slug: "starter",
@@ -109,7 +133,12 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     monthlyAuditQuota: 10,
     monthlyCrawlQuota: 10,
     monthlyEventQuota: 250_000,
-    features: ["Email support", "Scheduled reports by email", "Custom comparison periods"],
+    features: [
+      "Email support",
+      "Scheduled reports by email",
+      "Custom comparison periods",
+      "Scheduled LinkedIn posts, including repeating",
+    ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
     maxReportSchedules: 5,
@@ -122,6 +151,8 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     formsCsvExport: true,
     formsFileUploads: false,
     formsRemoveBranding: true,
+    maxScheduledPosts: 30,
+    repeatingPosts: true,
   },
   {
     slug: "pro",
@@ -135,6 +166,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
       "Competitor tracking",
       "Daily reports + WhatsApp alerts",
       "Year-over-year comparison",
+      "Unlimited scheduled social posts",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -148,6 +180,8 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     formsCsvExport: true,
     formsFileUploads: false,
     formsRemoveBranding: true,
+    maxScheduledPosts: 500,
+    repeatingPosts: true,
   },
 ];
 
