@@ -42,6 +42,7 @@ export const DOC_PAGES: { slug: string; covers: string }[] = [
   { slug: "exporting", covers: "CSV and spreadsheet export" },
   { slug: "public-dashboards", covers: "public shared dashboards" },
   { slug: "email-reports", covers: "scheduled email and WhatsApp reports" },
+  { slug: "scheduled-posts", covers: "scheduling LinkedIn posts, connecting LinkedIn, repeat cadences" },
   { slug: "seo", covers: "SEO audits, crawls, competitors" },
   { slug: "platform-api", covers: "the multi-tenant Platform API" },
   { slug: "api-reference", covers: "REST endpoints and API keys" },
@@ -239,6 +240,37 @@ link. WhatsApp delivery is available on some plans and goes to the account
 owner's own verified number.
 
 Managing schedules needs editor access.
+
+## Scheduled LinkedIn posts
+
+The post studio schedules LinkedIn posts that publish by themselves. Each post
+carries the text written in the studio and an optional image, both stored whole
+— nothing is generated at publish time, so what is scheduled is exactly what
+goes out.
+
+Publishing requires connecting LinkedIn from the studio, which is a separate
+consent from signing in with LinkedIn: signing in does not grant permission to
+post. A connection that has expired, or was made for sign-in only, stops every
+schedule on that account until it is reconnected.
+
+Two modes. **Post once** runs at a date and time. **Repeat** runs daily, weekly
+or monthly at an hour the author picks, in their own timezone. A repeating post
+publishes the same text and image every time, so it suits evergreen content
+only — LinkedIn deprioritises duplicate posts.
+
+A schedule can be paused and resumed, edited, or published immediately with
+"Post now". Posting now is an extra send: the cadence is untouched, so a weekly
+post sent by hand still goes out on its usual day. A published post cannot be
+unpublished from Quantalog.
+
+Timing is approximate, not exact. Posts publish on a recurring tick rather than
+at the precise minute stored, so a post can go out somewhat after the time it
+was set for. Each post records its last outcome — published, with a link to it,
+or the reason it failed.
+
+Schedules belong to the user who created them, not the workspace: a post
+publishes under that person's own LinkedIn account, so other members of the same
+workspace cannot see or change it.
 
 ## Sharing
 

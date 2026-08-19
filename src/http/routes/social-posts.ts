@@ -158,12 +158,30 @@ function readCaption(value: unknown): string {
 async function storeImage(
   image: string,
   userId: string,
+  /**
+   * What the schedule currently points at, when there is one.
+   *
+   * An edit that does not touch the image resends the hosted URL rather than
+   * the bytes, and the public id cannot be recovered from that URL. Without
+   * this the id came back empty, the caller read empty as "a different file",
+   * and deleted the asset the post still pointed at — leaving a live URL over
+   * a destroyed image that only failed at publish time, with a 404.
+   */
+  current?: { imageUrl: string; imagePublicId: string },
 ): Promise<{ imageUrl: string; imagePublicId: string }> {
   if (!image) return { imageUrl: "", imagePublicId: "" };
 
   // Already-hosted images pass through untouched: an unchanged edit resends the
   // Cloudinary URL it was given rather than the original bytes.
-  if (/^https?:\/\//i.test(image)) return { imageUrl: image, imagePublicId: "" };
+  if (/^https?:\/\//i.test(image)) {
+    return {
+      imageUrl: image,
+      // Carried over only when this is the same URL the schedule already had.
+      // A different host is someone else's file, which we must not claim an id
+      // for — deleting it later is not ours to do.
+      imagePublicId: current && current.imageUrl === image ? current.imagePublicId : "",
+    };
+  }
 
   if (!cloudinaryConfigured()) {
     throw badRequest("Image uploads are not configured on this deployment.");
@@ -290,12 +308,18 @@ router.patch(
       const { imageUrl, imagePublicId } = await storeImage(
         String(req.body.image ?? ""),
         req.userId!,
+        { imageUrl: doc.imageUrl, imagePublicId: doc.imagePublicId },
       );
       doc.imageUrl = imageUrl;
       doc.imagePublicId = imagePublicId;
-      // Only after the replacement is safely stored, and never for a file we
-      // do not own.
-      if (previous && previous !== imagePublicId) {
+      // Only after the replacement is safely stored, and only when the old file
+      // is genuinely unreferenced. Two cases qualify: the image was cleared, or
+      // it was replaced by one we uploaded ourselves. An empty id alongside a
+      // surviving URL means "unknown", not "different" — treating those as
+      // different is what deleted the asset a schedule still pointed at.
+      const replaced = Boolean(imagePublicId) && previous !== imagePublicId;
+      const cleared = !imageUrl;
+      if (previous && (replaced || cleared)) {
         await deleteImage(previous).catch(() => {});
       }
     }
