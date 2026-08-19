@@ -462,7 +462,12 @@ export async function quotaSummary(workspaceId: string) {
   const plan = getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return null;
 
-  const siteCount = await Site.countDocuments({ workspaceId });
+  // Only what is still queued: a sent post is history and holds no slot, which
+  // is the same rule `canCreateScheduledPost` counts by.
+  const [siteCount, scheduledPostCount] = await Promise.all([
+    Site.countDocuments({ workspaceId }),
+    ScheduledPost.countDocuments({ workspaceId, status: { $ne: "sent" } }),
+  ]);
   // Lazy for the same cycle reason as `planAllowance` above.
   const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
   const orbitPlan = await effectiveOrbitPlan(workspaceId);
@@ -492,13 +497,6 @@ export async function quotaSummary(workspaceId: string) {
       used: sub.crawlsUsed,
       addonCredits: sub.addonCrawlCredits,
     },
-    /**
-     * Ingested events this cycle.
-     *
-     * No `addonCredits`: events are not sold as a top-up pack, so the only way
-     * past this line is a plan change. `used` trails real ingest by up to one
-     * flush interval — see `event-quota.ts`.
-     */
     events: {
       planQuota: plan.monthlyEventQuota,
       used: (sub.eventsUsed as number) ?? 0,
@@ -508,11 +506,14 @@ export async function quotaSummary(workspaceId: string) {
       used: siteCount,
     },
     maxSitesPerWorkspace: MAX_SITES_PER_WORKSPACE,
+
+    scheduledPosts: {
+      quota: plan.maxScheduledPosts + (((sub.get("addonPostSlots") as number) ?? 0)),
+      used: scheduledPostCount,
+      repeatingAllowed: plan.repeatingPosts,
+    },
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,
-    // Sent with the profile for the same reason as allowedRanges: the report
-    // form has to know before it's submitted, and a 402 after filling it in
-    // reads as a bug rather than a plan boundary.
     whatsappReports: plan.whatsappReports,
   };
 }
