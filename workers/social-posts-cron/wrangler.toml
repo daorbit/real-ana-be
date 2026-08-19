@@ -1,0 +1,36 @@
+# Pings the social-posts cron route on a tight, punctual interval.
+#
+# Vercel's Hobby plan caps cron at one run per day with per-hour precision, so a
+# post stored for 12:00 goes out whenever the day's single tick lands. GitHub
+# Actions was the first workaround but its scheduler queues rather than
+# guarantees: ticks ran 10-30 minutes late and were skipped outright under load.
+# Cloudflare Cron Triggers fire on time, so the stored time is approximately
+# true. The daily schedule in vercel.json stays as the safety net.
+#
+# Nothing server-side changes: the route authenticates on CRON_SECRET and does
+# not care who calls it.
+name = "social-posts-cron"
+main = "src/index.ts"
+compatibility_date = "2026-08-19"
+account_id = "594bc4ae163c865c9faa90cbb457d30b"
+
+# Cron-only Worker: no fetch handler, so no HTTP route is served and the
+# workers.dev subdomain is never hit.
+workers_dev = false
+
+[triggers]
+# Every 5 minutes. Unlike the GitHub schedule this replaced, ticks land when
+# they say they do, so the interval is the real publish precision. Tighten to
+# "* * * * *" for per-minute if the studio needs it -- the runner asks what is
+# due rather than what is scheduled for now, so interval only bounds lateness.
+crons = ["*/5 * * * *"]
+
+[vars]
+# Public base URL of the backend deployment -- the custom domain in front of
+# Vercel, matching PUBLIC_BASE_URL in .env. Not a secret: CRON_SECRET is the
+# credential, and it is set via `wrangler secret put`, never in this file.
+API_BASE = "https://quantalog-be.daorbit.in"
+
+[observability]
+# Keeps logs queryable in the dashboard rather than only live via `wrangler tail`.
+enabled = true

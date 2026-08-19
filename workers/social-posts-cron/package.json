@@ -1,0 +1,18 @@
+{
+  "name": "social-posts-cron-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker that pings the social-posts cron route on a punctual interval",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev --test-scheduled",
+    "tail": "wrangler tail",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.101.0"
+  }
+}
