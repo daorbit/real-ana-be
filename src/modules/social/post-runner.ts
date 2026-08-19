@@ -132,6 +132,45 @@ async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string
 }
 
 /**
+ * Publish one schedule immediately, on request rather than on a tick.
+ *
+ * The cadence is deliberately left alone: "post this now" is an extra send, not
+ * a rescheduling, so a weekly post published by hand on Monday still goes out on
+ * its Wednesday slot. Only the outcome fields are written, which is what the
+ * studio reads to show the result.
+ *
+ * Throws the same user-ready messages `publish` does, for the route to surface.
+ */
+export async function publishNow(
+  post: InstanceType<typeof ScheduledPost>,
+  now: Date = new Date(),
+): Promise<string | null> {
+  let url: string | null;
+  try {
+    url = await publish(post);
+  } catch (e) {
+    // Recorded before it is rethrown, so a manual send that fails leaves the
+    // same trail on the schedule as a failed tick — the studio's error line is
+    // read from these fields, not from the response.
+    const message = e instanceof Error ? e.message : "Unable to publish the LinkedIn post.";
+    post.set({ lastStatus: "failed", lastError: message, lastRunAt: now });
+    await post.save().catch(() => {});
+    throw e;
+  }
+
+  post.set({
+    lastStatus: "ok",
+    lastError: "",
+    lastPostUrl: url ?? "",
+    lastRunAt: now,
+    postCount: (post.postCount ?? 0) + 1,
+  });
+  await post.save();
+
+  return url;
+}
+
+/**
  * Publish everything currently due.
  *
  * Each schedule is isolated: one failure records itself and the loop continues,

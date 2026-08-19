@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES } from "../../modules/social/models/ScheduledPost.js";
 import { computeNextRun } from "../../modules/social/schedule-time.js";
+import { publishNow } from "../../modules/social/post-runner.js";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import {
@@ -344,6 +345,38 @@ router.patch(
 
     await doc.save();
     res.json(publicPost(doc));
+  }),
+);
+
+/**
+ * Publish a schedule right now.
+ *
+ * An extra send rather than a rescheduling: the cadence and `nextRunAt` are left
+ * exactly as they were, so a weekly post sent by hand today still goes out on
+ * its usual day. That is the behaviour someone testing a schedule wants — see
+ * `publishNow`.
+ *
+ * POST because it publishes, and scoped like every other route here: the
+ * schedule must belong to the caller, since it publishes under their token.
+ */
+router.post(
+  "/:id/publish",
+  requireAuth,
+  blockDemoWrites,
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const doc = await ScheduledPost.findOne({ _id: req.params.id, userId: req.userId });
+    if (!doc) throw notFound("schedule not found");
+
+    try {
+      const postUrl = await publishNow(doc);
+      res.json({ ...publicPost(doc), postUrl });
+    } catch (e) {
+      // `publishNow` throws messages already written for the user — a dead
+      // token, a missing scope, a 404 on the stored image. They are the useful
+      // half of the response, so they are passed through rather than flattened
+      // into a generic failure.
+      throw badRequest((e as Error).message);
+    }
   }),
 );
 
