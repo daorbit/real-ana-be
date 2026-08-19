@@ -381,13 +381,44 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
     return res.status(503).json({ error: "Caption writing is not available on this server." });
   }
 
-  if (!ws.get("shareEnabled") || !ws.get("shareToken")) {
-    return res.status(400).json({ error: "Turn the public dashboard on first." });
-  }
-
   const platform = String(req.body?.platform ?? "linkedin");
   const tone = CAPTION_TONES[platform];
   if (!tone) return res.status(400).json({ error: "Unsupported platform." });
+
+  /**
+   * A caption about something the author names, rather than about their
+   * dashboard.
+   *
+   * The scheduled-post composer writes posts on any subject, so it sends the
+   * subject and nothing else. Without a topic this stays exactly what it was:
+   * a caption describing the workspace's own public dashboard, which is why
+   * the share-enabled check below only guards that path.
+   */
+  const topic = String(req.body?.topic ?? "").trim().slice(0, 500);
+
+  if (topic) {
+    const result = await askOrbit(
+      `Write the post.\n\nWhat it is about:\n${topic}`,
+      {
+        systemPrompt:
+          "You write social media posts for a person posting under their own name. " +
+          `Write for ${tone}\n\n` +
+          "Rules: write in the first person. Use only what the author told you — never invent figures, " +
+          "dates, links or claims they did not give you. Do not use markdown, headings, bullet characters " +
+          "or quotation marks around the post. " +
+          "Return the post in the `reply` field and an empty `suggestions` array.",
+        host: quantalogOrbitHost,
+        tenantId: ws.id,
+      },
+    );
+
+    if (!result.ok) return res.status(result.status).json({ error: result.error });
+    return res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
+  }
+
+  if (!ws.get("shareEnabled") || !ws.get("shareToken")) {
+    return res.status(400).json({ error: "Turn the public dashboard on first." });
+  }
 
   // The figures come from the same place the public page gets them, so the
   // caption cannot claim numbers the link does not actually show.
