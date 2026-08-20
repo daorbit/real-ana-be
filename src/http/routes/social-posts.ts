@@ -317,11 +317,16 @@ router.get(
     const scheduledPostId = String(req.query.scheduledPostId ?? "");
     if (scheduledPostId) query.scheduledPostId = scheduledPostId;
 
-    // Attempts that did not go out, for the studio's Failed shelf. A failure is
-    // a run like any other — it has a time, a caption and a reason — so it is
-    // read from the same collection rather than tracked separately; the shelf
-    // simply asks for that subset.
-    if (String(req.query.status ?? "") === "failed") query.status = "failed";
+    /*
+     * Which outcome to read.
+     *
+     * Runs record every attempt, successful or not, so the collection alone is
+     * not an answer to either question the studio asks of it. `failed` is the
+     * Failed shelf; anything else is Sent, which means published and nothing
+     * else — a post that never reached LinkedIn does not belong under a
+     * heading that says it did, least of all listed twice on two shelves.
+     */
+    query.status = String(req.query.status ?? "") === "failed" ? "failed" : "published";
 
     // One extra row, purely to learn whether another page exists without a
     // second count query over the same index.
