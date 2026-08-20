@@ -317,6 +317,12 @@ router.get(
     const scheduledPostId = String(req.query.scheduledPostId ?? "");
     if (scheduledPostId) query.scheduledPostId = scheduledPostId;
 
+    // Attempts that did not go out, for the studio's Failed shelf. A failure is
+    // a run like any other — it has a time, a caption and a reason — so it is
+    // read from the same collection rather than tracked separately; the shelf
+    // simply asks for that subset.
+    if (String(req.query.status ?? "") === "failed") query.status = "failed";
+
     // One extra row, purely to learn whether another page exists without a
     // second count query over the same index.
     const [rows, conn] = await Promise.all([
