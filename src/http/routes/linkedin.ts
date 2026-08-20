@@ -2,9 +2,12 @@ import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { randomBytes } from "node:crypto";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
+import { SocialPostRun } from "../../modules/social/models/SocialPostRun.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
+  UNAUTHORIZED_SCOPE_ERROR,
   buildAuthorizeUrl,
+  canReadAnalytics,
   exchangeCodeForToken,
   fetchLinkedInProfile,
   linkedInRedirectUri,
@@ -87,6 +90,13 @@ type StatePayload = {
   mode: StateMode;
   nonce: string;
   kind: "linkedin-oauth";
+  /**
+   * Set on the retry that follows LinkedIn refusing the analytics read scopes.
+   *
+   * Carried through the redirect so the callback can tell a first refusal from
+   * a second one and stop rather than bounce the user round the loop forever.
+   */
+  noReadScopes?: boolean;
 };
 
 /**
@@ -409,6 +419,53 @@ router.get(
         ? res.redirect(loginUrl(status, reason))
         : closePopup(res, status, reason, diagnostic);
 
+    /**
+     * LinkedIn refused a scope this app has no product for.
+     *
+     * The connect asks for the analytics read scopes optimistically — see
+     * `LINKEDIN_READ_SCOPES` — and this is the answer when they are not
+     * available. It arrives before any consent screen renders, so nothing was
+     * shown to the user and nothing was decided by them: the right response is
+     * to start the flow again without those scopes, not to report a failure.
+     *
+     * The retry is marked in the state so a second refusal cannot loop. That
+     * would mean a scope in the publish-only list is unavailable too, which is a
+     * misconfigured app rather than a missing product, and it fails properly.
+     */
+    if (req.query.error === UNAUTHORIZED_SCOPE_ERROR && !wantedLogin) {
+      let retried = false;
+      let stateUserId: string | undefined;
+      try {
+        const payload = jwt.verify(state, jwtSecret()) as StatePayload;
+        retried = payload.noReadScopes === true;
+        stateUserId = payload.userId;
+      } catch {
+        return fail("error", "invalid_state");
+      }
+
+      if (!retried && stateUserId) {
+        console.warn(
+          "[linkedin] read scopes refused — this app has no product granting "
+          + "r_member_social / r_member_postAnalytics; retrying without them",
+        );
+        const next = jwt.sign(
+          {
+            userId: stateUserId,
+            mode: "connect",
+            nonce: randomBytes(16).toString("hex"),
+            kind: "linkedin-oauth",
+            noReadScopes: true,
+          } satisfies StatePayload,
+          jwtSecret(),
+          { expiresIn: STATE_TTL },
+        );
+        return res.redirect(buildAuthorizeUrl(next, "connect", false));
+      }
+
+      console.error("[linkedin] authorize refused the publish scopes — check the app's products");
+      return fail("error", "linkedin_failed", "LinkedIn refused the requested permissions.");
+    }
+
     // The user pressed Cancel on the consent screen. A normal outcome, not an
     // error worth logging.
     if (req.query.error) {
@@ -448,6 +505,17 @@ router.get(
       const why = e instanceof Error ? e.message : String(e);
       console.error("[linkedin] connect failed:", why);
       return fail("error", "linkedin_failed", why);
+    }
+
+    // What LinkedIn granted, which is not always what was asked for. Logged on
+    // every connect because it is the only authoritative answer to "can we read
+    // this member's posts yet?" — the developer portal lists products, not the
+    // scopes they actually mint, and the two have disagreed before.
+    if (mode === "connect") {
+      console.log(
+        `[linkedin] granted scopes: ${token.scope || "(none reported)"}`
+        + ` — analytics ${canReadAnalytics(token.scope) ? "available" : "unavailable"}`,
+      );
     }
 
     // A login flow has no user yet: find one by LinkedIn subject, fall back to
@@ -568,6 +636,14 @@ router.get(
        * that would fail — see `canPublish`.
        */
       canPublish: canPublish(conn.scope),
+      /**
+       * Whether engagement figures can be read for this member's posts.
+       *
+       * False wherever this app has no product granting `r_member_postAnalytics`
+       * — which is everywhere, today. The Sent tab reads it to decide between a
+       * number and a dash; see `canReadAnalytics`.
+       */
+      analyticsAvailable: canReadAnalytics(conn.scope),
       profile: {
         name: conn.name,
         email: conn.email,
@@ -669,6 +745,27 @@ router.post(
     try {
       const uploaded = await uploadImage(accessToken, conn.providerUserId, bytes, parsed.mime);
       const post = await createImagePost(accessToken, conn.providerUserId, caption, uploaded.urn);
+
+      // Recorded so the Sent tab shows this alongside scheduled posts — it is a
+      // publish like any other, and its URN is the only key statistics can ever
+      // be fetched with. Best-effort: the post has already gone out, and failing
+      // the response over the local record would report a success as a failure.
+      //
+      // No image URL is stored: the card exists only as the data URL that was
+      // just sent, and this route never hosts it anywhere.
+      await SocialPostRun.create({
+        userId: req.userId,
+        source: "share",
+        status: "published",
+        postUrn: post.postUrn,
+        postUrl: post.postUrl ?? "",
+        caption,
+        name: "Shared from Quantalog",
+        publishedAt: new Date(),
+      }).catch((e) => {
+        console.error("[linkedin] could not record shared post:", (e as Error).message);
+      });
+
       res.json({ posted: true, postUrl: post.postUrl });
     } catch (e) {
       if (e instanceof LinkedInApiError) {

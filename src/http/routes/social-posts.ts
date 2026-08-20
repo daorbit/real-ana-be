@@ -2,7 +2,9 @@ import { Router, Response } from "express";
 import { ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES } from "../../modules/social/models/ScheduledPost.js";
 import { computeNextRun } from "../../modules/social/schedule-time.js";
 import { publishNow } from "../../modules/social/post-runner.js";
+import { SocialPostRun } from "../../modules/social/models/SocialPostRun.js";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
+import { canReadAnalytics } from "../../infra/http-client/linkedin-auth.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
@@ -66,6 +68,41 @@ function publicPost(doc: InstanceType<typeof ScheduledPost>) {
     lastPostUrl: doc.lastPostUrl,
     postCount: doc.postCount,
     createdAt: doc.get("createdAt"),
+  };
+}
+
+/**
+ * One row of published history, as the Sent tab renders it.
+ *
+ * Counts are passed through as nulls rather than coerced to 0 — see the stats
+ * subdocument on `SocialPostRun`. A dash and a zero say different things, and
+ * the difference has to survive serialisation to be shown.
+ */
+function publicRun(doc: InstanceType<typeof SocialPostRun>) {
+  const stats = doc.stats ?? {};
+  return {
+    id: doc.id,
+    scheduledPostId: doc.scheduledPostId ? String(doc.scheduledPostId) : null,
+    workspaceId: doc.workspaceId ? String(doc.workspaceId) : null,
+    name: doc.name,
+    caption: doc.caption,
+    imageUrl: doc.imageUrl,
+    source: doc.source,
+    status: doc.status,
+    error: doc.error,
+    postUrl: doc.postUrl,
+    publishedAt: doc.publishedAt,
+    stats: {
+      impressions: stats.impressions ?? null,
+      uniqueImpressions: stats.uniqueImpressions ?? null,
+      likes: stats.likes ?? null,
+      comments: stats.comments ?? null,
+      shares: stats.shares ?? null,
+      clicks: stats.clicks ?? null,
+      engagement: stats.engagement ?? null,
+      fetchedAt: stats.fetchedAt ?? null,
+      unavailable: stats.unavailable ?? "scope",
+    },
   };
 }
 
@@ -240,6 +277,74 @@ router.get(
             canPublish: (conn.scope ?? "").split(/[\s,]+/).includes("w_member_social"),
           }
         : { connected: false, expired: false, name: "", canPublish: false },
+    });
+  }),
+);
+
+/**
+ * Published post history — what the studio's Sent tab reads.
+ *
+ * Newest first, paginated with a cursor rather than a page number: rows are
+ * appended continuously, and an offset would skip or repeat a post whenever one
+ * was published between two requests.
+ *
+ * The response says explicitly whether engagement figures are obtainable at all,
+ * because the answer today is no and the UI must render a dash rather than a
+ * zero. See `SocialPostRun`'s stats subdocument for why that distinction is
+ * kept all the way down to the database.
+ */
+router.get(
+  "/sent",
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    // Bounded so a crafted `limit` cannot ask for the whole collection.
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+
+    const query: Record<string, unknown> = { userId: req.userId };
+
+    // The cursor is the previous page's last `publishedAt`. Rows share
+    // timestamps rarely enough that a strict `$lt` is the right trade against
+    // carrying a compound cursor.
+    const cursor = String(req.query.cursor ?? "");
+    if (cursor) {
+      const before = new Date(cursor);
+      if (Number.isNaN(before.getTime())) throw badRequest("cursor must be a valid date");
+      query.publishedAt = { $lt: before };
+    }
+
+    // Optional filter, so the studio can show one schedule's history.
+    const scheduledPostId = String(req.query.scheduledPostId ?? "");
+    if (scheduledPostId) query.scheduledPostId = scheduledPostId;
+
+    // One extra row, purely to learn whether another page exists without a
+    // second count query over the same index.
+    const [rows, conn] = await Promise.all([
+      SocialPostRun.find(query).sort({ publishedAt: -1 }).limit(limit + 1),
+      SocialConnection.findOne({ userId: req.userId, provider: "linkedin" })
+        .select("name picture scope"),
+    ]);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    res.json({
+      posts: page.map(publicRun),
+      nextCursor: hasMore ? page[page.length - 1].publishedAt.toISOString() : null,
+      /**
+       * The author, so every row can show an avatar and a name without the
+       * client joining anything. Denormalised into the response rather than
+       * onto each row: it is the same person for all of them.
+       */
+      author: conn ? { name: conn.name, picture: conn.picture } : null,
+      /**
+       * Whether the stats columns can ever hold a number.
+       *
+       * False on this deployment: the LinkedIn app has no product granting
+       * `r_member_postAnalytics`. The UI keys off this to render dashes and to
+       * explain why, rather than showing five zeroes that read as a post nobody
+       * saw. See `canReadAnalytics`.
+       */
+      statsAvailable: canReadAnalytics(conn?.scope),
     });
   }),
 );

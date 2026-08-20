@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ScheduledPost } from "./models/ScheduledPost.js";
+import { SocialPostRun } from "./models/SocialPostRun.js";
 import { computeNextRun } from "./schedule-time.js";
 import { SocialConnection } from "../identity/models/SocialConnection.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
@@ -67,7 +68,9 @@ async function fetchImage(url: string): Promise<{ bytes: Buffer; mime: string }>
  * the schedule and the studio shows it verbatim, so nothing raw from LinkedIn
  * is allowed to reach here.
  */
-async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string | null> {
+async function publish(
+  post: InstanceType<typeof ScheduledPost>,
+): Promise<{ postUrl: string | null; postUrn: string }> {
   const conn = await SocialConnection.findOne({
     userId: post.userId,
     provider: "linkedin",
@@ -92,13 +95,13 @@ async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string
     // its own preview from any link inside it.
     if (!post.imageUrl) {
       const created = await createTextPost(token, conn.providerUserId, post.caption);
-      return created.postUrl;
+      return { postUrl: created.postUrl, postUrn: created.postUrn };
     }
 
     const { bytes, mime } = await fetchImage(post.imageUrl);
     const uploaded = await uploadImage(token, conn.providerUserId, bytes, mime);
     const created = await createImagePost(token, conn.providerUserId, post.caption, uploaded.urn);
-    return created.postUrl;
+    return { postUrl: created.postUrl, postUrn: created.postUrn };
   } catch (e) {
     if (e instanceof LinkedInApiError) {
       // Status only in the log — never a response body, which can echo a token.
@@ -132,6 +135,47 @@ async function publish(post: InstanceType<typeof ScheduledPost>): Promise<string
 }
 
 /**
+ * Record what a publish attempt did, as a permanent row.
+ *
+ * Separate from the bookkeeping written back onto the schedule, which keeps only
+ * the most recent outcome. This is the history the Sent tab reads — see
+ * `SocialPostRun` for why the caption and image are copied rather than
+ * referenced.
+ *
+ * Never throws. A publish that reached LinkedIn has already happened, and
+ * failing the caller because the local record of it could not be written would
+ * turn a successful post into a reported failure — and, on the cron path, into a
+ * retry that publishes the same thing twice.
+ */
+async function recordRun(
+  post: InstanceType<typeof ScheduledPost>,
+  source: "schedule" | "manual",
+  outcome:
+    | { status: "published"; postUrl: string | null; postUrn: string }
+    | { status: "failed"; error: string },
+  now: Date,
+): Promise<void> {
+  try {
+    await SocialPostRun.create({
+      userId: post.userId,
+      workspaceId: post.workspaceId,
+      scheduledPostId: post._id,
+      source,
+      status: outcome.status,
+      postUrn: outcome.status === "published" ? outcome.postUrn : "",
+      postUrl: outcome.status === "published" ? (outcome.postUrl ?? "") : "",
+      caption: post.caption,
+      imageUrl: post.imageUrl,
+      name: post.name,
+      publishedAt: now,
+      error: outcome.status === "failed" ? outcome.error : "",
+    });
+  } catch (e) {
+    console.error(`[social] could not record run for ${post.id}:`, (e as Error).message);
+  }
+}
+
+/**
  * Publish one schedule immediately, on request rather than on a tick.
  *
  * The cadence is deliberately left alone: "post this now" is an extra send, not
@@ -145,9 +189,9 @@ export async function publishNow(
   post: InstanceType<typeof ScheduledPost>,
   now: Date = new Date(),
 ): Promise<string | null> {
-  let url: string | null;
+  let result: { postUrl: string | null; postUrn: string };
   try {
-    url = await publish(post);
+    result = await publish(post);
   } catch (e) {
     // Recorded before it is rethrown, so a manual send that fails leaves the
     // same trail on the schedule as a failed tick — the studio's error line is
@@ -155,19 +199,24 @@ export async function publishNow(
     const message = e instanceof Error ? e.message : "Unable to publish the LinkedIn post.";
     post.set({ lastStatus: "failed", lastError: message, lastRunAt: now });
     await post.save().catch(() => {});
+    await recordRun(post, "manual", { status: "failed", error: message }, now);
     throw e;
   }
+
+  // Written before the schedule's own fields: this is the row the Sent tab
+  // reads, and it is the only place the URN survives.
+  await recordRun(post, "manual", { status: "published", ...result }, now);
 
   post.set({
     lastStatus: "ok",
     lastError: "",
-    lastPostUrl: url ?? "",
+    lastPostUrl: result.postUrl ?? "",
     lastRunAt: now,
     postCount: (post.postCount ?? 0) + 1,
   });
   await post.save();
 
-  return url;
+  return result.postUrl;
 }
 
 /**
@@ -185,16 +234,18 @@ export async function runDuePosts(now: Date = new Date()): Promise<RunSummary> {
 
   for (const post of due) {
     try {
-      const url = await publish(post);
+      const result = await publish(post);
+      await recordRun(post, "schedule", { status: "published", ...result }, now);
       post.set({
         lastStatus: "ok",
         lastError: "",
-        lastPostUrl: url ?? "",
+        lastPostUrl: result.postUrl ?? "",
         postCount: (post.postCount ?? 0) + 1,
       });
       summary.posted++;
     } catch (e) {
       const message = e instanceof Error ? e.message : "Unable to publish the LinkedIn post.";
+      await recordRun(post, "schedule", { status: "failed", error: message }, now);
       post.set({ lastStatus: "failed", lastError: message });
       summary.failed++;
       summary.errors.push(`${post.id}: ${message}`);

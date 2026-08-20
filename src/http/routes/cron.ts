@@ -4,6 +4,7 @@ import { sendFxSuccessReport, sendFxFailureReport } from "../../modules/billing/
 import { runDueSchedules } from "../../modules/reports/report-runner.js";
 import { sweepExpiredSubmissions } from "../../modules/forms/submissions.service.js";
 import { runDuePosts } from "../../modules/social/post-runner.js";
+import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -140,6 +141,33 @@ router.get("/social-posts", async (req: Request, res: Response) => {
 });
 
 /**
+ * Refresh engagement figures on recently published posts.
+ *
+ * A no-op on this deployment, and cheap enough to leave scheduled anyway: the
+ * runner checks what LinkedIn actually granted before it asks for anything, and
+ * this application has no product granting the analytics scope. It reports
+ * `skippedNoScope` and stops. See `runStatsRefresh`.
+ *
+ * Kept wired so the numbers begin appearing on their own if that ever changes,
+ * rather than needing this discovered and reconnected months later.
+ */
+router.get("/social-stats", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await runStatsRefresh();
+    if (summary.updated > 0) {
+      console.log(`[cron] social stats: ${summary.users} users, ${summary.updated} posts updated`);
+    }
+    if (summary.errors.length) console.error("[cron] social stats errors:", summary.errors.join(" | "));
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] social stats refresh failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+/**
  * Run every job in one request.
  *
  * Not what `vercel.json` schedules — each job has its own daily entry, because
@@ -193,6 +221,14 @@ router.get("/run", async (req: Request, res: Response) => {
     const message = (e as Error).message;
     console.error("[cron] social post run failed:", message);
     errors.push(`social-posts: ${message}`);
+  }
+
+  try {
+    ran["social-stats"] = await runStatsRefresh();
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] social stats refresh failed:", message);
+    errors.push(`social-stats: ${message}`);
   }
 
   if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));

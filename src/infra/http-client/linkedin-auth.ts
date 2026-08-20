@@ -37,6 +37,54 @@ export const LINKEDIN_LOGIN_SCOPES = ["openid", "profile", "email"];
  */
 export const LINKEDIN_PUBLISH_SCOPES = [...LINKEDIN_LOGIN_SCOPES, "w_member_social"];
 
+/**
+ * The read scopes that would let us show a member their existing posts and the
+ * engagement each one earned — the Sent tab's stats columns.
+ *
+ * Requested opportunistically and never depended on. LinkedIn derives the scopes
+ * an app may ask for from the *products* provisioned on it, not from this list:
+ * `r_member_social` belongs to the Community Management API and
+ * `r_member_postAnalytics` to Member Post Analytics, neither of which this app
+ * has. Asking for a scope no product grants is rejected at the authorize step
+ * with `unauthorized_scope_error` — before the consent screen renders — which
+ * would break connecting entirely.
+ *
+ * So the flow asks once, and `buildAuthorizeUrl` falls back to the publish-only
+ * list the moment LinkedIn refuses. The day either product is approved, these
+ * start being granted and the stats pipeline lights up with no code change; see
+ * `canReadAnalytics` for the check that gates it.
+ */
+export const LINKEDIN_READ_SCOPES = ["r_member_social", "r_member_postAnalytics"];
+
+/** Identity, publishing, and the read scopes that may or may not be granted. */
+export const LINKEDIN_FULL_SCOPES = [...LINKEDIN_PUBLISH_SCOPES, ...LINKEDIN_READ_SCOPES];
+
+/**
+ * LinkedIn's answer when an app asks for a scope none of its products grant.
+ *
+ * Arrives as an `error` query parameter on the redirect back, without the user
+ * ever seeing a consent screen. Matched by name so the callback can tell it
+ * apart from a genuine refusal by the member.
+ */
+export const UNAUTHORIZED_SCOPE_ERROR = "unauthorized_scope_error";
+
+/**
+ * Whether a granted scope string permits reading post analytics.
+ *
+ * Read from what LinkedIn *granted*, never from what was asked for — the whole
+ * point of the fallback above is that the two differ. Everything that renders a
+ * statistic checks this first and shows an empty column rather than a zero when
+ * it is false, because "no data" and "0 impressions" are different claims.
+ */
+export function canReadAnalytics(scope: string | undefined): boolean {
+  return (scope ?? "").split(/[\s,]+/).includes("r_member_postAnalytics");
+}
+
+/** Whether a granted scope string permits listing the member's own posts. */
+export function canReadPosts(scope: string | undefined): boolean {
+  return (scope ?? "").split(/[\s,]+/).includes("r_member_social");
+}
+
 export type LinkedInProfile = {
   /** LinkedIn's stable member identifier. */
   sub: string;
@@ -114,8 +162,21 @@ export function buildAuthorizeUrl(
    * the two scope lists above for why they are not the same request.
    */
   intent: "login" | "connect" = "connect",
+  /**
+   * Whether to include the analytics read scopes on a connect.
+   *
+   * True on the first attempt and false on the retry that follows an
+   * `unauthorized_scope_error` — see `LINKEDIN_READ_SCOPES`. A login never asks
+   * for them: signing in has no use for post history, and the consent screen
+   * should stay as small as the feature behind it.
+   */
+  withReadScopes = true,
 ): string {
-  const scopes = intent === "login" ? LINKEDIN_LOGIN_SCOPES : LINKEDIN_PUBLISH_SCOPES;
+  const scopes = intent === "login"
+    ? LINKEDIN_LOGIN_SCOPES
+    : withReadScopes
+      ? LINKEDIN_FULL_SCOPES
+      : LINKEDIN_PUBLISH_SCOPES;
   const params = new URLSearchParams({
     response_type: "code",
     client_id: clientId(),
