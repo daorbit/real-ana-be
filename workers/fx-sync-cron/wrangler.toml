@@ -1,0 +1,31 @@
+# Pings the fx-sync cron route at a fixed local time.
+#
+# Vercel's Hobby plan gives cron jobs no better than per-hour precision, so a
+# job set for "8 AM IST" in vercel.json can actually fire anywhere in that
+# hour. A stale exchange rate for part of a morning is a minor drift for
+# billing prices, but Cloudflare Cron Triggers fire on time, so this Worker is
+# the punctual path. The daily entry in vercel.json stays as the safety net —
+# nothing server-side changes, the route authenticates on CRON_SECRET and does
+# not care who calls it.
+name = "fx-sync-cron"
+main = "src/index.ts"
+compatibility_date = "2026-08-19"
+account_id = "594bc4ae163c865c9faa90cbb457d30b"
+
+# Cron-only Worker: no fetch handler, so no HTTP route is served and the
+# workers.dev subdomain is never hit.
+workers_dev = false
+
+[triggers]
+# 02:30 UTC = 08:00 IST daily.
+crons = ["30 2 * * *"]
+
+[vars]
+# Public base URL of the backend deployment -- the custom domain in front of
+# Vercel, matching PUBLIC_BASE_URL in .env. Not a secret: CRON_SECRET is the
+# credential, and it is set via `wrangler secret put`, never in this file.
+API_BASE = "https://quantalog-be.daorbit.in"
+
+[observability]
+# Keeps logs queryable in the dashboard rather than only live via `wrangler tail`.
+enabled = true
