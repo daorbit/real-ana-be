@@ -11,6 +11,7 @@ import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChan
 import { getDemoDailyLimit } from "../../config/AppSetting.js";
 import { tryStartDemo } from "../../modules/billing/demo-limit.js";
 import { googleConfigured, verifyGoogleCredential } from "../../infra/http-client/google-auth.js";
+import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-client/turnstile.js";
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
@@ -458,9 +459,31 @@ router.post("/signup/resend", async (req, res) => {
 
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body ?? {};
+    const { email, password, turnstileToken } = req.body ?? {};
     if (!email || !password)
       return res.status(400).json({ error: "email, password required" });
+
+    // The challenge is checked before the address is looked up, let alone the
+    // password compared: the point of it is to keep automated traffic away from
+    // the credential check entirely, and doing the lookup first would leak
+    // whether an account exists to a caller that never passed the challenge.
+    //
+    // Skipped only where no secret is set — a local checkout without Turnstile
+    // configured still logs in, exactly as it did before this existed. Any
+    // deployment with the secret present fails closed.
+    if (turnstileConfigured()) {
+      const check = await verifyTurnstileToken(turnstileToken, req.ip);
+      if (!check.ok)
+        return check.reason === "unavailable"
+          ? res.status(503).json({
+              error: "could not complete the security check — try again in a moment",
+            })
+          : res.status(400).json({
+              error: "security check failed — please try again",
+              turnstile: true,
+            });
+    }
+
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ error: "invalid credentials" });
     // A Google-only account has no password to compare against. Say so plainly:
