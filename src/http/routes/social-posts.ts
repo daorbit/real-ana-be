@@ -420,7 +420,14 @@ router.patch(
       if (!POST_STATUSES.includes(status as never)) {
         throw badRequest(`status must be one of ${POST_STATUSES.join(", ")}`);
       }
-      doc.status = status as (typeof POST_STATUSES)[number];
+      const next = status as (typeof POST_STATUSES)[number];
+      // Putting a failed post back on the schedule is a retry, so the failure
+      // it carries is spent. Only on the way *into* `active`: pausing one
+      // should not quietly hide why it did not go out.
+      if (next === "active" && doc.status !== "active" && doc.lastStatus === "failed") {
+        doc.set({ lastStatus: "", lastError: "" });
+      }
+      doc.status = next;
     }
 
     if (req.body?.image !== undefined) {
@@ -478,6 +485,10 @@ router.patch(
       // Rescheduling a post that already went out is how someone reposts it;
       // it has to leave `sent` or the runner will never look at it again.
       if (doc.status === "sent") doc.status = "active";
+      // A new time is a fresh attempt, so the previous failure stops being the
+      // post's headline. Left behind, `lastStatus` keeps the row reading
+      // "Failed" — with the old reason — long after the cause was fixed.
+      if (doc.lastStatus === "failed") doc.set({ lastStatus: "", lastError: "" });
     }
 
     // Resuming a paused repeat needs a fresh slot: the stored one is in the past
