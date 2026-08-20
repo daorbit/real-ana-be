@@ -146,6 +146,12 @@ app.use(
     // The topbar is Swagger's own branding and a URL box that only lets someone
     // load a different API into our page.
     customCss: ".swagger-ui .topbar { display: none }",
+
+    customJs: [
+      "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+      "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js",
+    ],
+    customCssUrl: "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
     swaggerOptions: {
       // Endpoints collapsed by default: three tags open at once is a wall of
       // schema before the reader has chosen anything.
