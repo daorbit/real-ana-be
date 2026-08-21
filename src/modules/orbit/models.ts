@@ -11,7 +11,7 @@
  * refuses, the next one answers and the user never learns there was a problem.
  */
 
-import { tierAllows, type OrbitTier } from "./types.js";
+import { type OrbitTier } from "./types.js";
 
 export type ModelProvider = "gemini" | "openrouter" | "nvidia";
 
@@ -41,12 +41,11 @@ export type OrbitModel = {
    */
   structured: boolean;
   /**
-   * The lowest Orbit plan tier that may reach this model.
+   * What this model would cost to reach, kept as a label rather than a gate.
    *
-   * Cost sets the floor — a paid-key model can never sit in a tier the operator
-   * gives away — but above that floor the placement is a pricing decision. Only
-   * Gemma is `basic`: the free tier gets one model that works, and the fact that
-   * a choice of models exists at all is itself part of what a plan buys.
+   * Models are not sold per plan: quota is. Nothing filters on this today —
+   * see `availableModels` — and it stays only so a future pricing change has
+   * the information it would need.
    */
   tier: OrbitTier;
 };
@@ -133,14 +132,15 @@ export function providerReady(provider: ModelProvider): boolean {
 /**
  * The models that can actually run right now, in preference order.
  *
- * `tier` is the caller's Orbit plan tier. Passing it filters the list to what
- * that plan may reach; omitting it returns everything configured, which is what
- * the "is Orbit available at all" check wants.
+ * Every configured model, for every caller. Models are not sold separately —
+ * what a plan buys is quota, history and data access, and a question that has
+ * quota may be answered by whichever model is up. The `tier` argument is kept
+ * so call sites read the same, and deliberately ignored: gating the list by
+ * tier is what left a plan with one eligible model and no fallback when that
+ * model was rate-limited.
  */
-export function availableModels(tier?: OrbitTier): OrbitModel[] {
-  return ORBIT_MODELS.filter(
-    (m) => providerReady(m.provider) && (!tier || tierAllows(tier, m.tier)),
-  );
+export function availableModels(_tier?: OrbitTier): OrbitModel[] {
+  return ORBIT_MODELS.filter((m) => providerReady(m.provider));
 }
 
 /**
@@ -159,15 +159,10 @@ export function resolveModel(id?: string, tier?: OrbitTier): OrbitModel | undefi
 /**
  * The order to try, starting from the chosen model.
  *
- * The choice goes first, then everything else in preference order — so a user
- * who picked a model that is rate-limited still gets an answer, and one who
- * expressed no preference gets the best available.
- *
- * The chain is built from the plan's own tier, never from the full list. Without
- * that, a rate-limited free model would fall through to a paid one and hand
- * Orbit Free the model it is not paying for — the failure mode would be silent,
- * and the bill would be real. A plan whose whole tier is refusing gets an error
- * instead of an upgrade.
+ * The choice goes first, then every other configured model in preference order
+ * — so a user who picked one that is rate-limited still gets an answer, and one
+ * who expressed no preference gets the best available. The chain is only ever
+ * as short as the number of providers with keys.
  */
 export function fallbackChain(chosen: OrbitModel, tier?: OrbitTier): OrbitModel[] {
   return [chosen, ...availableModels(tier).filter((m) => m.id !== chosen.id)];

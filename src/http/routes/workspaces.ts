@@ -576,6 +576,10 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         "invent figures, dates, links or claims they did not give you. Return an empty `suggestions` array.",
       host: quantalogOrbitHost,
       tenantId: ws.id,
+      // The model the author picked in the chat panel, so scheduling answers in
+      // the same voice they already chose. An unknown or unconfigured id
+      // resolves to the default rather than failing.
+      modelId: String(req.body?.modelId ?? "").slice(0, 60) || undefined,
     },
   );
 
