@@ -198,15 +198,24 @@ export async function askOrbit(
   const startedAt = Date.now();
 
   for (const model of fallbackChain(chosen, tier)) {
-    // Stop before starting an attempt that cannot finish inside the budget —
-    // beginning a 35s call with 5s left only makes the user wait longer for the
-    // same error.
-    if (Date.now() - startedAt > TOTAL_BUDGET_MS - TIMEOUT_MS) {
+    const elapsed = Date.now() - startedAt;
+    // Stop only when the budget is genuinely spent, rather than when a full
+    // timeout would no longer fit inside it.
+    //
+    // The old guard broke the loop at `TOTAL - TIMEOUT`, which is 40s of a 75s
+    // budget — so after one slow model the rest of the chain was skipped
+    // entirely and the caller was told nothing could answer, while several
+    // models were up and would have answered in a second. Most failures here
+    // are fast (a 429 or a 503 comes back immediately); it is only a hang that
+    // costs a full timeout, and refusing to try because of that possibility is
+    // what turned one overloaded provider into a total outage.
+    if (elapsed > TOTAL_BUDGET_MS) {
       console.error("[orbit] out of time budget; giving up on the chain");
       break;
     }
 
-    const raw = await callModel(model, question, history, prompt);
+    // Whatever is left, so a late attempt still runs rather than being skipped.
+    const raw = await callModel(model, question, history, prompt, TOTAL_BUDGET_MS - elapsed);
 
     if (raw.ok) {
       const parsed = parseAnswer(raw.text);
@@ -226,6 +235,9 @@ export async function askOrbit(
         }
         return { ok: true, ...parsed, model: model.id, modelLabel: model.label };
       }
+      // A 200 whose body could not be read as an answer. Logged, or a model
+      // that always answers unusably looks identical to one that is down.
+      console.error(`[orbit] ${model.id} returned an unusable answer; trying the next model`);
     } else {
       lastStatus = raw.status;
       // Logged per model so a chain that always falls through is visible in the
@@ -260,10 +272,13 @@ function callModel(
   question: string,
   history: OrbitTurn[],
   prompt: string,
+  /** What is left of the overall budget, so a late attempt is capped, not skipped. */
+  budgetMs = TIMEOUT_MS,
 ): Promise<CallResult> {
+  const timeout = Math.min(TIMEOUT_MS, Math.max(4_000, budgetMs));
   return model.provider === "gemini"
-    ? callGemini(model, question, history, prompt)
-    : callOpenAiCompatible(model, question, history, prompt);
+    ? callGemini(model, question, history, prompt, timeout)
+    : callOpenAiCompatible(model, question, history, prompt, timeout);
 }
 
 /** Host, key and any provider-specific headers for an OpenAI-shaped API. */
@@ -296,9 +311,14 @@ function openAiEndpoint(provider: OrbitModel["provider"]) {
  * platform's own timeout — and with a fallback chain behind it, that is the
  * difference between a slow answer and no answer at all.
  */
-async function post(url: string, headers: Record<string, string>, body: unknown): Promise<CallResult> {
+async function post(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<CallResult> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
 
   try {
     const res = await fetch(url, {
@@ -329,6 +349,7 @@ async function callGemini(
   question: string,
   history: OrbitTurn[],
   prompt: string,
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<CallResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: false, status: 503, detail: "no GEMINI_API_KEY" };
@@ -364,6 +385,7 @@ async function callGemini(
         },
       },
     },
+    timeoutMs,
   );
 
   if (!res.ok) return res;
@@ -402,6 +424,7 @@ async function callOpenAiCompatible(
   question: string,
   history: OrbitTurn[],
   prompt: string,
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<CallResult> {
   const { url, key, keyName, headers } = openAiEndpoint(model.provider);
   if (!key) return { ok: false, status: 503, detail: `no ${keyName}` };
@@ -434,6 +457,7 @@ async function callOpenAiCompatible(
           }
         : {}),
     },
+    timeoutMs,
   );
 
   if (!res.ok) return res;
