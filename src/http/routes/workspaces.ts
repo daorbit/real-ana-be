@@ -35,7 +35,7 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
-import { askOrbit, orbitConfigured, structuredModelId } from "../../modules/orbit/index.js";
+import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
 import { quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 import { parsePlan } from "../../modules/social/plan-parse.js";
 
@@ -577,12 +577,39 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         "invent figures, dates, links or claims they did not give you. Return an empty `suggestions` array.",
       host: quantalogOrbitHost,
       tenantId: ws.id,
-      // The author's picked model, but only when it honours a JSON schema.
-      // This route needs a structured answer, and the models that do not get
-      // one produce prose the parser then has to guess at — so a preference for
-      // an unstructured model is deliberately not carried over here. The
-      // fallback chain still reaches them if the structured ones are down.
-      modelId: structuredModelId(String(req.body?.modelId ?? "").slice(0, 60)),
+      // The author's picked model, honoured as given.
+      //
+      // An earlier version forced a schema-honouring model here, on the theory
+      // that this route needs JSON. Measured, that was wrong twice over: the
+      // structured models are the ones currently failing, and DeepSeek — which
+      // is not one — returns clean JSON and the best captions of anything in
+      // the chain. `parsePlan` handles a fence or a stray sentence, so asking
+      // nicely in the prompt is enough.
+      // Defaulted to DeepSeek rather than to the chain's own head, which is
+      // Gemini — barred below, so without this the route would start on
+      // whatever happens to be second.
+      modelId: String(req.body?.modelId ?? "").slice(0, 60) || "deepseek",
+
+      // Measured against this exact prompt on 2026-08-21:
+      //   deepseek     15s, correct JSON, a caption worth publishing
+      //   north-mini   55s, correct JSON, but a caption that only echoes the
+      //                instruction back
+      //   gpt-oss      returns an empty completion however large its token
+      //                budget — it reasons and then writes nothing
+      //   gemma        429, the free pool is rate-limited upstream
+      //   gemini       503 while it is overloaded, and it is first in the
+      //                chain, so it burned the budget before anything else ran
+      //
+      // Only the two that cannot produce an answer here are barred. Gemini
+      // stays in the chat panel's chain, where it is the best model when it is
+      // up; this route cannot afford to wait for it to fail first.
+      exclude: ["gemini-flash", "gpt-oss"],
+
+      // Long enough for DeepSeek's slow tail and one fallback behind it.
+      // Someone is watching a chat panel, and a minute of spinner is worse
+      // than an honest "try rewording that" — the composer keeps the
+      // conversation, so retrying costs one click.
+      budgetMs: 70_000,
     },
   );
 

@@ -48,6 +48,17 @@ export type OrbitModel = {
    * the information it would need.
    */
   tier: OrbitTier;
+  /**
+   * Whether the model thinks before it writes, spending the token budget on a
+   * `reasoning` field first.
+   *
+   * The answer's own allowance is whatever is left, so at the shared limit
+   * these return an empty completion — a 200 with nothing in it, which costs
+   * the model its turn in the chain for no reason. Callers give them a larger
+   * budget. Measured, not assumed: GPT-OSS answered a short prompt in three
+   * seconds and returned an empty string on a long one at the same limit.
+   */
+  reasoning?: boolean;
 };
 
 /**
@@ -86,6 +97,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "nvidia",
     model: "nvidia/nemotron-3-ultra-550b-a55b",
     structured: true,
+    reasoning: true,
     tier: "standard",
   },
   {
@@ -95,6 +107,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "deepseek/deepseek-v4-pro",
     structured: false,
+    reasoning: true,
     tier: "standard",
   },
   {
@@ -104,6 +117,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     provider: "openrouter",
     model: "openai/gpt-oss-20b:free",
     structured: false,
+    reasoning: true,
     tier: "standard",
   },
   {

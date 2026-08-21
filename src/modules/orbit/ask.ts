@@ -133,6 +133,23 @@ export type AskOptions = {
    * replace the rules — including the refusal this exists to work around.
    */
   systemPrompt?: string;
+  /**
+   * Models this call must not use, by id.
+   *
+   * For a caller that knows something the model list cannot express — a route
+   * on a request path excluding a provider that is currently unhealthy, or a
+   * reasoning model whose thinking time is longer than the caller can wait.
+   * The chain is filtered, not reordered, so what remains still falls back
+   * normally among itself.
+   */
+  exclude?: string[];
+  /**
+   * Cap on the whole call, in milliseconds.
+   *
+   * Defaults to the standard budget. A route rendering into a chat panel
+   * someone is watching wants a much shorter one than a background job does.
+   */
+  budgetMs?: number;
 };
 
 /**
@@ -151,16 +168,21 @@ export async function askOrbit(
   question: string,
   options: AskOptions = {},
 ): Promise<OrbitResult> {
-  const { modelId, host, tenantId } = options;
+  const { modelId, host, tenantId, exclude = [], budgetMs = TOTAL_BUDGET_MS } = options;
+  const barred = new Set(exclude);
 
   const entitlement: OrbitEntitlement | null =
     host && tenantId ? await host.entitlement(tenantId) : null;
   const tier = entitlement?.tier;
 
-  const chosen = resolveModel(modelId, tier);
-  if (!chosen) {
+  // The chain, minus anything the caller barred. Resolved before the chosen
+  // model so a barred preference falls through to the best allowed one rather
+  // than being tried and skipped.
+  const eligible = availableModels(tier).filter((m) => !barred.has(m.id));
+  if (eligible.length === 0) {
     return { ok: false, error: "Orbit is not configured on this server.", status: 503 };
   }
+  const chosen = eligible.find((m) => m.id === modelId) ?? eligible[0];
 
   // Before the model call, which is slow and costs money: finding out
   // afterwards that there was no quota means having paid for an answer nobody
@@ -197,7 +219,10 @@ export async function askOrbit(
   let lastStatus = 502;
   const startedAt = Date.now();
 
-  for (const model of fallbackChain(chosen, tier)) {
+  // The chosen model first, then the rest of what is allowed.
+  const chain = [chosen, ...eligible.filter((m) => m.id !== chosen.id)];
+
+  for (const model of chain) {
     const elapsed = Date.now() - startedAt;
     // Stop only when the budget is genuinely spent, rather than when a full
     // timeout would no longer fit inside it.
@@ -209,13 +234,13 @@ export async function askOrbit(
     // are fast (a 429 or a 503 comes back immediately); it is only a hang that
     // costs a full timeout, and refusing to try because of that possibility is
     // what turned one overloaded provider into a total outage.
-    if (elapsed > TOTAL_BUDGET_MS) {
+    if (elapsed > budgetMs) {
       console.error("[orbit] out of time budget; giving up on the chain");
       break;
     }
 
     // Whatever is left, so a late attempt still runs rather than being skipped.
-    const raw = await callModel(model, question, history, prompt, TOTAL_BUDGET_MS - elapsed);
+    const raw = await callModel(model, question, history, prompt, budgetMs - elapsed);
 
     if (raw.ok) {
       const parsed = parseAnswer(raw.text);
@@ -442,9 +467,12 @@ async function callOpenAiCompatible(
       temperature: 0.3,
       // A reasoning model spends this budget on thinking before it writes
       // anything, so the answer's own allowance is whatever is left. At the
-      // shared limit Nemotron routinely ran out mid-thought and returned an
-      // empty completion, which cost us the model on every call.
-      max_tokens: model.provider === "nvidia" ? MAX_TOKENS * 4 : MAX_TOKENS,
+      // shared limit these run out mid-thought and return an empty completion,
+      // which costs the model its turn for no reason — Nemotron did it on
+      // every call, and GPT-OSS does it on any prompt long enough to reason
+      // about. Flagged per model rather than per provider: it is a property of
+      // the model, and the provider is the wrong thing to key it on.
+      max_tokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
       // Only sent to models that honour it. Some providers reject a request
       // carrying a schema they cannot satisfy, which would cost us the model
       // entirely rather than just its formatting.
