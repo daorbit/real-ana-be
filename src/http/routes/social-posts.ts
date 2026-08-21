@@ -57,6 +57,9 @@ function publicPost(doc: InstanceType<typeof ScheduledPost>) {
     name: doc.name,
     caption: doc.caption,
     imageUrl: doc.imageUrl,
+    // Flattened for the client: it edits one ordered list, and which field an
+    // image lives in is the model's business. See `storeImages`.
+    images: [doc.imageUrl, ...doc.extraImages.map((i) => i.url)].filter(Boolean),
     mode: doc.mode,
     runAt: doc.runAt,
     frequency: doc.frequency,
@@ -308,6 +311,65 @@ async function storeImage(
   return { imageUrl: uploaded.url, imagePublicId: uploaded.publicId };
 }
 
+/** Both networks cap a post at ten images. */
+const MAX_POST_IMAGES = 10;
+
+/**
+ * The post's images, in order, from either request shape.
+ *
+ * `images` is the multi-image form; `image` is what every client sent before
+ * carousels existed and what a single-image post still sends. Accepting both
+ * keeps older callers working without a version bump.
+ */
+function readImages(body: unknown): string[] {
+  const b = (body ?? {}) as { images?: unknown; image?: unknown };
+  const list = Array.isArray(b.images)
+    ? b.images.filter((v): v is string => typeof v === "string" && !!v.trim())
+    : [String(b.image ?? "")].filter(Boolean);
+
+  if (list.length > MAX_POST_IMAGES) {
+    throw badRequest(`A post can carry at most ${MAX_POST_IMAGES} images.`);
+  }
+  return list;
+}
+
+/**
+ * Store every image on a post, keeping the first in `imageUrl`.
+ *
+ * The split is the model's — see `ScheduledPost.extraImages` — and it lives
+ * here so the routes deal in one ordered list and nothing else has to know
+ * which field an image landed in.
+ *
+ * Uploaded in sequence: a carousel is up to ten files, and ten parallel
+ * Cloudinary uploads from one request is how a save times out.
+ */
+async function storeImages(
+  images: string[],
+  userId: string,
+  current?: { imageUrl: string; imagePublicId: string },
+): Promise<{
+  imageUrl: string;
+  imagePublicId: string;
+  extraImages: { url: string; publicId: string }[];
+}> {
+  if (images.length === 0) return { imageUrl: "", imagePublicId: "", extraImages: [] };
+
+  const stored: { url: string; publicId: string }[] = [];
+  for (const [i, image] of images.entries()) {
+    // Only the first can match what the schedule already had, so only it can
+    // carry a public id forward.
+    const { imageUrl, imagePublicId } = await storeImage(image, userId, i === 0 ? current : undefined);
+    if (imageUrl) stored.push({ url: imageUrl, publicId: imagePublicId });
+  }
+
+  const [first, ...rest] = stored;
+  return {
+    imageUrl: first?.url ?? "",
+    imagePublicId: first?.publicId ?? "",
+    extraImages: rest,
+  };
+}
+
 /** Confirm the caller can act on this workspace before attaching a schedule to it. */
 async function assertWorkspaceAccess(userId: string, workspaceId: string) {
   if (!workspaceId) throw badRequest("workspaceId is required");
@@ -472,8 +534,8 @@ router.post(
     }
 
     const name = String(req.body?.name ?? "").trim() || "Scheduled post";
-    const { imageUrl, imagePublicId } = await storeImage(
-      String(req.body?.image ?? ""),
+    const { imageUrl, imagePublicId, extraImages } = await storeImages(
+      readImages(req.body),
       req.userId!,
     );
 
@@ -491,6 +553,7 @@ router.post(
       caption,
       imageUrl,
       imagePublicId,
+      extraImages,
       ...schedule,
       status: "active",
       nextRunAt: firstRun(schedule),
@@ -546,30 +609,34 @@ router.patch(
       doc.status = next;
     }
 
-    if (req.body?.image !== undefined) {
-      const previous = doc.imagePublicId;
-      const { imageUrl, imagePublicId } = await storeImage(
-        String(req.body.image ?? ""),
+    if (req.body?.image !== undefined || req.body?.images !== undefined) {
+      // Every id the post held before this edit, so anything the new set no
+      // longer references can be cleaned up afterwards.
+      const previousIds = [doc.imagePublicId, ...doc.extraImages.map((i) => i.publicId)]
+        .filter(Boolean);
+
+      const { imageUrl, imagePublicId, extraImages } = await storeImages(
+        readImages(req.body),
         req.userId!,
         { imageUrl: doc.imageUrl, imagePublicId: doc.imagePublicId },
       );
       // Clearing the image is valid on LinkedIn and impossible on Instagram,
-      // which has no text-only post. Refused before the old file is deleted.
+      // which has no text-only post. Refused before any old file is deleted.
       if (provider === "instagram" && !imageUrl) {
         throw badRequest("Instagram posts need an image.");
       }
 
       doc.imageUrl = imageUrl;
       doc.imagePublicId = imagePublicId;
-      // Only after the replacement is safely stored, and only when the old file
-      // is genuinely unreferenced. Two cases qualify: the image was cleared, or
-      // it was replaced by one we uploaded ourselves. An empty id alongside a
-      // surviving URL means "unknown", not "different" — treating those as
-      // different is what deleted the asset a schedule still pointed at.
-      const replaced = Boolean(imagePublicId) && previous !== imagePublicId;
-      const cleared = !imageUrl;
-      if (previous && (replaced || cleared)) {
-        await deleteImage(previous).catch(() => {});
+      doc.set("extraImages", extraImages);
+
+      // Only after the replacements are safely stored, and only for files the
+      // post no longer points at. An empty id alongside a surviving URL means
+      // "unknown", not "different" — treating those as different is what
+      // deleted the asset a schedule still referenced.
+      const keptIds = new Set([imagePublicId, ...extraImages.map((i) => i.publicId)].filter(Boolean));
+      for (const id of previousIds) {
+        if (!keptIds.has(id)) await deleteImage(id).catch(() => {});
       }
     }
 
@@ -675,8 +742,10 @@ router.delete(
     if (!doc) throw notFound("schedule not found");
 
     // Best-effort: an orphaned Cloudinary asset is not worth failing the delete
-    // the user actually asked for.
-    if (doc.imagePublicId) await deleteImage(doc.imagePublicId).catch(() => {});
+    // the user actually asked for. Every slide of a carousel, not just the first.
+    for (const id of [doc.imagePublicId, ...doc.extraImages.map((i) => i.publicId)]) {
+      if (id) await deleteImage(id).catch(() => {});
+    }
 
     await doc.deleteOne();
     res.json({ deleted: true });

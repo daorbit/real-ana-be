@@ -178,6 +178,31 @@ export async function createImagePost(
   return createPost(accessToken, memberId, commentary, { media: { id: imageUrn } });
 }
 
+export const MAX_MULTI_IMAGE = 10;
+
+ 
+export async function createMultiImagePost(
+  accessToken: string,
+  memberId: string,
+  commentary: string,
+  imageUrns: string[],
+): Promise<CreatedPost> {
+  if (imageUrns.length < 2) {
+    throw new LinkedInApiError("api", 0, "a multi-image post needs at least two images");
+  }
+  if (imageUrns.length > MAX_MULTI_IMAGE) {
+    throw new LinkedInApiError(
+      "api",
+      0,
+      `a post can carry at most ${MAX_MULTI_IMAGE} images`,
+    );
+  }
+
+  return createPost(accessToken, memberId, commentary, {
+    multiImage: { images: imageUrns.map((id) => ({ id, altText: "" })) },
+  });
+}
+
 /**
  * Publish a post carrying only a caption.
  *
@@ -203,7 +228,10 @@ async function createPost(
   accessToken: string,
   memberId: string,
   commentary: string,
-  content: { media: { id: string } } | undefined,
+  content:
+    | { media: { id: string } }
+    | { multiImage: { images: { id: string; altText: string }[] } }
+    | undefined,
 ): Promise<CreatedPost> {
   const payload = {
     author: `urn:li:person:${memberId}`,

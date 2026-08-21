@@ -263,16 +263,87 @@ async function fetchPermalink(accessToken: string, mediaId: string): Promise<str
 /**
  * Create and publish an image post in one call.
  *
- * The whole of what this integration publishes today. Carousels, reels and
- * stories all use the same container mechanism with extra parameters, and can be
- * added here without the routes or the runner changing shape.
+ * One image or several: a single URL takes the plain container path, and more
+ * than one becomes a carousel. Reels and stories use the same mechanism with
+ * further parameters, and can be added here without the routes or the runner
+ * changing shape.
  */
 export async function createImagePost(
   accessToken: string,
   igUserId: string,
-  imageUrl: string,
+  imageUrl: string | string[],
   caption: string,
 ): Promise<{ mediaId: string; permalink: string | null }> {
-  const containerId = await createImageContainer(accessToken, igUserId, imageUrl, caption);
+  const urls = Array.isArray(imageUrl) ? imageUrl.filter(Boolean) : [imageUrl];
+  if (urls.length === 0) {
+    throw new InstagramApiError("container", 0, "An Instagram post needs an image.");
+  }
+  if (urls.length > MAX_CAROUSEL_ITEMS) {
+    throw new InstagramApiError(
+      "container",
+      0,
+      `A carousel can hold at most ${MAX_CAROUSEL_ITEMS} images.`,
+    );
+  }
+
+  if (urls.length === 1) {
+    const containerId = await createImageContainer(accessToken, igUserId, urls[0], caption);
+    return publishContainer(accessToken, igUserId, containerId);
+  }
+
+  const containerId = await createCarouselContainer(accessToken, igUserId, urls, caption);
   return publishContainer(accessToken, igUserId, containerId);
+}
+
+/** Instagram's own ceiling on a carousel, which LinkedIn's multi-image shares. */
+export const MAX_CAROUSEL_ITEMS = 10;
+
+ 
+export async function createCarouselContainer(
+  accessToken: string,
+  igUserId: string,
+  imageUrls: string[],
+  caption: string,
+): Promise<string> {
+  imageUrls.forEach(assertPublicImageUrl);
+
+  const childIds: string[] = [];
+  for (const url of imageUrls) {
+    const { status, data } = await axios.post(
+      `${GRAPH_BASE}/${apiVersion()}/${igUserId}/media`,
+      null,
+      {
+        params: {
+          image_url: url,
+          is_carousel_item: true,
+          access_token: accessToken,
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      },
+    );
+
+    if (status !== 200 || !data?.id) throw graphError(status, data);
+    childIds.push(String(data.id));
+  }
+
+  const { status, data } = await axios.post(
+    `${GRAPH_BASE}/${apiVersion()}/${igUserId}/media`,
+    null,
+    {
+      params: {
+        media_type: "CAROUSEL",
+        // Graph takes the children as one comma-separated parameter, in the
+        // order the slides should appear.
+        children: childIds.join(","),
+        caption,
+        access_token: accessToken,
+      },
+      timeout: 30000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (status !== 200 || !data?.id) throw graphError(status, data);
+  return String(data.id);
 }

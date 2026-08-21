@@ -52,13 +52,7 @@ export type PostStatus = (typeof POST_STATUSES)[number];
 
 const scheduledPostSchema = new Schema(
   {
-    /**
-     * The network this publishes to.
-     *
-     * Paired with `userId` below, this is the lookup key for the token: the
-     * runner finds the `SocialConnection` on (userId, provider), which is that
-     * collection's unique index.
-     */
+ 
     provider: { type: String, enum: POST_PROVIDERS, required: true, default: "linkedin" },
 
     /**
@@ -72,10 +66,7 @@ const scheduledPostSchema = new Schema(
       required: true,
       index: true,
     },
-    /**
-     * Which workspace the post is about. Kept so the studio can group schedules
-     * by workspace and so deleting a workspace can take its schedules with it.
-     */
+ 
     workspaceId: {
       type: Schema.Types.ObjectId,
       ref: "Workspace",
@@ -86,29 +77,29 @@ const scheduledPostSchema = new Schema(
     /** What the user called it, for their own list. Not published. */
     name: { type: String, required: true, trim: true },
 
-    /**
-     * The post body, exactly as it will appear.
-     *
-     * The ceiling is LinkedIn's 3000. Instagram's own limit is 2200 and is
-     * enforced at the route instead, where the provider is known — a schema-wide
-     * 2200 would silently shorten what LinkedIn allows.
-     */
+ 
     caption: { type: String, required: true, trim: true, maxlength: 3000 },
 
-    /**
-     * The image, already uploaded to Cloudinary by the studio.
-     *
-     * A URL rather than bytes: the studio uploads once at save time. LinkedIn's
-     * runner fetches it and forwards the bytes; Instagram is handed the URL and
-     * downloads it itself, which is why it must stay publicly reachable.
-     *
-     * Optional only for LinkedIn, where a caption alone is a valid post.
-     * Instagram has no text-only post at all, so the route requires an image
-     * when the provider is `instagram`.
-     */
+ 
     imageUrl: { type: String, trim: true, default: "" },
-    /** Cloudinary's handle, so replacing or deleting a schedule can clean up. */
     imagePublicId: { type: String, trim: true, default: "" },
+
+ 
+    extraImages: {
+      type: [{
+        url: { type: String, trim: true, required: true },
+        publicId: { type: String, trim: true, default: "" },
+        _id: false,
+      }],
+      default: [],
+      validate: {
+        validator: (v: unknown[]) => v.length <= 9,
+        message: "A post can carry at most 10 images.",
+      },
+    },
+
+ 
+    groupId: { type: String, trim: true, default: "", index: true },
 
     mode: { type: String, enum: POST_MODES, required: true, default: "once" },
 

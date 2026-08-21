@@ -7,6 +7,7 @@ import { decryptSecret } from "../../shared/utils/crypto-box.js";
 import {
   LinkedInApiError,
   createImagePost,
+  createMultiImagePost,
   createTextPost,
   uploadImage,
 } from "../../infra/http-client/linkedin-post.js";
@@ -15,6 +16,17 @@ import {
   createImagePost as createInstagramPost,
 } from "../../infra/http-client/instagram-post.js";
 import { canPublish as canPublishInstagram } from "../../infra/http-client/instagram-auth.js";
+
+/**
+ * Every image on a post, in publish order.
+ *
+ * The first still lives in `imageUrl` and the rest in `extraImages` — see the
+ * model for why they were not merged — so this is the one place that shape is
+ * flattened, and every publish path reads it rather than the two fields.
+ */
+function imagesOf(post: { imageUrl?: string; extraImages?: { url: string }[] }): string[] {
+  return [post.imageUrl ?? "", ...(post.extraImages ?? []).map((i) => i.url)].filter(Boolean);
+}
 
 /**
  * Publishing due schedules.
@@ -134,7 +146,9 @@ async function publishInstagram(
     const created = await createInstagramPost(
       token,
       conn.providerUserId,
-      post.imageUrl,
+      // One URL publishes as a single image, several as a carousel — the client
+      // picks the container shape from the length.
+      imagesOf(post),
       post.caption,
     );
     return { postUrl: created.permalink, postUrn: created.mediaId };
@@ -212,9 +226,20 @@ async function publishLinkedIn(
       return { postUrl: created.postUrl, postUrn: created.postUrn };
     }
 
-    const { bytes, mime } = await fetchImage(post.imageUrl);
-    const uploaded = await uploadImage(token, conn.providerUserId, bytes, mime);
-    const created = await createImagePost(token, conn.providerUserId, post.caption, uploaded.urn);
+    // Every image is uploaded before any post is created: LinkedIn wants URNs,
+    // and a half-uploaded set is discardable in a way a half-published post is
+    // not. Sequential rather than parallel, so a rate limit stops the run
+    // instead of stranding several uploads.
+    const urns: string[] = [];
+    for (const url of imagesOf(post)) {
+      const { bytes, mime } = await fetchImage(url);
+      const uploaded = await uploadImage(token, conn.providerUserId, bytes, mime);
+      urns.push(uploaded.urn);
+    }
+
+    const created = urns.length > 1
+      ? await createMultiImagePost(token, conn.providerUserId, post.caption, urns)
+      : await createImagePost(token, conn.providerUserId, post.caption, urns[0]);
     return { postUrl: created.postUrl, postUrn: created.postUrn };
   } catch (e) {
     if (e instanceof LinkedInApiError) {
