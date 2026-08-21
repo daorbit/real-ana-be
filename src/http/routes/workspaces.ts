@@ -464,6 +464,169 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
   res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
 });
 
+/** One exchange in a scheduling conversation, as the client replays it back. */
+type PlanTurn = { role: "user" | "assistant"; content: string };
+
+/** How many exchanges of a planning conversation are carried into the model. */
+const MAX_PLAN_TURNS = 12;
+
+/**
+ * Plan a scheduled post by conversation.
+ *
+ * A scheduled post needs two decisions — what it says, and when it goes out —
+ * and someone who starts with only the first should not have to work out the
+ * rest of the form alone. This lets Orbit ask: it reads everything settled so
+ * far, asks the single most useful question still open, and once nothing is
+ * open proposes the finished post for the author to confirm.
+ *
+ * Each turn returns the whole plan rather than a delta, so the composer's
+ * fields track the conversation as it happens and the author watches the form
+ * fill rather than being handed a result at the end.
+ *
+ * `done` is the model saying it has everything and is showing its proposal.
+ * It is a state, not an action: scheduling happens through the ordinary
+ * scheduled-post route, under the author's own hand, after they confirm.
+ *
+ * Relative dates are resolved against a clock the CLIENT supplies, because
+ * "tomorrow at 9" means the author's tomorrow, not the server's. Only the
+ * clock and the conversation come from the request — never the rules.
+ */
+router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Scheduling with Orbit is not available on this server." });
+  }
+
+  const platform = String(req.body?.platform ?? "linkedin");
+  const tone = CAPTION_TONES[platform];
+  if (!tone) return res.status(400).json({ error: "Unsupported platform." });
+
+  const message = String(req.body?.message ?? "").trim().slice(0, 1000);
+  if (!message) return res.status(400).json({ error: "Say something for Orbit to work from." });
+
+  // Oldest first, and trimmed: a planning conversation that has run past a
+  // dozen exchanges has stopped converging, and replaying all of it only
+  // spends more of the author's quota on the same question.
+  const turns: PlanTurn[] = Array.isArray(req.body?.turns)
+    ? (req.body.turns as unknown[])
+      .filter((t): t is PlanTurn =>
+        !!t && typeof t === "object"
+        && (((t as PlanTurn).role === "user") || ((t as PlanTurn).role === "assistant"))
+        && typeof (t as PlanTurn).content === "string")
+      .slice(-MAX_PLAN_TURNS)
+      .map((t) => ({ role: t.role, content: t.content.slice(0, 2000) }))
+    : [];
+
+  // The author's own wall clock. Sent by the client because only the browser
+  // knows which zone the person is in, and a schedule resolved in the server's
+  // zone lands at the wrong hour.
+  const nowLocal = String(req.body?.now ?? "").slice(0, 40) || new Date().toISOString();
+
+  // Whatever the composer's fields already hold, so a conversation started
+  // half-way through an edit builds on the post rather than replacing it.
+  const current = req.body?.draft && typeof req.body.draft === "object"
+    ? JSON.stringify(req.body.draft).slice(0, 4000)
+    : "{}";
+
+  const transcript = turns
+    .map((t) => `${t.role === "user" ? "Author" : "You"}: ${t.content}`)
+    .join("\n");
+
+  const result = await askOrbit(
+    [
+      "Continue planning the post.",
+      `The author's local date and time right now: ${nowLocal}`,
+      `The composer's fields as they stand: ${current}`,
+      transcript ? `Conversation so far:\n${transcript}` : "",
+      `Author: ${message}`,
+    ].filter(Boolean).join("\n\n"),
+    {
+      systemPrompt:
+        "You help a person schedule a social media post that will go out under their own name. " +
+        `Write any caption for ${tone}\n\n` +
+        "Put a single JSON object in the `reply` field and nothing else — no markdown, no code fences, no prose " +
+        "around it. Its keys are exactly:\n" +
+        '  "message": string — what you say to the author. One short question when something is still open, or a ' +
+        "one-line summary of the finished post when nothing is. Never more than two sentences.\n" +
+        '  "done": boolean — true only when the caption is written AND the schedule is settled, and you are ' +
+        "showing the finished post for them to confirm.\n" +
+        '  "caption": string — the post so far, first person, no markdown or surrounding quotes. "" until you ' +
+        "have enough to write one.\n" +
+        '  "name": string — a short private label for the author\'s own list, at most 60 characters. "" until known.\n' +
+        '  "mode": "once" | "repeat".\n' +
+        '  "date": "YYYY-MM-DD" — the day a one-off publishes, otherwise "".\n' +
+        '  "time": "HH:MM" — 24-hour, the time a one-off publishes, otherwise "".\n' +
+        '  "frequency": "daily" | "weekly" | "monthly" — the cadence of a repeating post.\n' +
+        '  "hour": integer 0-23, "minute": integer 0-59 — the repeating time of day.\n' +
+        '  "weekday": integer 0-6 where 0 is Sunday — the day a weekly post repeats on.\n' +
+        '  "dayOfMonth": integer 1-28 — the day a monthly post repeats on.\n\n' +
+        "Rules: ask ONE question at a time, and only about something you genuinely cannot infer — never ask again " +
+        "about anything the author has already settled or that the composer's fields already hold. Two questions " +
+        "is the most you should ever need: what the post is about, and when it goes out. Always return every key, " +
+        "carrying forward what is already decided, so the author's form stays filled between turns. Resolve every " +
+        "relative date against the author's local date and time given above, and never return a one-off date and " +
+        "time in the past. A date with no stated time means 09:00. Use only what the author told you — never " +
+        "invent figures, dates, links or claims they did not give you. Return an empty `suggestions` array.",
+      host: quantalogOrbitHost,
+      tenantId: ws.id,
+    },
+  );
+
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  // Models still occasionally wrap JSON in a fence despite the instruction, so
+  // the outermost braces are taken rather than trusting the whole string.
+  const raw = result.reply.trim();
+  const body = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    return res.status(502).json({ error: "Orbit could not follow that. Try rewording it." });
+  }
+
+  const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  // Every numeric field is clamped rather than rejected: a model that answers
+  // "weekday: 7" meant Sunday, and failing the whole turn over it would send
+  // the author back to the form they were trying to skip.
+  const int = (v: unknown, lo: number, hi: number, fallback: number) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  };
+  const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
+    (allowed as readonly string[]).includes(String(v)) ? (String(v) as T) : fallback;
+
+  const caption = str(parsed.caption, MAX_CAPTION_CHARS);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(str(parsed.date, 10)) ? str(parsed.date, 10) : "";
+  const time = /^\d{2}:\d{2}$/.test(str(parsed.time, 5)) ? str(parsed.time, 5) : "";
+  const mode = oneOf(parsed.mode, ["once", "repeat"] as const, "once");
+
+  // A turn claiming to be finished without a caption, or without the times its
+  // own mode depends on, is not finished — treating it as done would put a
+  // confirm button under an empty post.
+  const complete = !!caption && (mode === "repeat" || (!!date && !!time));
+
+  res.json({
+    message: str(parsed.message, 400) || "What should this post be about?",
+    done: parsed.done === true && complete,
+    caption,
+    name: str(parsed.name, 60),
+    mode,
+    date,
+    time,
+    frequency: oneOf(parsed.frequency, ["daily", "weekly", "monthly"] as const, "weekly"),
+    hour: int(parsed.hour, 0, 23, 9),
+    minute: int(parsed.minute, 0, 59, 0),
+    weekday: int(parsed.weekday, 0, 6, 1),
+    // 29-31 do not exist in every month, so a monthly post pinned there would
+    // silently skip February. The composer's own picker stops at 28 too.
+    dayOfMonth: int(parsed.dayOfMonth, 1, 28, 1),
+  });
+});
+
 // Install status for a site — has the tracking script ever reported?
 router.get(
   "/:wid/sites/:siteId/status",
