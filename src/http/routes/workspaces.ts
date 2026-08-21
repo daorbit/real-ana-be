@@ -551,8 +551,9 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         "around it. Its keys are exactly:\n" +
         '  "message": string — what you say to the author. One short question when something is still open, or a ' +
         "one-line summary of the finished post when nothing is. Never more than two sentences.\n" +
-        '  "done": boolean — true only when the caption is written AND the schedule is settled, and you are ' +
-        "showing the finished post for them to confirm.\n" +
+        '  "done": boolean — true only when the caption is written AND the schedule is settled AND, for an ' +
+        "Instagram post, an image is already attached, and you are showing the finished post for them to confirm.\n" +
+        '  "needsImage": boolean — true when you are waiting on the author to attach an image.\n' +
         '  "caption": string — the post so far, first person, no markdown or surrounding quotes. "" until you ' +
         "have enough to write one.\n" +
         '  "name": string — a short private label for the author\'s own list, at most 60 characters. "" until known.\n' +
@@ -564,8 +565,11 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         '  "weekday": integer 0-6 where 0 is Sunday — the day a weekly post repeats on.\n' +
         '  "dayOfMonth": integer 1-28 — the day a monthly post repeats on.\n\n' +
         "Rules: ask ONE question at a time, and only about something you genuinely cannot infer — never ask again " +
-        "about anything the author has already settled or that the composer's fields already hold. Two questions " +
-        "is the most you should ever need: what the post is about, and when it goes out. Always return every key, " +
+        "about anything the author has already settled or that the composer's fields already hold. Normally you " +
+        "need at most three things: what the post is about, when it goes out, and an image. An Instagram post " +
+        "cannot publish without an image, so when the fields show none, ask for one and set needsImage true — the " +
+        "author attaches it in the composer, and the next turn's fields will show it. On LinkedIn an image is " +
+        "optional: offer it once, accept no for an answer, and never ask twice. Always return every key, " +
         "carrying forward what is already decided, so the author's form stays filled between turns. Resolve every " +
         "relative date against the author's local date and time given above, and never return a one-off date and " +
         "time in the past. A date with no stated time means 09:00. Use only what the author told you — never " +
@@ -604,14 +608,22 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
   const time = /^\d{2}:\d{2}$/.test(str(parsed.time, 5)) ? str(parsed.time, 5) : "";
   const mode = oneOf(parsed.mode, ["once", "repeat"] as const, "once");
 
+  // An Instagram post with no image cannot publish, so it is never finished —
+  // checked against the composer's own fields rather than the model's claim.
+  const hasImage = !!(req.body?.draft as { image?: string } | undefined)?.image;
+  const imageRequired = platform !== "linkedin" && !hasImage;
+
   // A turn claiming to be finished without a caption, or without the times its
   // own mode depends on, is not finished — treating it as done would put a
   // confirm button under an empty post.
-  const complete = !!caption && (mode === "repeat" || (!!date && !!time));
+  const complete = !!caption
+    && (mode === "repeat" || (!!date && !!time))
+    && !imageRequired;
 
   res.json({
     message: str(parsed.message, 400) || "What should this post be about?",
     done: parsed.done === true && complete,
+    needsImage: parsed.needsImage === true || imageRequired,
     caption,
     name: str(parsed.name, 60),
     mode,
