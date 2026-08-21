@@ -281,6 +281,8 @@ async function storeImage(
    * a destroyed image that only failed at publish time, with a 404.
    */
   current?: { imageUrl: string; imagePublicId: string },
+  /** Story images are fitted to 9:16 on the way in — see `STORY_TRANSFORM`. */
+  format: PostFormat = "feed",
 ): Promise<{ imageUrl: string; imagePublicId: string }> {
   if (!image) return { imageUrl: "", imagePublicId: "" };
 
@@ -309,10 +311,28 @@ async function storeImage(
     // Unique per upload so a replacement never collides with the file it
     // supersedes while the old one is still being deleted.
     publicId: `${userId}-${Date.now()}`,
+    transformation: format === "story" ? STORY_TRANSFORM : undefined,
   });
 
   return { imageUrl: uploaded.url, imagePublicId: uploaded.publicId };
 }
+
+/**
+ * Fit an image to Instagram's story canvas before it is published.
+ *
+ * Instagram crops a story to fill 9:16 — it does not letterbox — so an image
+ * that is not already that shape loses its edges, which is how a caption
+ * rendered into the picture ends up running off both sides. The fix has to
+ * happen to the file, not to the preview: by the time Graph fetches the URL
+ * the shape is whatever we stored.
+ *
+ * `pad` rather than `fill`: fitting the whole image onto the canvas and filling
+ * the remainder keeps everything the author put in the picture, where cropping
+ * to fill would silently discard it. `b_auto` samples the image's own edges for
+ * the padding colour, so a photograph gets a matching surround rather than
+ * black bars.
+ */
+const STORY_TRANSFORM = "c_pad,w_1080,h_1920,b_auto";
 
 /** Both networks cap a post at ten images. */
 const MAX_POST_IMAGES = 10;
@@ -370,6 +390,7 @@ async function storeImages(
   images: string[],
   userId: string,
   current?: { imageUrl: string; imagePublicId: string },
+  format: PostFormat = "feed",
 ): Promise<{
   imageUrl: string;
   imagePublicId: string;
@@ -381,7 +402,12 @@ async function storeImages(
   for (const [i, image] of images.entries()) {
     // Only the first can match what the schedule already had, so only it can
     // carry a public id forward.
-    const { imageUrl, imagePublicId } = await storeImage(image, userId, i === 0 ? current : undefined);
+    const { imageUrl, imagePublicId } = await storeImage(
+      image,
+      userId,
+      i === 0 ? current : undefined,
+      format,
+    );
     if (imageUrl) stored.push({ url: imageUrl, publicId: imagePublicId });
   }
 
@@ -564,6 +590,8 @@ router.post(
     const { imageUrl, imagePublicId, extraImages } = await storeImages(
       readImages(req.body),
       req.userId!,
+      undefined,
+      format,
     );
 
     // Instagram has no text-only post — a container is created around a media
@@ -653,6 +681,9 @@ router.patch(
         readImages(req.body),
         req.userId!,
         { imageUrl: doc.imageUrl, imagePublicId: doc.imagePublicId },
+        // From the document: the format is fixed once a post exists, so an
+        // edit that replaces a story's image still fits it to 9:16.
+        doc.format as PostFormat,
       );
       // Clearing the image is valid on LinkedIn and impossible on Instagram,
       // which has no text-only post. Refused before any old file is deleted.
