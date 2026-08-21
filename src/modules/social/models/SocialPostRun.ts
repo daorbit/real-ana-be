@@ -95,7 +95,17 @@ const statsSchema = new Schema(
 
 const socialPostRunSchema = new Schema(
   {
-    /** Whose LinkedIn account this went out on. */
+    /**
+     * Which network this went out on.
+     *
+     * Defaulted to `linkedin` so every row written before Instagram existed
+     * reads correctly without a backfill. The statistics refresh filters on it:
+     * LinkedIn's analytics API is the only one wired up, and handing it an
+     * Instagram media id would be a guaranteed error on every tick.
+     */
+    provider: { type: String, enum: ["linkedin", "instagram"], required: true, default: "linkedin" },
+
+    /** Whose account this went out on. */
     userId: {
       type: Schema.Types.ObjectId,
       ref: "User",

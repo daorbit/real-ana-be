@@ -15,6 +15,17 @@ import mongoose, { Schema, InferSchemaType } from "mongoose";
  * way as the one for reports.
  */
 
+/**
+ * Which network the post goes to.
+ *
+ * Mirrors `PROVIDERS` on `SocialConnection`, which is what the runner looks the
+ * token up by. Defaulted to `linkedin` rather than being required, because every
+ * row written before Instagram existed is a LinkedIn post and reading them must
+ * not depend on a backfill having run.
+ */
+export const POST_PROVIDERS = ["linkedin", "instagram"] as const;
+export type PostProvider = (typeof POST_PROVIDERS)[number];
+
 /** The cadences offered. Deliberately coarse — this posts publicly. */
 export const POST_FREQUENCIES = ["daily", "weekly", "monthly"] as const;
 export type PostFrequency = (typeof POST_FREQUENCIES)[number];
@@ -42,7 +53,16 @@ export type PostStatus = (typeof POST_STATUSES)[number];
 const scheduledPostSchema = new Schema(
   {
     /**
-     * Who publishes it. The LinkedIn token is looked up from this at run time
+     * The network this publishes to.
+     *
+     * Paired with `userId` below, this is the lookup key for the token: the
+     * runner finds the `SocialConnection` on (userId, provider), which is that
+     * collection's unique index.
+     */
+    provider: { type: String, enum: POST_PROVIDERS, required: true, default: "linkedin" },
+
+    /**
+     * Who publishes it. The provider token is looked up from this at run time
      * rather than copied here, so disconnecting the account stops every
      * schedule attached to it at once.
      */
@@ -66,14 +86,25 @@ const scheduledPostSchema = new Schema(
     /** What the user called it, for their own list. Not published. */
     name: { type: String, required: true, trim: true },
 
-    /** The post body, exactly as it will appear. LinkedIn's cap is 3000. */
+    /**
+     * The post body, exactly as it will appear.
+     *
+     * The ceiling is LinkedIn's 3000. Instagram's own limit is 2200 and is
+     * enforced at the route instead, where the provider is known — a schema-wide
+     * 2200 would silently shorten what LinkedIn allows.
+     */
     caption: { type: String, required: true, trim: true, maxlength: 3000 },
 
     /**
      * The image, already uploaded to Cloudinary by the studio.
      *
-     * A URL rather than bytes: the studio uploads once at save time, and the
-     * runner fetches it when publishing. Optional — a text post is valid.
+     * A URL rather than bytes: the studio uploads once at save time. LinkedIn's
+     * runner fetches it and forwards the bytes; Instagram is handed the URL and
+     * downloads it itself, which is why it must stay publicly reachable.
+     *
+     * Optional only for LinkedIn, where a caption alone is a valid post.
+     * Instagram has no text-only post at all, so the route requires an image
+     * when the provider is `instagram`.
      */
     imageUrl: { type: String, trim: true, default: "" },
     /** Cloudinary's handle, so replacing or deleting a schedule can clean up. */

@@ -78,6 +78,11 @@ export async function runStatsRefresh(now: Date = new Date()): Promise<StatsSumm
    */
   const due: Record<string, unknown> = {
     status: "published",
+    // LinkedIn only. Everything below — the author URN, the member token, the
+    // statistics endpoint — is LinkedIn's, and an Instagram media id passed to
+    // it would fail on every tick for the life of the row. Instagram's own
+    // insights are a separate API and a permission this app does not request.
+    provider: "linkedin",
     postUrn: { $type: "string", $gt: "" },
     publishedAt: { $gte: since },
     $or: [

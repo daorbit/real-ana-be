@@ -1,5 +1,7 @@
 import { Router, Response } from "express";
-import { ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES } from "../../modules/social/models/ScheduledPost.js";
+import {
+  ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES, POST_PROVIDERS, PostProvider,
+} from "../../modules/social/models/ScheduledPost.js";
 import { computeNextRun } from "../../modules/social/schedule-time.js";
 import { publishNow } from "../../modules/social/post-runner.js";
 import { SocialPostRun } from "../../modules/social/models/SocialPostRun.js";
@@ -39,8 +41,10 @@ const router = Router();
 // the browser reports a CORS failure and the real request is never made.
 router.options("*", dashboardCors);
 
-/** LinkedIn's commentary cap. */
+/** LinkedIn's commentary cap, and the schema's ceiling. */
 const MAX_CAPTION = 3000;
+/** Instagram's own, which is lower. Enforced per provider — see `readCaption`. */
+const MAX_CAPTION_INSTAGRAM = 2200;
 /** Generous for a feed image, and well under LinkedIn's own ceiling. */
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
@@ -48,6 +52,7 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 function publicPost(doc: InstanceType<typeof ScheduledPost>) {
   return {
     id: doc.id,
+    provider: doc.provider,
     workspaceId: String(doc.workspaceId),
     name: doc.name,
     caption: doc.caption,
@@ -82,6 +87,7 @@ function publicRun(doc: InstanceType<typeof SocialPostRun>) {
   const stats = doc.stats ?? {};
   return {
     id: doc.id,
+    provider: doc.provider,
     scheduledPostId: doc.scheduledPostId ? String(doc.scheduledPostId) : null,
     workspaceId: doc.workspaceId ? String(doc.workspaceId) : null,
     name: doc.name,
@@ -179,14 +185,75 @@ function firstRun(schedule: ReturnType<typeof readSchedule>): Date {
   return schedule.mode === "once" ? schedule.runAt : computeNextRun(schedule);
 }
 
-/** The caption, checked for presence and length. */
-function readCaption(value: unknown): string {
+/**
+ * The caption, checked for presence and length.
+ *
+ * The cap depends on the network: Instagram truncates at 2200 characters and
+ * LinkedIn at 3000. Checked here rather than in the schema, which has to hold
+ * the larger of the two — a blanket 2200 would silently shorten what LinkedIn
+ * accepts, and rejecting at save time is far kinder than discovering it when the
+ * post goes out clipped mid-sentence.
+ */
+function readCaption(value: unknown, provider: PostProvider): string {
   const caption = String(value ?? "").trim();
   if (!caption) throw badRequest("Caption cannot be empty.");
-  if (caption.length > MAX_CAPTION) {
-    throw badRequest(`Caption must be ${MAX_CAPTION} characters or fewer.`);
+
+  const limit = provider === "instagram" ? MAX_CAPTION_INSTAGRAM : MAX_CAPTION;
+  if (caption.length > limit) {
+    throw badRequest(`Caption must be ${limit} characters or fewer for ${providerName(provider)}.`);
   }
   return caption;
+}
+
+/**
+ * Refuse a schedule for a network this user cannot actually publish to.
+ *
+ * Both halves matter: no connection at all, and a connection whose granted
+ * scopes stop short of publishing — which is a real state on both networks,
+ * since signing in with LinkedIn does not grant `w_member_social` and an
+ * Instagram user can decline publishing on the consent screen.
+ *
+ * The expiry is deliberately *not* checked here. A token that lapses between
+ * saving a schedule and running it is the ordinary case for a monthly cadence,
+ * the runner reports it with a reconnect prompt, and refusing the save over it
+ * would block editing a schedule for the very account that needs reconnecting.
+ */
+async function assertCanPublishTo(userId: string, provider: PostProvider): Promise<void> {
+  const conn = await SocialConnection.findOne({ userId, provider }).select("scope");
+  if (!conn) {
+    throw badRequest(`Connect your ${providerName(provider)} account before scheduling a post.`);
+  }
+
+  const granted = (conn.scope ?? "").split(/[\s,]+/);
+  const needed = provider === "instagram"
+    ? "instagram_business_content_publish"
+    : "w_member_social";
+
+  if (!granted.includes(needed)) {
+    throw forbidden(
+      `Reconnect ${providerName(provider)} and allow posting to schedule a post.`,
+      { reconnect: true },
+    );
+  }
+}
+
+/** The network's name as a person writes it, for a message they will read. */
+function providerName(provider: PostProvider): string {
+  return provider === "instagram" ? "Instagram" : "LinkedIn";
+}
+
+/**
+ * Which network a post targets, defaulting to LinkedIn.
+ *
+ * Defaulted rather than required so a client that predates Instagram — or the
+ * Share Panel, which only ever posts to LinkedIn — keeps working unchanged.
+ */
+function readProvider(value: unknown): PostProvider {
+  const provider = String(value ?? "linkedin");
+  if (!POST_PROVIDERS.includes(provider as PostProvider)) {
+    throw badRequest("Choose a network to publish to.");
+  }
+  return provider as PostProvider;
 }
 
 /**
@@ -259,9 +326,11 @@ router.get(
   "/",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const [posts, conn] = await Promise.all([
+    const [posts, conn, igConn] = await Promise.all([
       ScheduledPost.find({ userId: req.userId }).sort({ createdAt: -1 }),
       SocialConnection.findOne({ userId: req.userId, provider: "linkedin" })
+        .select("name picture expiresAt scope"),
+      SocialConnection.findOne({ userId: req.userId, provider: "instagram" })
         .select("name picture expiresAt scope"),
     ]);
 
@@ -276,6 +345,19 @@ router.get(
             // Signing in with LinkedIn grants identity only, so a connection
             // can exist that cannot post. The page needs to tell the two apart.
             canPublish: (conn.scope ?? "").split(/[\s,]+/).includes("w_member_social"),
+          }
+        : { connected: false, expired: false, name: "", picture: "", canPublish: false },
+      // Same shape, so the composer's network picker can read one or the other
+      // without special-casing. `name` is the `@username` on an Instagram row.
+      instagram: igConn
+        ? {
+            connected: true,
+            expired: igConn.expiresAt.getTime() <= Date.now(),
+            name: igConn.name,
+            picture: igConn.picture,
+            canPublish: (igConn.scope ?? "")
+              .split(/[\s,]+/)
+              .includes("instagram_business_content_publish"),
           }
         : { connected: false, expired: false, name: "", picture: "", canPublish: false },
     });
@@ -370,8 +452,14 @@ router.post(
     const workspaceId = String(req.body?.workspaceId ?? "");
     await assertWorkspaceAccess(req.userId!, workspaceId);
 
-    const caption = readCaption(req.body?.caption);
+    const provider = readProvider(req.body?.provider);
+    const caption = readCaption(req.body?.caption, provider);
     const schedule = readSchedule(req.body ?? {});
+
+    // Refused at save time rather than at the first run: a schedule that can
+    // never publish is not worth storing, and an error weeks later reads as the
+    // scheduler being broken.
+    await assertCanPublishTo(req.userId!, provider);
 
     // Checked after the schedule parses, so a malformed request is refused for
     // being malformed rather than reported as a plan limit.
@@ -389,8 +477,15 @@ router.post(
       req.userId!,
     );
 
+    // Instagram has no text-only post — a container is created around a media
+    // URL — so an image is required there and optional on LinkedIn.
+    if (provider === "instagram" && !imageUrl) {
+      throw badRequest("Instagram posts need an image.");
+    }
+
     const doc = await ScheduledPost.create({
       userId: req.userId,
+      provider,
       workspaceId,
       name,
       caption,
@@ -421,7 +516,17 @@ router.patch(
     const doc = await ScheduledPost.findOne({ _id: req.params.id, userId: req.userId });
     if (!doc) throw notFound("schedule not found");
 
-    if (req.body?.caption !== undefined) doc.caption = readCaption(req.body.caption);
+    // The network is fixed at creation. Changing it would revalidate the caption
+    // length and the image requirement against different rules, and the sensible
+    // way to move a post between networks is to write it for the one it is going
+    // to — so a request to switch is refused rather than half-applied.
+    if (req.body?.provider !== undefined && readProvider(req.body.provider) !== doc.provider) {
+      throw badRequest("A scheduled post cannot be moved to a different network.");
+    }
+
+    const provider = doc.provider as PostProvider;
+
+    if (req.body?.caption !== undefined) doc.caption = readCaption(req.body.caption, provider);
     if (req.body?.name !== undefined) {
       doc.name = String(req.body.name).trim() || doc.name;
     }
@@ -448,6 +553,12 @@ router.patch(
         req.userId!,
         { imageUrl: doc.imageUrl, imagePublicId: doc.imagePublicId },
       );
+      // Clearing the image is valid on LinkedIn and impossible on Instagram,
+      // which has no text-only post. Refused before the old file is deleted.
+      if (provider === "instagram" && !imageUrl) {
+        throw badRequest("Instagram posts need an image.");
+      }
+
       doc.imageUrl = imageUrl;
       doc.imagePublicId = imagePublicId;
       // Only after the replacement is safely stored, and only when the old file

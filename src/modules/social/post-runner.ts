@@ -10,6 +10,11 @@ import {
   createTextPost,
   uploadImage,
 } from "../../infra/http-client/linkedin-post.js";
+import {
+  InstagramApiError,
+  createImagePost as createInstagramPost,
+} from "../../infra/http-client/instagram-post.js";
+import { canPublish as canPublishInstagram } from "../../infra/http-client/instagram-auth.js";
 
 /**
  * Publishing due schedules.
@@ -30,6 +35,19 @@ import {
 const MAX_PER_RUN = 20;
 /** Refuse anything larger; LinkedIn's own ceiling is well above this. */
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The last-resort message, for a thrown value that was not an `Error` at all.
+ *
+ * Named after the network the schedule targets, because it is shown to the user
+ * verbatim and "unable to publish the LinkedIn post" on an Instagram schedule is
+ * worse than saying nothing specific.
+ */
+function fallbackMessage(post: InstanceType<typeof ScheduledPost>): string {
+  return post.provider === "instagram"
+    ? "Unable to publish the Instagram post."
+    : "Unable to publish the LinkedIn post.";
+}
 
 export type RunSummary = {
   attempted: number;
@@ -62,13 +80,109 @@ async function fetchImage(url: string): Promise<{ bytes: Buffer; mime: string }>
 }
 
 /**
- * Publish one schedule.
+ * Publish one schedule, on whichever network it targets.
  *
  * Throws with a message already written for the user — the caller stores it on
- * the schedule and the studio shows it verbatim, so nothing raw from LinkedIn
+ * the schedule and the studio shows it verbatim, so nothing raw from either API
  * is allowed to reach here.
  */
 async function publish(
+  post: InstanceType<typeof ScheduledPost>,
+): Promise<{ postUrl: string | null; postUrn: string }> {
+  return post.provider === "instagram" ? publishInstagram(post) : publishLinkedIn(post);
+}
+
+/**
+ * Publish to Instagram.
+ *
+ * Shorter than the LinkedIn path below because Instagram fetches the image
+ * itself: the Cloudinary URL already on the schedule is handed straight over,
+ * with no download into this process and no byte upload. See `instagram-post`.
+ */
+async function publishInstagram(
+  post: InstanceType<typeof ScheduledPost>,
+): Promise<{ postUrl: string | null; postUrn: string }> {
+  const conn = await SocialConnection.findOne({
+    userId: post.userId,
+    provider: "instagram",
+  }).select("+accessToken");
+
+  if (!conn) throw new Error("Instagram is not connected. Reconnect it to resume this schedule.");
+  if (!conn.providerUserId) {
+    throw new Error("Instagram connection is incomplete. Please reconnect Instagram.");
+  }
+  if (!canPublishInstagram(conn.scope)) {
+    throw new Error("Reconnect Instagram and allow posting to resume this schedule.");
+  }
+  if (conn.expiresAt.getTime() <= Date.now()) {
+    throw new Error("Your Instagram connection has expired. Please reconnect Instagram.");
+  }
+
+  // Instagram has no text-only post: a container is created *around* a media
+  // URL. Caught here so the schedule reports something actionable rather than a
+  // parameter error from the API.
+  if (!post.imageUrl) {
+    throw new Error("Instagram posts need an image. Add one to this schedule to resume it.");
+  }
+
+  const token = decryptSecret(conn.accessToken);
+  if (!token) {
+    throw new Error("Your Instagram connection is no longer valid. Please reconnect Instagram.");
+  }
+
+  try {
+    const created = await createInstagramPost(
+      token,
+      conn.providerUserId,
+      post.imageUrl,
+      post.caption,
+    );
+    return { postUrl: created.permalink, postUrn: created.mediaId };
+  } catch (e) {
+    if (e instanceof InstagramApiError) {
+      // Status and kind only in the log — never a response body, which echoes
+      // the request, and these requests carry the token as a query parameter.
+      console.error(`[social] instagram publish failed (${e.kind}, status ${e.status})`);
+
+      if (e.kind === "auth") {
+        // The token is dead. Mark it expired so the studio prompts a reconnect
+        // and every other schedule on this account stops trying too.
+        await SocialConnection.updateOne({ _id: conn._id }, { $set: { expiresAt: new Date(0) } });
+        throw new Error("Your Instagram connection has expired. Please reconnect Instagram.");
+      }
+      if (e.kind === "permission") {
+        throw new Error(
+          "Instagram refused the post. Reconnect Instagram to grant posting permission.",
+        );
+      }
+      if (e.kind === "rate-limit") {
+        throw new Error("Instagram is rate limiting posts. This run was skipped.");
+      }
+      if (e.kind === "container") {
+        // The image itself was rejected — unreachable, too large, or outside the
+        // 4:5 to 1.91:1 aspect range. The message is Meta's own text about the
+        // media, which is the one thing here the user can actually act on.
+        throw new Error(e.message);
+      }
+      if (e.kind === "version") {
+        console.error("[social] Instagram API version is sunset — set INSTAGRAM_API_VERSION");
+        throw new Error(
+          "Instagram publishing is temporarily unavailable while we update to their latest API.",
+        );
+      }
+      throw new Error("Unable to publish the Instagram post.");
+    }
+    throw e;
+  }
+}
+
+/**
+ * Publish to LinkedIn.
+ *
+ * Unlike Instagram, LinkedIn will not take a URL — it issues an upload target
+ * and wants the bytes — so the image is fetched back into this process first.
+ */
+async function publishLinkedIn(
   post: InstanceType<typeof ScheduledPost>,
 ): Promise<{ postUrl: string | null; postUrn: string }> {
   const conn = await SocialConnection.findOne({
@@ -158,6 +272,7 @@ async function recordRun(
   try {
     await SocialPostRun.create({
       userId: post.userId,
+      provider: post.provider,
       workspaceId: post.workspaceId,
       scheduledPostId: post._id,
       source,
@@ -196,7 +311,7 @@ export async function publishNow(
     // Recorded before it is rethrown, so a manual send that fails leaves the
     // same trail on the schedule as a failed tick — the studio's error line is
     // read from these fields, not from the response.
-    const message = e instanceof Error ? e.message : "Unable to publish the LinkedIn post.";
+    const message = e instanceof Error ? e.message : fallbackMessage(post);
     post.set({ lastStatus: "failed", lastError: message, lastRunAt: now });
     await post.save().catch(() => {});
     await recordRun(post, "manual", { status: "failed", error: message }, now);
@@ -244,7 +359,7 @@ export async function runDuePosts(now: Date = new Date()): Promise<RunSummary> {
       });
       summary.posted++;
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Unable to publish the LinkedIn post.";
+      const message = e instanceof Error ? e.message : fallbackMessage(post);
       await recordRun(post, "schedule", { status: "failed", error: message }, now);
       post.set({ lastStatus: "failed", lastError: message });
       summary.failed++;

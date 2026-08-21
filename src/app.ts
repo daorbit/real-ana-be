@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./http/routes/auth.js";
 import linkedinRoutes from "./http/routes/linkedin.js";
+import instagramRoutes from "./http/routes/instagram.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import collectRoutes from "./http/routes/collect.js";
@@ -190,6 +191,22 @@ app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
 // dashboard allowlist would accept, while `/status`, `/post` and disconnect are
 // ordinary dashboard fetches that need it.
 app.use("/api/auth/linkedin", linkedinRoutes);
+
+// Instagram account connection. Same router mounted twice, deliberately.
+//
+// `/api/auth/instagram` is where the dashboard's own fetches go, matching every
+// other route here. The bare `/auth/instagram` is what Meta was given: the
+// redirect, deauthorize and data-deletion URLs registered in the developer
+// portal carry no `/api` prefix, and Meta compares the redirect URI as a string
+// — it cannot be corrected on our side without re-registering, and the portal's
+// values are also referenced by the app's published privacy policy.
+//
+// The router applies CORS per route rather than taking it here, for the same
+// reason as LinkedIn above: the OAuth endpoints are browser navigations and
+// server-to-server callbacks that send no Origin the dashboard allowlist would
+// accept, while `/status` and disconnect are ordinary dashboard fetches.
+app.use("/api/auth/instagram", instagramRoutes);
+app.use("/auth/instagram", instagramRoutes);
 
 // Scheduled social posts. Scoped to the signed-in user rather than a workspace
 // prefix: a schedule publishes with that user's own LinkedIn token.
