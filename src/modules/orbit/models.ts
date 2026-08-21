@@ -167,3 +167,22 @@ export function resolveModel(id?: string, tier?: OrbitTier): OrbitModel | undefi
 export function fallbackChain(chosen: OrbitModel, tier?: OrbitTier): OrbitModel[] {
   return [chosen, ...availableModels(tier).filter((m) => m.id !== chosen.id)];
 }
+
+/**
+ * The caller's model, but only if it honours a JSON schema.
+ *
+ * For routes that need structured output rather than prose. A model without
+ * `structured` is never sent the schema, so it answers with a fence, or with a
+ * sentence wrapped around the object, or with the JSON double-encoded — all of
+ * which a caller then has to guess at. Returning `undefined` lets
+ * `resolveModel` pick the best structured model instead.
+ *
+ * Not a hard restriction: the fallback chain still reaches every model, so an
+ * unstructured one answers when the structured ones are rate-limited. This only
+ * decides which goes first.
+ */
+export function structuredModelId(id?: string): string | undefined {
+  if (!id) return undefined;
+  const model = availableModels().find((m) => m.id === id);
+  return model?.structured ? model.id : undefined;
+}

@@ -35,8 +35,9 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
-import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
+import { askOrbit, orbitConfigured, structuredModelId } from "../../modules/orbit/index.js";
 import { quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
+import { parsePlan } from "../../modules/social/plan-parse.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -576,23 +577,27 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         "invent figures, dates, links or claims they did not give you. Return an empty `suggestions` array.",
       host: quantalogOrbitHost,
       tenantId: ws.id,
-      // The model the author picked in the chat panel, so scheduling answers in
-      // the same voice they already chose. An unknown or unconfigured id
-      // resolves to the default rather than failing.
-      modelId: String(req.body?.modelId ?? "").slice(0, 60) || undefined,
+      // The author's picked model, but only when it honours a JSON schema.
+      // This route needs a structured answer, and the models that do not get
+      // one produce prose the parser then has to guess at — so a preference for
+      // an unstructured model is deliberately not carried over here. The
+      // fallback chain still reaches them if the structured ones are down.
+      modelId: structuredModelId(String(req.body?.modelId ?? "").slice(0, 60)),
     },
   );
 
   if (!result.ok) return res.status(result.status).json({ error: result.error });
 
-  // Models still occasionally wrap JSON in a fence despite the instruction, so
-  // the outermost braces are taken rather than trusting the whole string.
-  const raw = result.reply.trim();
-  const body = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(body) as Record<string, unknown>;
-  } catch {
+  // A fence, a sentence before the object, a double-encoded string — see
+  // `parsePlan` for the shapes models actually return here.
+  const parsed = parsePlan(result.reply);
+  if (!parsed) {
+    // Logged with the model that produced it: an unstructured model failing
+    // this consistently is a reason to reorder the chain, and that is invisible
+    // if every failure looks the same from the outside.
+    console.error(
+      `[social] plan reply was not JSON (model ${result.model}): ${result.reply.slice(0, 300)}`,
+    );
     return res.status(502).json({ error: "Orbit could not follow that. Try rewording it." });
   }
 

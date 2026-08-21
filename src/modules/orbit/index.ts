@@ -22,6 +22,7 @@ export {
   fallbackChain,
   providerReady,
   resolveModel,
+  structuredModelId,
 } from "./models.js";
 export type { ModelProvider, OrbitModel } from "./models.js";
 
