@@ -14,6 +14,7 @@ import {
 import {
   InstagramApiError,
   createImagePost as createInstagramPost,
+  createStoryPost,
 } from "../../infra/http-client/instagram-post.js";
 import { canPublish as canPublishInstagram } from "../../infra/http-client/instagram-auth.js";
 
@@ -143,14 +144,19 @@ async function publishInstagram(
   }
 
   try {
-    const created = await createInstagramPost(
-      token,
-      conn.providerUserId,
-      // One URL publishes as a single image, several as a carousel — the client
-      // picks the container shape from the length.
-      imagesOf(post),
-      post.caption,
-    );
+    // A story is a different container type and carries no caption. Only its
+    // first image is used: stories are published one at a time, and the
+    // composer does not offer more than one for this format.
+    const created = post.format === "story"
+      ? await createStoryPost(token, conn.providerUserId, post.imageUrl)
+      : await createInstagramPost(
+          token,
+          conn.providerUserId,
+          // One URL publishes as a single image, several as a carousel — the
+          // client picks the container shape from the length.
+          imagesOf(post),
+          post.caption,
+        );
     return { postUrl: created.permalink, postUrn: created.mediaId };
   } catch (e) {
     if (e instanceof InstagramApiError) {
@@ -298,6 +304,7 @@ async function recordRun(
     await SocialPostRun.create({
       userId: post.userId,
       provider: post.provider,
+      format: post.format,
       workspaceId: post.workspaceId,
       scheduledPostId: post._id,
       source,

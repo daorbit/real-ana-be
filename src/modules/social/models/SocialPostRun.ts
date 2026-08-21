@@ -154,6 +154,16 @@ const socialPostRunSchema = new Schema(
     /** The viewable permalink, when the URN maps to one. */
     postUrl: { type: String, trim: true, default: "" },
 
+    /**
+     * Feed post or story.
+     *
+     * Kept because it changes how the row reads rather than only how it was
+     * sent: a story's permalink stops working 24 hours after it went out, and
+     * a Sent tab that offered a dead "Go to post" link with no explanation
+     * would look like the link was broken rather than the story expired.
+     */
+    format: { type: String, enum: ["feed", "story"], required: true, default: "feed" },
+
     /** The post exactly as published. Copied, never referenced — see above. */
     caption: { type: String, default: "" },
     imageUrl: { type: String, default: "" },

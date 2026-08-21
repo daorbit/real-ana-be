@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import {
   ScheduledPost, POST_FREQUENCIES, POST_MODES, POST_STATUSES, POST_PROVIDERS, PostProvider,
+  POST_FORMATS, PostFormat,
 } from "../../modules/social/models/ScheduledPost.js";
 import { computeNextRun } from "../../modules/social/schedule-time.js";
 import { publishNow } from "../../modules/social/post-runner.js";
@@ -53,6 +54,7 @@ function publicPost(doc: InstanceType<typeof ScheduledPost>) {
   return {
     id: doc.id,
     provider: doc.provider,
+    format: doc.format,
     workspaceId: String(doc.workspaceId),
     name: doc.name,
     caption: doc.caption,
@@ -91,6 +93,7 @@ function publicRun(doc: InstanceType<typeof SocialPostRun>) {
   return {
     id: doc.id,
     provider: doc.provider,
+    format: doc.format,
     scheduledPostId: doc.scheduledPostId ? String(doc.scheduledPostId) : null,
     workspaceId: doc.workspaceId ? String(doc.workspaceId) : null,
     name: doc.name,
@@ -315,6 +318,26 @@ async function storeImage(
 const MAX_POST_IMAGES = 10;
 
 /**
+ * Feed post or story, checked against the network it is going to.
+ *
+ * Stories are Instagram's alone, and they carry no caption — so a story on
+ * LinkedIn, or a story with a caption the author expects to be published, is
+ * refused here rather than silently dropped by the API.
+ */
+function readFormat(body: unknown, provider: PostProvider): PostFormat {
+  const raw = String((body as { format?: unknown })?.format ?? "feed");
+  if (!POST_FORMATS.includes(raw as PostFormat)) {
+    throw badRequest("Choose a post format.");
+  }
+  const format = raw as PostFormat;
+
+  if (format === "story" && provider !== "instagram") {
+    throw badRequest("Stories are an Instagram format.");
+  }
+  return format;
+}
+
+/**
  * The post's images, in order, from either request shape.
  *
  * `images` is the multi-image form; `image` is what every client sent before
@@ -515,7 +538,11 @@ router.post(
     await assertWorkspaceAccess(req.userId!, workspaceId);
 
     const provider = readProvider(req.body?.provider);
-    const caption = readCaption(req.body?.caption, provider);
+    const format = readFormat(req.body, provider);
+    // A story publishes no caption, so one is neither required nor kept — the
+    // schema wants a string, and an empty one is the honest record of what
+    // went out.
+    const caption = format === "story" ? "" : readCaption(req.body?.caption, provider);
     const schedule = readSchedule(req.body ?? {});
 
     // Refused at save time rather than at the first run: a schedule that can
@@ -544,10 +571,17 @@ router.post(
     if (provider === "instagram" && !imageUrl) {
       throw badRequest("Instagram posts need an image.");
     }
+    // One story, one image. Instagram publishes stories individually, and
+    // silently taking the first of several would lose the rest without saying
+    // so.
+    if (format === "story" && extraImages.length > 0) {
+      throw badRequest("A story carries one image. Post the rest separately.");
+    }
 
     const doc = await ScheduledPost.create({
       userId: req.userId,
       provider,
+      format,
       workspaceId,
       name,
       caption,

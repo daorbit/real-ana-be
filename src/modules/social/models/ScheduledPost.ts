@@ -43,6 +43,17 @@ export const POST_MODES = ["once", "repeat"] as const;
 export type PostMode = (typeof POST_MODES)[number];
 
 /**
+ * Where on the network a post lands.
+ *
+ * `feed` is everything that existed before this field, which is why it is the
+ * default — no backfill. `story` is Instagram-only and behaves differently
+ * enough to be worth a field rather than a flag: it carries no caption, wants
+ * a 9:16 image, and the post it produces disappears after 24 hours.
+ */
+export const POST_FORMATS = ["feed", "story"] as const;
+export type PostFormat = (typeof POST_FORMATS)[number];
+
+/**
  * `sent` is terminal, and only a `once` post reaches it: there is no next slot
  * to advance to, so the runner marks it published rather than leaving a row
  * that is forever due.
@@ -78,7 +89,17 @@ const scheduledPostSchema = new Schema(
     name: { type: String, required: true, trim: true },
 
  
-    caption: { type: String, required: true, trim: true, maxlength: 3000 },
+    /**
+     * The post body, exactly as it will appear.
+     *
+     * Defaulted rather than required: a story publishes no text at all, so an
+     * empty caption is a valid record of what went out. Mongoose treats "" as
+     * missing for `required`, so requiring it would reject every story — and a
+     * conditional `required` makes the inferred type nullable, which pushes a
+     * null check into every consumer for no gain. The route enforces that a
+     * feed post has one.
+     */
+    caption: { type: String, default: "", trim: true, maxlength: 3000 },
 
  
     imageUrl: { type: String, trim: true, default: "" },
@@ -100,6 +121,12 @@ const scheduledPostSchema = new Schema(
 
  
     groupId: { type: String, trim: true, default: "", index: true },
+
+    /**
+     * Feed post or story. Instagram only — LinkedIn has no equivalent, and the
+     * route refuses `story` on any other network.
+     */
+    format: { type: String, enum: POST_FORMATS, required: true, default: "feed" },
 
     mode: { type: String, enum: POST_MODES, required: true, default: "once" },
 

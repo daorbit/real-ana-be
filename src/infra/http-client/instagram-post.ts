@@ -295,8 +295,33 @@ export async function createImagePost(
   return publishContainer(accessToken, igUserId, containerId);
 }
 
-/** Instagram's own ceiling on a carousel, which LinkedIn's multi-image shares. */
 export const MAX_CAROUSEL_ITEMS = 10;
+
+ 
+export async function createStoryPost(
+  accessToken: string,
+  igUserId: string,
+  imageUrl: string,
+): Promise<{ mediaId: string; permalink: string | null }> {
+  assertPublicImageUrl(imageUrl);
+
+  const { status, data } = await axios.post(
+    `${GRAPH_BASE}/${apiVersion()}/${igUserId}/media`,
+    null,
+    {
+      params: {
+        image_url: imageUrl,
+        media_type: "STORIES",
+        access_token: accessToken,
+      },
+      timeout: 30000,
+      validateStatus: () => true,
+    },
+  );
+
+  if (status !== 200 || !data?.id) throw graphError(status, data);
+  return publishContainer(accessToken, igUserId, String(data.id));
+}
 
  
 export async function createCarouselContainer(
