@@ -797,6 +797,38 @@ router.post(
   }),
 );
 
+/**
+ * Remove one row from the Sent history.
+ *
+ * The record only. The post itself stays up on LinkedIn or Instagram — this is
+ * "stop listing it here", not "unpublish it", and the studio says so before
+ * asking. Deleting the real post is a separate decision with a different blast
+ * radius, and conflating the two behind one button is how a tidy-up becomes an
+ * accident.
+ *
+ * The Cloudinary asset is deliberately left alone. A run's image is the same
+ * file the schedule still points at, so deleting it here would break a
+ * schedule that is due to publish again — `SocialPostRun` copies the URL
+ * precisely because the two have separate lifetimes.
+ *
+ * Registered before `/:id` below: Express matches in order, and that route
+ * would otherwise swallow this one with `id` set to "runs".
+ */
+router.delete(
+  "/runs/:id",
+  requireAuth,
+  blockDemoWrites,
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    // Scoped by `userId` in the query: someone else's run is not found rather
+    // than found-and-refused.
+    const run = await SocialPostRun.findOne({ _id: req.params.id, userId: req.userId });
+    if (!run) throw notFound("post not found");
+
+    await run.deleteOne();
+    res.json({ deleted: true });
+  }),
+);
+
 /** Delete a schedule, and the image it owns. */
 router.delete(
   "/:id",
