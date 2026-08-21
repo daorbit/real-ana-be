@@ -32,9 +32,15 @@ export const ORBIT_TIER_RANK: Record<OrbitTier, number> = {
   advanced: 2,
 };
 
-/** Whether a tenant on `tenantTier` may use a model on `modelTier`. */
-export function tierAllows(tenantTier: OrbitTier, modelTier: OrbitTier): boolean {
-  return ORBIT_TIER_RANK[modelTier] <= ORBIT_TIER_RANK[tenantTier];
+/**
+ * Whether a tenant on `tenantTier` may use a model on `modelTier`.
+ *
+ * Always true: every plan sees and can call every model. Tiers only gate
+ * quota, history length, question length, and burst rate now — model choice
+ * is no longer a plan boundary.
+ */
+export function tierAllows(_tenantTier: OrbitTier, _modelTier: OrbitTier): boolean {
+  return true;
 }
 
 /** The strongest of a set of tiers, or `basic` when given none. */

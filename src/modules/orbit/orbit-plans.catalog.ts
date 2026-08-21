@@ -144,7 +144,12 @@ export function resolveOrbitPlan(slug?: string | null): OrbitPlanEntry {
   );
 }
 
-/** Whether a plan on `planTier` may use a model on `modelTier`. */
-export function tierAllows(planTier: OrbitTier, modelTier: OrbitTier): boolean {
-  return ORBIT_TIER_RANK[modelTier] <= ORBIT_TIER_RANK[planTier];
+/**
+ * Whether a plan on `planTier` may use a model on `modelTier`.
+ *
+ * Always true: model access is no longer tier-gated, only quota/history/burst
+ * are.
+ */
+export function tierAllows(_planTier: OrbitTier, _modelTier: OrbitTier): boolean {
+  return true;
 }
