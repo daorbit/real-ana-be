@@ -63,10 +63,18 @@ function studioBase(): string {
   return (process.env.STUDIO_BASE_URL ?? "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
 }
 
+/**
+ * The connections page, with the outcome in the query string.
+ *
+ * Only reached when the flow ran as a full-page navigation — a blocked popup —
+ * since the popup itself reports back to its opener instead. The path is the
+ * app's real settings route, `/app/settings`: a bare `/settings` is a 404 here,
+ * which would turn a recoverable failure into a dead end.
+ */
 function studioUrl(status: string, detail?: string): string {
   const params = new URLSearchParams({ instagram: status });
   if (detail) params.set("reason", detail);
-  return `${studioBase()}/settings?${params.toString()}`;
+  return `${studioBase()}/app/settings?${params.toString()}`;
 }
 
 /** What went wrong, in words, for the few reasons a user can act on. */
