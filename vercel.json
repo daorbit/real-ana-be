@@ -3,7 +3,6 @@
   "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }],
   "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }],
   "crons": [
-    { "path": "/api/cron/forms-retention", "schedule": "0 3 * * *" },
     { "path": "/api/cron/reports", "schedule": "0 8 * * *" },
     { "path": "/api/cron/social-stats", "schedule": "0 10 * * *" }
   ]

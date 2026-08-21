@@ -9,7 +9,6 @@ import {
   type CompareModeKey,
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
-import { Form } from "../forms/models/Form.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { invalidateSite } from "./event-quota.js";
 import {
@@ -56,7 +55,6 @@ export async function activatePlanPeriod(
         auditsUsed: 0,
         crawlsUsed: 0,
         eventsUsed: 0,
-        submissionsUsed: 0,
       },
     },
     { upsert: true }
@@ -259,40 +257,12 @@ export async function canConfigureReport(
 }
 
 /**
- * Whether `workspaceId` may hold one more published form.
- *
- * `excludeId` lets an edit (e.g. re-publishing) re-check without the form
- * being edited counting against itself, matching `canCreateReportSchedule`.
- * Draft forms don't count — the cap is on how many forms are live and
- * collecting, not on how many exist.
- */
-export async function canCreateForm(
-  workspaceId: string,
-  excludeId?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const plan = await currentPlan(workspaceId);
-  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to create forms" };
-
-  const count = await Form.countDocuments({
-    workspaceId,
-    status: "published",
-    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
-  });
-  if (count >= plan.maxForms)
-    return {
-      ok: false,
-      error: `this workspace's plan allows ${plan.maxForms} published form${plan.maxForms === 1 ? "" : "s"} — upgrade to publish more`,
-    };
-  return { ok: true };
-}
-
-/**
  * Whether `workspaceId` may add one more scheduled social post.
  *
  * Counts what is queued rather than what has ever been sent: a post that has
  * already published is history and holds nothing open, so it does not spend a
  * slot. `excludeId` lets an edit re-check the cap without the post being
- * edited counting against itself, matching `canCreateForm`.
+ * edited counting against itself.
  */
 export async function canCreateScheduledPost(
   workspaceId: string,
@@ -331,34 +301,6 @@ export async function canUseRepeatingPosts(
   if (!plan) return { ok: false, error: "this workspace has no active plan" };
   if (!plan.repeatingPosts)
     return { ok: false, error: "repeating posts are not included in this workspace's plan — upgrade to use them" };
-  return { ok: true };
-}
-
-/**
- * Whether this workspace's plan still has submission quota this cycle.
- *
- * Deliberately advisory, not a gate on the write: the caller in
- * `forms-public.ts` always accepts and stores the submission regardless of
- * this result — see the module comment there. This exists so the route can
- * flag `overQuota` and skip the notification email without a second lookup.
- */
-export async function canAcceptSubmission(workspaceId: string): Promise<boolean> {
-  const plan = await currentPlan(workspaceId);
-  if (!plan) return false;
-
-  const sub = await Subscription.findOne({ workspaceId }).select("submissionsUsed");
-  const used = (sub?.get("submissionsUsed") as number) ?? 0;
-  return used < plan.monthlySubmissionQuota;
-}
-
-/** Whether this workspace's plan includes CSV export of form submissions. */
-export async function canExportSubmissions(
-  workspaceId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const plan = await currentPlan(workspaceId);
-  if (!plan) return { ok: false, error: "this workspace has no active plan" };
-  if (!plan.formsCsvExport)
-    return { ok: false, error: "CSV export is a paid-plan feature — upgrade this workspace to export submissions" };
   return { ok: true };
 }
 

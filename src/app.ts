@@ -28,8 +28,6 @@ import contactPublicRoutes from "./http/routes/contact-public.js";
 import newsletterPublicRoutes from "./http/routes/newsletter-public.js";
 import supportRoutes from "./http/routes/support.js";
 import orbitRoutes from "./http/routes/orbit.js";
-import formRoutes from "./http/routes/forms.js";
-import formsPublicRoutes from "./http/routes/forms-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
@@ -185,10 +183,6 @@ app.use("/api/public/reports", openCors, reportsPublicRoutes);
 app.use("/api/public/contact", openCors, contactPublicRoutes);
 // The newsletter dialog on the same site. Same origin story, same write-only shape.
 app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
-// The hosted form page, iframed on arbitrary customer domains — same open,
-// unauthenticated model as `/api/collect`.
-app.use("/api/public/forms", openCors, formsPublicRoutes);
-
 // LinkedIn account connection and publishing. Mounted before `/api/auth` so
 // its paths win. The router applies CORS per route rather than taking it here:
 // its two redirect endpoints are browser navigations (one from a
@@ -230,11 +224,6 @@ app.use("/api/support", dashboardCors, supportRoutes);
 // tier, its question quota, and its addon credits all live on the workspace's
 // subscription, the same as audits and crawls.
 app.use("/api/workspaces/:wid/orbit", dashboardCors, orbitRoutes);
-// Lead forms: create/list under the workspace prefix, everything naming one
-// form directly (detail/update/publish/submissions) under its own id-based
-// prefix — see the routing note at the top of `forms.ts`.
-app.use("/api/workspaces/:wid/forms", dashboardCors, formRoutes);
-app.use("/api/forms", dashboardCors, formRoutes);
 app.use("/api/admin", dashboardCors, adminRoutes);
 app.use("/api/billing", dashboardCors, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —

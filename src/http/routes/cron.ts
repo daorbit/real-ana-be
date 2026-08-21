@@ -2,7 +2,6 @@ import { Router, Request, Response } from "express";
 import { repriceAllPlans } from "../../modules/billing/fx.js";
 import { sendFxSuccessReport, sendFxFailureReport } from "../../modules/billing/fx-report.js";
 import { runDueSchedules } from "../../modules/reports/report-runner.js";
-import { sweepExpiredSubmissions } from "../../modules/forms/submissions.service.js";
 import { runDuePosts } from "../../modules/social/post-runner.js";
 import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 
@@ -233,25 +232,6 @@ router.get("/run", async (req: Request, res: Response) => {
 
   if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));
   res.json({ ok: true, ran, errors });
-});
-
-/**
- * Delete form submissions past the retention window their form owner set.
- *
- * Most forms have no window (`retentionDays: null`, the default) and are
- * never touched by this — see `sweepExpiredSubmissions`.
- */
-router.get("/forms-retention", async (req: Request, res: Response) => {
-  if (!authorizeCron(req, res)) return;
-
-  try {
-    const result = await sweepExpiredSubmissions();
-    console.log(`[cron] forms retention: ${result.formsSwept} forms swept, ${result.deleted} submissions deleted`);
-    res.json({ ok: true, ...result });
-  } catch (e) {
-    console.error("[cron] forms retention sweep failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
-  }
 });
 
 export default router;
