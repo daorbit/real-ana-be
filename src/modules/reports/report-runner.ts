@@ -5,6 +5,7 @@ import { SeoReport } from "../seo/models/SeoReport.js";
 import { computeStats, resolveWindow } from "../analytics/stats.service.js";
 import { buildReportWorkbook, type SeoRow } from "./report-xlsx.js";
 import { sendReportEmail } from "./report-mail.js";
+import { mailConfigured } from "../../infra/mail/mailer.js";
 import { sendWhatsAppReport } from "./report-whatsapp.js";
 import { renderReportPage } from "./report-html.js";
 import { buildDigest } from "./digest.js";
@@ -284,7 +285,17 @@ export async function runSchedule(
   if (channels.email) {
     const recipients = schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[];
 
-    for (const recipient of recipients) {
+ 
+    const sendable = mailConfigured() ? recipients : [];
+    if (!mailConfigured()) {
+      outcome.failed.push(
+        ...recipients
+          .filter((r) => !r.unsubscribedAt && (!options.onlyTo || r.email === options.onlyTo))
+          .map((r) => ({ email: r.email, error: "Email is not configured" }))
+      );
+    }
+
+    for (const recipient of sendable) {
       if (options.onlyTo && recipient.email !== options.onlyTo) continue;
       if (recipient.unsubscribedAt) {
         outcome.skipped.push(recipient.email);
