@@ -28,6 +28,7 @@ import {
 import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
+import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey } from "../middleware/api-key.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
@@ -965,6 +966,73 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
   const result = await computeFunnel(ids, steps, rangeKey, win);
   res.json({ steps: result });
+});
+
+// --- saved funnel definitions --------------------------------------------
+function parseFunnelSteps(raw: unknown): FunnelStep[] {
+  const arr = Array.isArray(raw) ? raw : [];
+  return arr
+    .map((s: { type?: string; value?: string }) => ({
+      type: s?.type === "event" ? ("event" as const) : ("page" as const),
+      value: String(s?.value ?? "").slice(0, 300),
+    }))
+    .filter((s) => s.value)
+    .slice(0, 8);
+}
+
+router.get("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  const funnels = await Funnel.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
+  res.json(
+    funnels.map((f) => ({
+      id: f.id,
+      name: f.get("name"),
+      steps: f.get("steps"),
+    })),
+  );
+});
+
+router.post("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const name = String(req.body?.name ?? "").trim().slice(0, 80);
+  const steps = parseFunnelSteps(req.body?.steps);
+  if (!name) return res.status(400).json({ error: "name required" });
+  if (steps.length < 2) return res.status(400).json({ error: "at least 2 steps required" });
+
+  const funnel = await Funnel.create({ workspaceId: ws.id, name, steps });
+  res.status(201).json({ id: funnel.id, name, steps });
+});
+
+router.put("/:wid/funnels/:fid", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const name = String(req.body?.name ?? "").trim().slice(0, 80);
+  const steps = parseFunnelSteps(req.body?.steps);
+  if (!name) return res.status(400).json({ error: "name required" });
+  if (steps.length < 2) return res.status(400).json({ error: "at least 2 steps required" });
+
+  const funnel = await Funnel.findOne({ _id: req.params.fid, workspaceId: ws.id });
+  if (!funnel) return res.status(404).json({ error: "funnel not found" });
+  funnel.set({ name, steps });
+  await funnel.save();
+  res.json({ id: funnel.id, name, steps });
+});
+
+router.delete("/:wid/funnels/:fid", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  const funnel = await Funnel.findOne({ _id: req.params.fid, workspaceId: ws.id });
+  if (!funnel) return res.status(404).json({ error: "funnel not found" });
+  await funnel.deleteOne();
+  res.status(204).end();
 });
 
 // Page-to-page navigation graph for the workspace.
