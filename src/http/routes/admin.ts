@@ -228,33 +228,6 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
 });
 
 /**
- * Grant or revoke admin on another account. Superadmin-only: a regular admin
- * being able to mint more admins (or demote a rival) is an escalation path
- * with no legitimate use — only the one hardcoded superadmin account may.
- */
-router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
-  const role = req.body?.role === "admin" ? "admin" : req.body?.role === "user" ? "user" : null;
-  if (!role) return res.status(400).json({ error: "role must be 'admin' or 'user'" });
-
-  const target = await User.findById(req.params.userId).select("email role");
-  if (!target) return res.status(404).json({ error: "user not found" });
-  if (target.id === req.userId)
-    return res.status(400).json({ error: "cannot change your own role" });
-  // super_admin is not a role this route can set or touch — it's granted only
-  // by a direct DB write, and this guard keeps it that way even against the
-  // account holding it.
-  if (target.role === "super_admin")
-    return res.status(400).json({ error: "cannot change the superadmin's role" });
-
-  target.role = role;
-  await target.save();
-
-  console.log(`[admin] ${req.userId} set ${target.email} role to ${role}`);
-
-  res.json({ id: target.id, email: target.email, role: target.role });
-});
-
-/**
  * Grant one extra site slot to a workspace, on top of the flat
  * `MAX_SITES_PER_WORKSPACE` cap every plan shares.
  *
