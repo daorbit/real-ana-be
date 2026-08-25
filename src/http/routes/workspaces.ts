@@ -11,6 +11,7 @@ import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.
 import {
   computeStats,
   computeFunnel,
+  computeUserFlow,
   computeRetention,
   computeGoals,
   exportEvents,
@@ -964,6 +965,25 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
   const result = await computeFunnel(ids, steps, rangeKey, win);
   res.json({ steps: result });
+});
+
+// Page-to-page navigation graph for the workspace.
+router.get("/:wid/user-flow", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (ids.length === 0) return res.json({ nodes: [], edges: [] });
+
+  const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(ws.id, rangeKey);
+  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+
+  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
+  const result = await computeUserFlow(ids, rangeKey, win);
+  res.json(result);
 });
 
 // Weekly retention cohorts for the workspace.

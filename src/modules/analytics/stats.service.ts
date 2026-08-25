@@ -608,6 +608,63 @@ export async function computeFunnel(
   }));
 }
 
+export type FlowNode = { id: string; count: number };
+export type FlowEdge = { source: string; target: string; count: number };
+
+/**
+ * Page-to-page navigation graph: for each session, the pageviews in time
+ * order become a path, and every adjacent pair becomes an A -> B edge. Caps
+ * both the number of sessions scanned and the pages kept, since a busy site
+ * can have thousands of distinct paths in a single window.
+ */
+export async function computeUserFlow(siteIds: string[], rangeKey: string, win?: Window) {
+  const { since, until } = win ?? resolveWindow(rangeKey);
+
+  const sessions = await Event.aggregate([
+    { $match: { siteId: { $in: siteIds }, type: "pageview", ts: { $gte: since, $lt: until } } },
+    { $sort: { ts: 1 } },
+    { $group: { _id: "$sessionId", paths: { $push: "$path" } } },
+    { $limit: 20000 },
+  ]);
+
+  const nodeCounts = new Map<string, number>();
+  const edgeCounts = new Map<string, number>();
+
+  for (const s of sessions) {
+    const paths: string[] = s.paths ?? [];
+    for (let i = 0; i < paths.length; i++) {
+      const p = paths[i];
+      nodeCounts.set(p, (nodeCounts.get(p) ?? 0) + 1);
+      if (i > 0) {
+        const prev = paths[i - 1];
+        // Skip a page refreshing into itself — not a navigation.
+        if (prev === p) continue;
+        const key = `${prev} ${p}`;
+        edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Keep only the busiest pages so the graph stays readable, then drop any
+  // edge that fell outside that set.
+  const nodes: FlowNode[] = [...nodeCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 25)
+    .map(([id, count]) => ({ id, count }));
+  const kept = new Set(nodes.map((n) => n.id));
+
+  const edges: FlowEdge[] = [...edgeCounts.entries()]
+    .map(([key, count]) => {
+      const [source, target] = key.split(" ");
+      return { source, target, count };
+    })
+    .filter((e) => kept.has(e.source) && kept.has(e.target))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 60);
+
+  return { nodes, edges };
+}
+
 /** Who is on the site right now, and what page are they looking at. */
 async function livePages(siteIds: string[]) {
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
