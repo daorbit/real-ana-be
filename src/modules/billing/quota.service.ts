@@ -133,11 +133,14 @@ export async function canCreateSite(
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to add a site" };
 
+  const sub = await Subscription.findOne({ workspaceId }).select("addonSiteSlots");
+  const cap = MAX_SITES_PER_WORKSPACE + ((sub?.get("addonSiteSlots") as number) ?? 0);
+
   const count = await Site.countDocuments({ workspaceId });
-  if (count >= MAX_SITES_PER_WORKSPACE)
+  if (count >= cap)
     return {
       ok: false,
-      error: `a workspace holds up to ${MAX_SITES_PER_WORKSPACE} sites — create another workspace to track more`,
+      error: `a workspace holds up to ${cap} sites — create another workspace to track more`,
     };
   return { ok: true };
 }
@@ -444,8 +447,9 @@ export async function quotaSummary(workspaceId: string) {
       used: (sub.eventsUsed as number) ?? 0,
     },
     sites: {
-      quota: MAX_SITES_PER_WORKSPACE,
+      quota: MAX_SITES_PER_WORKSPACE + ((sub.get("addonSiteSlots") as number) ?? 0),
       used: siteCount,
+      addonSlots: (sub.get("addonSiteSlots") as number) ?? 0,
     },
     maxSitesPerWorkspace: MAX_SITES_PER_WORKSPACE,
 

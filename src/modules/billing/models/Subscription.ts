@@ -107,6 +107,16 @@ const subscriptionSchema = new Schema(
      * that runs out. Buying twice raises the cap twice.
      */
     addonPostSlots: { type: Number, default: 0 },
+    /**
+     * Extra site slots granted by the superadmin, on top of the flat
+     * `MAX_SITES_PER_WORKSPACE` cap every plan shares.
+     *
+     * Not a customer purchase like the addon fields above — there is no
+     * self-serve path to raise the site cap, since the flat limit is meant to
+     * push growth into another workspace. This exists only for support cases
+     * where the superadmin grants an exception directly.
+     */
+    addonSiteSlots: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

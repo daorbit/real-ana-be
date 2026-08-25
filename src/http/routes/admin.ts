@@ -255,6 +255,29 @@ router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
 });
 
 /**
+ * Grant one extra site slot to a workspace, on top of the flat
+ * `MAX_SITES_PER_WORKSPACE` cap every plan shares.
+ *
+ * Support-only exception, not a purchase: there is no customer-facing way to
+ * raise this cap, since the product steers growth into another workspace
+ * instead. Whole-router `requireSuperAdmin` covers the auth here.
+ */
+router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, res: Response) => {
+  const ws = await Workspace.findById(req.params.workspaceId).select("_id");
+  if (!ws) return res.status(404).json({ error: "workspace not found" });
+
+  const sub = await Subscription.findOneAndUpdate(
+    { workspaceId: ws.id },
+    { $inc: { addonSiteSlots: 1 } },
+    { upsert: true, new: true },
+  );
+
+  console.log(`[admin] ${req.userId} granted a site slot to workspace ${ws.id}`);
+
+  res.json({ workspaceId: ws.id, addonSiteSlots: sub.get("addonSiteSlots") });
+});
+
+/**
  * Delete an account and everything it owns. Superadmin-only, same reasoning
  * as the role route above — an irreversible action on another account isn't
  * something every admin should be able to do.
