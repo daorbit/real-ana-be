@@ -906,11 +906,13 @@ router.get("/:wid/users", async (req: AuthedRequest, res: Response) => {
   const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
   const ids = selectSiteIds(sites, req.query.sites);
-  if (!ids.length) return res.json({ users: [] });
+  if (!ids.length) return res.json({ users: [], total: 0, page: 1, pageSize: 10 });
 
   const search = String(req.query.q ?? "").trim().slice(0, 120);
+  const pageSize = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
+  const page = Math.max(Number(req.query.page) || 1, 1);
 
-  const users = await Event.aggregate([
+  const [result] = await Event.aggregate([
     {
       $match: {
         siteId: { $in: ids },
@@ -930,17 +932,28 @@ router.get("/:wid/users", async (req: AuthedRequest, res: Response) => {
       },
     },
     { $sort: { lastSeen: -1 } },
-    { $limit: 100 },
+    {
+      // One round trip for both the page and the count it's paged against —
+      // the alternative is two queries that can disagree if a user is traced
+      // between them.
+      $facet: {
+        users: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }],
+        total: [{ $count: "count" }],
+      },
+    },
   ]);
 
   res.json({
-    users: users.map((u) => ({
+    users: (result?.users ?? []).map((u: any) => ({
       appUserId: u._id,
       lastSeen: u.lastSeen,
       lastAction: u.lastAction,
       siteId: u.siteId,
       eventCount: u.eventCount,
     })),
+    total: result?.total?.[0]?.count ?? 0,
+    page,
+    pageSize,
   });
 });
 
