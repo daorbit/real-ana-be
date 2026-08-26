@@ -6,8 +6,17 @@ const siteSchema = new Schema(
     projectId: { type: Schema.Types.ObjectId, ref: "Project", index: true }, // optional (platform sites)
     userId: { type: Schema.Types.ObjectId, ref: "User", index: true }, // optional (platform sites have no dashboard user)
     name: { type: String, required: true },
-    domain: { type: String, required: true },
+    /**
+     * "web" sites are tracked anonymously via tracker.js against a domain.
+     * "app" sites are tracked via the mobile SDK, always tied to a signed-up
+     * appUserId rather than a rotating visitor hash — see Event.appUserId.
+     */
+    platform: { type: String, enum: ["web", "app"], default: "web" },
+    // Required for web sites only; app sites use bundleId/packageName instead.
+    domain: { type: String, default: "" },
     framework: { type: String, default: "other" }, // react | vue | angular | svelte | other
+    /** iOS bundle id / Android package name — app sites only. */
+    bundleId: { type: String, default: "" },
     siteId: { type: String, required: true, unique: true, index: true }, // public tracking key
     /**
      * Latest tracker version this site has reported. Scripts predating the

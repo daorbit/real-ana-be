@@ -20,6 +20,16 @@ const eventSchema = new Schema({
   clickId: { type: String, default: "" }, // id or data-va-cta attribute
   clickHref: { type: String, default: "" }, // destination, for links
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
+  /**
+   * The tenant's own end-user id, set by the app SDK's `identify()` after
+   * signup/login. Absent on pre-signup events (onboarding, signup_started),
+   * which carry only `installId` until identify() backfills this field onto
+   * them — see POST /api/identify. Unlike `visitorHash`, this never rotates:
+   * it is how a user's full history stays queryable across sessions.
+   */
+  appUserId: { type: String, default: "", index: true },
+  /** Persistent per-install id from the app SDK, stable across logins. */
+  installId: { type: String, default: "" },
   sessionId: { type: String, index: true },
 
   // client context
@@ -96,5 +106,9 @@ const eventSchema = new Schema({
 // Common range queries per site
 eventSchema.index({ siteId: 1, ts: -1 });
 eventSchema.index({ siteId: 1, type: 1, ts: -1 });
+// Per-user timeline: "everything user X did, in order" — app sites only.
+eventSchema.index({ siteId: 1, appUserId: 1, ts: -1 });
+// Backfill lookup during identify(): find every pre-signup event for an install.
+eventSchema.index({ siteId: 1, installId: 1 });
 
 export const Event = mongoose.model("Event", eventSchema);

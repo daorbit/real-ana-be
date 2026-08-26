@@ -192,9 +192,12 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "editor");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const { name, domain, framework, trackerOptions } = req.body ?? {};
-  if (!name || !domain)
-    return res.status(400).json({ error: "name, domain required" });
+  const { name, platform, domain, framework, bundleId, trackerOptions } = req.body ?? {};
+  if (!name) return res.status(400).json({ error: "name required" });
+  // Web sites are still domain-bound (that's what the tracker snippet installs
+  // against); app sites are identified by bundleId instead.
+  if (platform !== "app" && !domain)
+    return res.status(400).json({ error: "domain required" });
 
   const allowed = await canCreateSite(ws.id);
   if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
@@ -203,8 +206,10 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     workspaceId: ws.id,
     userId: req.userId,
     name,
-    domain,
+    platform: platform === "app" ? "app" : "web",
+    domain: domain ?? "",
     framework: framework ?? "other",
+    bundleId: bundleId ?? "",
     siteId: nanoid(16),
     trackerOptions: parseTrackerOptions(trackerOptions),
   });

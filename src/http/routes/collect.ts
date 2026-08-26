@@ -113,6 +113,9 @@ router.post("/", async (req, res) => {
       clickId: str(body.clickId, 120),
       clickHref: str(body.clickHref, 300),
       visitorHash: vh,
+      // App SDK fields — absent on web events.
+      appUserId: str(body.appUserId, 120),
+      installId: str(body.installId, 120),
       // Prefer the tracker's session id; fall back to the daily visitor hash.
       sessionId: str(body.sessionId, 60) || vh,
 
