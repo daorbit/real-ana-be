@@ -21,15 +21,19 @@ const eventSchema = new Schema({
   clickHref: { type: String, default: "" }, // destination, for links
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
   /**
-   * The tenant's own end-user id, set by the app SDK's `identify()` after
-   * signup/login. Absent on pre-signup events (onboarding, signup_started),
-   * which carry only `installId` until identify() backfills this field onto
-   * them — see POST /api/identify. Unlike `visitorHash`, this never rotates:
-   * it is how a user's full history stays queryable across sessions.
+   * The tenant's own end-user id. Set client-side via `rta.identify(userId)`
+   * (web) or the React Native SDK's `identify()` (app) once the host knows
+   * who's logged in; every event after that carries it. Unlike
+   * `visitorHash`, this never rotates — it is how one user's full history
+   * stays queryable across sessions.
    */
   appUserId: { type: String, default: "", index: true },
-  /** Persistent per-install id from the app SDK, stable across logins. */
+  /** Persistent per-install id from the React Native SDK, stable across logins. */
   installId: { type: String, default: "" },
+  /** Where the action happened, e.g. "dashboard" — identified events only. */
+  source: { type: String, default: "" },
+  /** Where the action led, e.g. "widget_modal" — identified events only. */
+  destination: { type: String, default: "" },
   sessionId: { type: String, index: true },
 
   // client context

@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 6;
+  var VERSION = 7;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -670,18 +670,56 @@
   }
 
   /* ------------------------------------------------------------------
+   * Identity — held in memory only, for this page load's lifetime.
+   *
+   * Not persisted by the tracker itself (no localStorage/cookie): the host
+   * app already knows who is logged in on every load, so it calls
+   * identify() again itself rather than the tracker caching a value that
+   * could go stale after a logout the tracker never hears about.
+   * ------------------------------------------------------------------ */
+  var appUserId = "";
+
+  /* ------------------------------------------------------------------
    * Public API
    * ------------------------------------------------------------------ */
   window.rta = {
-    track: function (name, props) {
+    /**
+     * Call once per load, right after the app knows who's logged in
+     * (or on every render of a logged-in shell — it's just a variable
+     * assignment). Every track() call after this carries the user id.
+     */
+    identify: function (userId) {
+      appUserId = userId ? String(userId) : "";
+    },
+
+    /** Call on logout, so events after it stop being attributed to that user. */
+    reset: function () {
+      appUserId = "";
+    },
+
+    /**
+     * Record one user action: what happened (`action`), where it happened
+     * (`source`), and where it led (`destination`) — e.g.
+     * rta.track("click_add_widget", { source: "dashboard", destination: "widget_modal" }).
+     * Requires identify() to have been called first; a call with no
+     * identified user is dropped rather than silently landing as anonymous,
+     * since a mislabeled "no user" event would look like a real signed-out
+     * visit instead of a bug in the calling code.
+     */
+    track: function (action, opts) {
+      if (!appUserId) return;
+      opts = opts || {};
       var s = session();
       post({
         siteId: siteId,
         type: "custom",
-        name: name,
+        name: action,
+        appUserId: appUserId,
+        source: opts.source || "",
+        destination: opts.destination || "",
         path: location.pathname,
         sessionId: s.id,
-        props: props || undefined,
+        props: opts.props || undefined,
         utm: utm(),
       });
     },
