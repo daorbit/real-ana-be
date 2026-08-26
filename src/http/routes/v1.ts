@@ -163,4 +163,121 @@ router.delete("/sites/:siteId", async (req: ApiKeyRequest, res: Response) => {
   res.status(204).end();
 });
 
+// ---- User journey tracing (identified web apps and mobile apps) ----
+//
+// Unlike /api/collect (the anonymous landing-page tracker), this is the
+// identified-user product: a real web app or mobile app authenticates with
+// the workspace's own API key and posts one call per meaningful action —
+// "this user went from src to dest via action". No identify()/track() split
+// and no client-held SDK state; the user id is just the caller's own id,
+// passed on every call, matching how a server-side integration or a mobile
+// app with no persistent "current user" object would naturally call it.
+const str = (v: unknown, max = 200): string =>
+  typeof v === "string" ? v.slice(0, max) : "";
+
+router.post("/track/:appUserId", async (req: ApiKeyRequest, res: Response) => {
+  const appUserId = String(req.params.appUserId ?? "").trim();
+  if (!appUserId) return res.status(400).json({ error: "appUserId required" });
+
+  const { siteId, action, src, dest } = req.body ?? {};
+  if (!siteId) return res.status(400).json({ error: "siteId required" });
+  if (!action) return res.status(400).json({ error: "action required" });
+
+  const site = await ownedSite(req.workspaceId!, String(siteId));
+  if (!site) return res.status(404).json({ error: "site not found" });
+
+  await Event.create({
+    siteId: String(siteId),
+    type: "custom",
+    name: str(action, 80),
+    appUserId: str(appUserId, 120),
+    source: str(src, 120),
+    destination: str(dest, 120),
+    // path mirrors dest so this event still shows up in the ordinary
+    // per-path breakdowns, not only in the journey timeline.
+    path: str(dest, 300) || str(src, 300) || "/",
+    sessionId: appUserId,
+    ts: new Date(),
+  });
+
+  res.status(201).json({ ok: true });
+});
+
+/**
+ * Every appUserId that has traced at least one action for this workspace,
+ * most recently active first — the list a dashboard opens before drilling
+ * into one user's timeline.
+ */
+router.get("/users", async (req: ApiKeyRequest, res: Response) => {
+  const sites = await Site.find({ workspaceId: req.workspaceId }).select("siteId");
+  const ids = sites.map((s) => String(s.get("siteId")));
+  if (!ids.length) return res.json({ users: [] });
+
+  const search = String(req.query.q ?? "").trim().slice(0, 120);
+
+  const users = await Event.aggregate([
+    {
+      $match: {
+        siteId: { $in: ids },
+        appUserId: search
+          ? { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" }
+          : { $ne: "" },
+      },
+    },
+    { $sort: { ts: -1 } },
+    {
+      $group: {
+        _id: "$appUserId",
+        lastSeen: { $first: "$ts" },
+        lastAction: { $first: "$name" },
+        siteId: { $first: "$siteId" },
+        eventCount: { $sum: 1 },
+      },
+    },
+    { $sort: { lastSeen: -1 } },
+    { $limit: 100 },
+  ]);
+
+  res.json({
+    users: users.map((u) => ({
+      appUserId: u._id,
+      lastSeen: u.lastSeen,
+      lastAction: u.lastAction,
+      siteId: u.siteId,
+      eventCount: u.eventCount,
+    })),
+  });
+});
+
+/**
+ * One user's full journey, oldest first: every src -> action -> dest step in
+ * the order it happened.
+ */
+router.get("/track/:appUserId", async (req: ApiKeyRequest, res: Response) => {
+  const appUserId = String(req.params.appUserId ?? "").trim();
+  if (!appUserId) return res.status(400).json({ error: "appUserId required" });
+
+  const sites = await Site.find({ workspaceId: req.workspaceId }).select("siteId");
+  const ids = sites.map((s) => String(s.get("siteId")));
+  if (!ids.length) return res.json({ appUserId, events: [] });
+
+  const limit = Math.min(Number(req.query.limit) || 500, 1000);
+
+  const events = await Event.find({ siteId: { $in: ids }, appUserId })
+    .sort({ ts: 1 })
+    .limit(limit)
+    .select("siteId name source destination ts");
+
+  res.json({
+    appUserId,
+    events: events.map((e) => ({
+      siteId: e.get("siteId"),
+      action: e.get("name"),
+      src: e.get("source"),
+      dest: e.get("destination"),
+      ts: e.get("ts"),
+    })),
+  });
+});
+
 export default router;

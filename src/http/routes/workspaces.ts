@@ -892,6 +892,89 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
   res.end();
 });
 
+// --- identified users / journey tracing (dashboard read side) -----------
+//
+// The write side lives on the Platform API (/v1/track — API-key authed, for
+// a customer's own web/mobile app). These are the session-authed reads the
+// dashboard itself uses to show that data, same underlying Event rows,
+// scoped through the caller's workspace membership instead of a key.
+
+/** Recently active identified users, most recent first. */
+router.get("/:wid/users", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (!ids.length) return res.json({ users: [] });
+
+  const search = String(req.query.q ?? "").trim().slice(0, 120);
+
+  const users = await Event.aggregate([
+    {
+      $match: {
+        siteId: { $in: ids },
+        appUserId: search
+          ? { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" }
+          : { $ne: "" },
+      },
+    },
+    { $sort: { ts: -1 } },
+    {
+      $group: {
+        _id: "$appUserId",
+        lastSeen: { $first: "$ts" },
+        lastAction: { $first: "$name" },
+        siteId: { $first: "$siteId" },
+        eventCount: { $sum: 1 },
+      },
+    },
+    { $sort: { lastSeen: -1 } },
+    { $limit: 100 },
+  ]);
+
+  res.json({
+    users: users.map((u) => ({
+      appUserId: u._id,
+      lastSeen: u.lastSeen,
+      lastAction: u.lastAction,
+      siteId: u.siteId,
+      eventCount: u.eventCount,
+    })),
+  });
+});
+
+/** One user's full journey, oldest first: every src -> action -> dest step. */
+router.get("/:wid/track/:appUserId", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  const appUserId = String(req.params.appUserId ?? "").trim();
+  if (!appUserId) return res.status(400).json({ error: "appUserId required" });
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (!ids.length) return res.json({ appUserId, events: [] });
+
+  const limit = Math.min(Number(req.query.limit) || 500, 1000);
+
+  const events = await Event.find({ siteId: { $in: ids }, appUserId })
+    .sort({ ts: 1 })
+    .limit(limit)
+    .select("siteId name source destination ts");
+
+  res.json({
+    appUserId,
+    events: events.map((e) => ({
+      siteId: e.get("siteId"),
+      action: e.get("name"),
+      src: e.get("source"),
+      dest: e.get("destination"),
+      ts: e.get("ts"),
+    })),
+  });
+});
+
 // --- goal definitions (conversions) -------------------------------------
 router.get("/:wid/goals", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req);
