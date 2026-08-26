@@ -974,7 +974,7 @@ router.get("/:wid/track/:appUserId", async (req: AuthedRequest, res: Response) =
   const events = await Event.find({ siteId: { $in: ids }, appUserId })
     .sort({ ts: 1 })
     .limit(limit)
-    .select("siteId name source destination ts");
+    .select("siteId name source destination sessionId ts");
 
   res.json({
     appUserId,
@@ -983,6 +983,10 @@ router.get("/:wid/track/:appUserId", async (req: AuthedRequest, res: Response) =
       action: e.get("name"),
       src: e.get("source"),
       dest: e.get("destination"),
+      // Lets the dashboard group a journey into sessions rather than
+      // inferring them from time gaps, which guesses wrong across a long
+      // idle period that was really one continuous visit.
+      sessionId: e.get("sessionId"),
       ts: e.get("ts"),
     })),
   });
