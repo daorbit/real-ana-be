@@ -8,6 +8,7 @@ import instagramRoutes from "./http/routes/instagram.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import collectRoutes from "./http/routes/collect.js";
+import trackRoutes from "./http/routes/track.js";
 import statsRoutes from "./http/routes/stats.js";
 import v1Routes from "./http/routes/v1.js";
 import adminRoutes from "./http/routes/admin.js";
@@ -116,6 +117,7 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 
 // Public tracking surface (any origin)
 app.use("/api/collect", openCors, collectRoutes);
+app.use("/api/track", openCors, trackRoutes);
 
 // Serve embeddable tracker.js
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
