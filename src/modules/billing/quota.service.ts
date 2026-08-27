@@ -55,6 +55,7 @@ export async function activatePlanPeriod(
         auditsUsed: 0,
         crawlsUsed: 0,
         eventsUsed: 0,
+        formSubmissionsUsed: 0,
       },
     },
     { upsert: true }
@@ -296,6 +297,58 @@ export async function canCreateScheduledPost(
   return { ok: true };
 }
 
+/**
+ * What the forms service is allowed to do for this workspace.
+ *
+ * Forms live in their own service with their own database, so this is the whole
+ * answer in one call rather than a check per rule: the caller is across a
+ * network boundary and caches what it gets back, and a round trip per limit on
+ * a public form submission would be three round trips too many.
+ *
+ * `formsUsed` is deliberately absent — the forms service counts its own rows,
+ * because it owns them. This returns the caps and the submission meter, which
+ * are the parts billing owns.
+ */
+export async function formLimits(workspaceId: string) {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) {
+    // A lapsed or missing plan is not "no forms": the workspace keeps what it
+    // built and can still receive responses at the Free allowance, which is
+    // what an expired paid period falls back to everywhere else.
+    const free = getPlanCatalogEntry("free")!;
+    const sub = await Subscription.findOne({ workspaceId }).select("formSubmissionsUsed");
+    return {
+      plan: "free",
+      maxForms: free.maxForms,
+      monthlySubmissionQuota: free.monthlySubmissionQuota,
+      submissionsUsed: (sub?.get("formSubmissionsUsed") as number) ?? 0,
+      notificationEmails: free.formNotificationEmails,
+      fileUploads: free.formFileUploads,
+    };
+  }
+
+  const sub = await Subscription.findOne({ workspaceId }).select("formSubmissionsUsed");
+  return {
+    plan: plan.slug,
+    maxForms: plan.maxForms,
+    monthlySubmissionQuota: plan.monthlySubmissionQuota,
+    submissionsUsed: (sub?.get("formSubmissionsUsed") as number) ?? 0,
+    notificationEmails: plan.formNotificationEmails,
+    fileUploads: plan.formFileUploads,
+  };
+}
+
+/**
+ * Record one stored form submission against this cycle's meter.
+ *
+ * Unconditional: the response has already been saved by the time this is
+ * called, so refusing the increment would only lose the count, not the row.
+ * Whether the *next* submission is accepted is decided by `formLimits` above.
+ */
+export async function recordFormSubmission(workspaceId: string): Promise<void> {
+  await Subscription.updateOne({ workspaceId }, { $inc: { formSubmissionsUsed: 1 } });
+}
+
 /** Whether this workspace's plan allows a post to repeat rather than go out once. */
 export async function canUseRepeatingPosts(
   workspaceId: string,
@@ -457,6 +510,19 @@ export async function quotaSummary(workspaceId: string) {
       quota: plan.maxScheduledPosts + (((sub.get("addonPostSlots") as number) ?? 0)),
       used: scheduledPostCount,
       repeatingAllowed: plan.repeatingPosts,
+    },
+    /**
+     * How many forms exist is not counted here: the forms service owns those
+     * rows, and asking it on every billing page load would make this endpoint
+     * depend on another service being up. The cap and the submission meter are
+     * the parts this side owns, and they are what the usage display needs.
+     */
+    forms: {
+      quota: plan.maxForms,
+      submissionQuota: plan.monthlySubmissionQuota,
+      submissionsUsed: (sub.get("formSubmissionsUsed") as number) ?? 0,
+      notificationEmails: plan.formNotificationEmails,
+      fileUploads: plan.formFileUploads,
     },
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,

@@ -73,6 +73,21 @@ export type PlanCatalogEntry = {
    * the thing worth trying.
    */
   repeatingPosts: boolean;
+  /**
+   * Lead capture forms a workspace may hold.
+   *
+   * Counted rather than metered, for the same reason as scheduled posts: a form
+   * is stored state that costs us while it exists, not per use. One is enough to
+   * publish something real and see responses arrive; running several — a contact
+   * form, a signup, a survey — is the paid shape.
+   */
+  maxForms: number;
+
+  monthlySubmissionQuota: number;
+
+  formNotificationEmails: boolean;
+  /** Whether a form may collect file and image uploads, which we then store. */
+  formFileUploads: boolean;
 };
 
 /** Matches `models/ReportSchedule.ts`'s `FREQUENCIES`. */
@@ -111,6 +126,13 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     // whole argument for the feature. A calendar needs the paid tier.
     maxScheduledPosts: 3,
     repeatingPosts: false,
+    // One published form, and enough responses to see it working on a real
+    // site. Notifications and uploads are the outbound/storage costs, so they
+    // are where the paid line sits.
+    maxForms: 1,
+    monthlySubmissionQuota: 100,
+    formNotificationEmails: false,
+    formFileUploads: false,
   },
   {
     slug: "starter",
@@ -124,6 +146,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
       "Scheduled reports by email",
       "Custom comparison periods",
       "Scheduled LinkedIn posts, including repeating",
+      "Lead capture forms with email notifications",
     ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -134,6 +157,10 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     compareModes: ["previous", "custom"],
     maxScheduledPosts: 30,
     repeatingPosts: true,
+    maxForms: 10,
+    monthlySubmissionQuota: 2_000,
+    formNotificationEmails: true,
+    formFileUploads: true,
   },
   {
     slug: "pro",
@@ -148,6 +175,7 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
       "Daily reports + WhatsApp alerts",
       "Year-over-year comparison",
       "Unlimited scheduled social posts",
+      "Lead capture forms with file uploads",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -158,6 +186,10 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     compareModes: ["previous", "yoy", "custom"],
     maxScheduledPosts: 500,
     repeatingPosts: true,
+    maxForms: 50,
+    monthlySubmissionQuota: 25_000,
+    formNotificationEmails: true,
+    formFileUploads: true,
   },
 ];
 

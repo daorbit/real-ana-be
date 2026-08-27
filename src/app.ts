@@ -20,6 +20,7 @@ import competitorRoutes from "./http/routes/competitors.js";
 import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
+import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import segmentRoutes from "./http/routes/segments.js";
 import markerRoutes from "./http/routes/markers.js";
@@ -251,6 +252,10 @@ app.use("/api/webhooks", webhookRoutes);
 // Vercel Cron: same reasoning as the webhooks above — never called from a
 // browser, and `CRON_SECRET` in the route is the credential.
 app.use("/api/cron", cronRoutes);
+// The lead capture service asking what a workspace's plan allows. Server to
+// server, so no CORS and no JWT — `FORMS_SERVICE_SECRET` in the route is the
+// credential, as with the two above.
+app.use("/api/internal/forms", formsInternalRoutes);
 
 // Both must stay last: the 404 only fires once every router has declined the
 // path, and the error handler only receives what the routers above pass to

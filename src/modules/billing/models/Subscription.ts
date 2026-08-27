@@ -70,6 +70,14 @@ const subscriptionSchema = new Schema(
      */
     eventsUsed: { type: Number, default: 0 },
     /**
+     * Form submissions received this cycle.
+     *
+     * Incremented by the forms service after a response has been stored, not
+     * before: a submission that failed to save is not one the workspace should
+     * be charged for. Reset with the rest of the counters when a period starts.
+     */
+    formSubmissionsUsed: { type: Number, default: 0 },
+    /**
      * Orbit questions spent this cycle.
      *
      * Incremented only once a model has actually answered — a timeout, a
