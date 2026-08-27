@@ -197,13 +197,20 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
  * What a pack's credits are called on a receipt.
  *
  * A lookup rather than a ternary for the same reason as `ADDON_CREDIT_FIELD`
- * below: with three pack types, `audit ? … : …` silently labels Orbit questions
- * as crawls — and on a receipt that is a financial document stating something
- * that was never sold.
+ * below: a chain of `audit ? … : …` labels every type it does not name as
+ * whatever sits in the final branch — and on a receipt, which is a financial
+ * document, that states something that was never sold.
  */
+const CREDIT_NOUN: Record<AddonType, string> = {
+  audit: "audit",
+  crawl: "crawl",
+  orbit: "Orbit question",
+  "post-slots": "scheduled post slot",
+  "form-submissions": "form response",
+};
+
 function creditNoun(type: AddonType, count: number): string {
-  const noun =
-    type === "audit" ? "audit" : type === "crawl" ? "crawl" : "Orbit question";
+  const noun = CREDIT_NOUN[type];
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
@@ -223,6 +230,7 @@ const ADDON_CREDIT_FIELD: Record<AddonType, string> = {
   // Not a credit balance: this raises the cap on how many posts may be queued
   // at once, and is never spent down. Incremented the same way regardless.
   "post-slots": "addonPostSlots",
+  "form-submissions": "addonFormSubmissionCredits",
 };
 
 /** One addon line as it is stored on a purchase and credited on payment. */

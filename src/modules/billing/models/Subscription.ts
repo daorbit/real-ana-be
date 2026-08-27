@@ -78,6 +78,14 @@ const subscriptionSchema = new Schema(
      */
     formSubmissionsUsed: { type: Number, default: 0 },
     /**
+     * Responses bought on top of the plan's monthly allowance.
+     *
+     * Spent only once the plan's own quota is exhausted, and never reset by a
+     * new period — a customer who paid for extra responses keeps them until
+     * they are used, the same rule the audit and crawl credits follow.
+     */
+    addonFormSubmissionCredits: { type: Number, default: 0 },
+    /**
      * Orbit questions spent this cycle.
      *
      * Incremented only once a model has actually answered — a timeout, a

@@ -310,43 +310,67 @@ export async function canCreateScheduledPost(
  * are the parts billing owns.
  */
 export async function formLimits(workspaceId: string) {
-  const plan = await currentPlan(workspaceId);
-  if (!plan) {
-    // A lapsed or missing plan is not "no forms": the workspace keeps what it
-    // built and can still receive responses at the Free allowance, which is
-    // what an expired paid period falls back to everywhere else.
-    const free = getPlanCatalogEntry("free")!;
-    const sub = await Subscription.findOne({ workspaceId }).select("formSubmissionsUsed");
-    return {
-      plan: "free",
-      maxForms: free.maxForms,
-      monthlySubmissionQuota: free.monthlySubmissionQuota,
-      submissionsUsed: (sub?.get("formSubmissionsUsed") as number) ?? 0,
-      notificationEmails: free.formNotificationEmails,
-      fileUploads: free.formFileUploads,
-    };
-  }
+  // A lapsed or missing plan is not "no forms": the workspace keeps what it
+  // built and can still receive responses at the Free allowance, which is what
+  // an expired paid period falls back to everywhere else.
+  const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
+  const sub = await Subscription.findOne({ workspaceId }).select(
+    "formSubmissionsUsed addonFormSubmissionCredits",
+  );
 
-  const sub = await Subscription.findOne({ workspaceId }).select("formSubmissionsUsed");
   return {
     plan: plan.slug,
     maxForms: plan.maxForms,
     monthlySubmissionQuota: plan.monthlySubmissionQuota,
     submissionsUsed: (sub?.get("formSubmissionsUsed") as number) ?? 0,
+    // Bought responses sit on top of the cycle's allowance and never expire, so
+    // the forms service has to weigh both before refusing one.
+    submissionCredits: (sub?.get("addonFormSubmissionCredits") as number) ?? 0,
     notificationEmails: plan.formNotificationEmails,
     fileUploads: plan.formFileUploads,
   };
 }
 
 /**
- * Record one stored form submission against this cycle's meter.
+ * Record one stored form submission, against the plan's allowance first and
+ * bought credits after.
  *
- * Unconditional: the response has already been saved by the time this is
- * called, so refusing the increment would only lose the count, not the row.
- * Whether the *next* submission is accepted is decided by `formLimits` above.
+ * Unconditional, unlike `spendQuota`: the response has already been saved by
+ * the time this is called, so refusing would lose the count rather than the
+ * row. Whether the *next* one is accepted is decided by `formLimits` above.
+ *
+ * The plan's own allowance is spent before any purchased credit, so a customer's
+ * addon outlasts the cycle it was bought in instead of being consumed alongside
+ * the quota they already had.
  */
 export async function recordFormSubmission(workspaceId: string): Promise<void> {
-  await Subscription.updateOne({ workspaceId }, { $inc: { formSubmissionsUsed: 1 } });
+  const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
+
+  // Conditional so two submissions arriving together cannot both read "quota
+  // left" before either writes, and spend the same last unit twice. The `$or`
+  // covers rows written before this field existed, which `$lt` alone will not
+  // match.
+  const withinPlan = await Subscription.findOneAndUpdate(
+    {
+      workspaceId,
+      $or: [
+        { formSubmissionsUsed: { $lt: plan.monthlySubmissionQuota } },
+        { formSubmissionsUsed: { $exists: false } },
+      ],
+    },
+    { $inc: { formSubmissionsUsed: 1 } },
+  );
+  if (withinPlan) return;
+
+  const credited = await Subscription.findOneAndUpdate(
+    { workspaceId, addonFormSubmissionCredits: { $gt: 0 } },
+    { $inc: { addonFormSubmissionCredits: -1 } },
+  );
+  // Neither had room: the response is stored regardless, so this only records
+  // that the workspace is now over its allowance.
+  if (!credited) {
+    await Subscription.updateOne({ workspaceId }, { $inc: { formSubmissionsUsed: 1 } });
+  }
 }
 
 /** Whether this workspace's plan allows a post to repeat rather than go out once. */
@@ -521,6 +545,7 @@ export async function quotaSummary(workspaceId: string) {
       quota: plan.maxForms,
       submissionQuota: plan.monthlySubmissionQuota,
       submissionsUsed: (sub.get("formSubmissionsUsed") as number) ?? 0,
+      addonCredits: (sub.get("addonFormSubmissionCredits") as number) ?? 0,
       notificationEmails: plan.formNotificationEmails,
       fileUploads: plan.formFileUploads,
     },
