@@ -165,7 +165,7 @@ const MAX_PLAN_TURNS = 12;
  * here. Anything outside this set falls back to the route's own default rather
  * than failing the request: the author asked for a post, not for a model.
  */
-const PLAN_MODELS = new Set(["kimi", "deepseek", "nemotron", "north-mini"]);
+const PLAN_MODELS = new Set(["llama-fast", "llama-8b"]);
 
  
 router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
@@ -264,7 +264,7 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
  
       modelId: PLAN_MODELS.has(String(req.body?.modelId ?? ""))
         ? String(req.body.modelId)
-        : "kimi",
+        : "llama-fast",
 
  
       // Models measured as unusable for *this* prompt. They stay in the chat
@@ -278,11 +278,26 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
       //   gemma         the free pool is rate-limited upstream and answers 429
       //                 on most attempts. Not the same model as gemini-flash,
       //                 which is why excluding that one never stopped this.
-      exclude: ["gemini-flash", "gpt-oss", "gemma"],
+      // Everything that is not a Llama on Cloudflare. Measured on this prompt,
+      // 2026-08-28: the Llamas answer in 1-4s with a parseable object every
+      // time, while the OpenRouter models take 17-31s (deepseek), time out
+      // (nemotron, qwen), answer 429 from a rate-limited free pool (gemma), or
+      // return an empty completion (gpt-oss). None of them earn a turn here
+      // when the fast path is an order of magnitude quicker and more reliable.
+      //
+      // They all stay in the chat panel's chain, which has different needs:
+      // there the answer is prose, a slower model is affordable, and DeepSeek
+      // is genuinely the better writer.
+      exclude: ["gemini-flash", "gpt-oss", "gemma", "deepseek", "nemotron", "north-mini"],
 
  
-      budgetMs: 72_000,
-      attemptMs: 34_000,
+      // Both models in this chain answer in 1-4s, so the old 72s budget was
+      // sized for a fallback that no longer runs. 15s per attempt is several
+      // times the slowest run measured, which leaves room for a bad day
+      // without making someone watch a spinner for a minute when a model
+      // genuinely hangs.
+      budgetMs: 32_000,
+      attemptMs: 15_000,
     },
   );
 

@@ -102,20 +102,32 @@ export const ORBIT_MODELS: OrbitModel[] = [
     tier: "standard",
   },
   {
-    id: "kimi",
-    label: "Kimi K2.6",
-    hint: "Fast, strong on structure.",
+    id: "llama-fast",
+    label: "Llama 3.3 70B",
+    hint: "Fastest for structured replies.",
     provider: "cloudflare",
-    // The general model, not `kimi-k2.7-code`: that variant is tuned for
-    // agentic coding, and this chain's work is writing a caption in someone's
-    // own voice. Both are 1T-parameter MoE with a 262k context.
-    model: "@cf/moonshotai/kimi-k2.6",
+    // Measured on the composer's plan prompt, 2026-08-28: 1.6-3.6s and a
+    // parseable object on every attempt, against 17-31s for DeepSeek on
+    // OpenRouter. Kimi would have been the better writer but is not on
+    // Cloudflare's free tier — both K2.6 and K2.7 answer 403 there.
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     // Cloudflare's `/ai/run` endpoint takes no JSON schema, so the model is
     // asked in the prompt like the other unstructured ones and the parser
-    // strips the fence. The model itself does support structured output — this
-    // flag is about the request shape we send, not the model's capability.
+    // strips whatever wrapper it adds.
     structured: false,
     tier: "standard",
+  },
+  {
+    id: "llama-8b",
+    label: "Llama 3.1 8B",
+    hint: "Quickest, for short replies.",
+    provider: "cloudflare",
+    // The sub-second one: 0.9-1.4s on the composer's prompt, and it produced a
+    // parseable object on every attempt. Smaller, so it writes a plainer
+    // caption — which is why it sits behind the 70B rather than in front of it.
+    model: "@cf/meta/llama-3.1-8b-instruct-fp8-fast",
+    structured: false,
+    tier: "basic",
   },
   {
     id: "deepseek",

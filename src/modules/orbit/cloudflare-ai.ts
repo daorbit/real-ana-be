@@ -84,15 +84,25 @@ export async function cloudflareChat(
     // property of the model and changes without notice.
     const data = JSON.parse(body) as {
       result?: {
-        response?: string;
+        response?: unknown;
         choices?: { message?: { content?: string } }[];
       };
     };
 
+    // `result.response` is a string on most models but an already-parsed object
+    // on some — Llama 3.3 returns the JSON it was asked for as an object, and
+    // stringifying that with `String()` yields "[object Object]", which reaches
+    // the plan parser as garbage and costs the model its turn. The
+    // OpenAI-shaped `choices[]` is preferred where present because it is always
+    // a string; an object response is re-serialised rather than coerced.
+    const raw = data.result?.choices?.[0]?.message?.content ?? data.result?.response;
+
     const text =
-      data.result?.response ??
-      data.result?.choices?.[0]?.message?.content ??
-      "";
+      typeof raw === "string"
+        ? raw
+        : raw && typeof raw === "object"
+          ? JSON.stringify(raw)
+          : "";
 
     if (!text.trim()) return { ok: false, status: 502, detail: "empty completion" };
 
