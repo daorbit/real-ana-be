@@ -6,7 +6,7 @@ import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../../infra/payments/razorpay.js";
-import { activateOrbitPeriod, activatePlanPeriod, currentPlan } from "../../modules/billing/quota.service.js";
+import { activateOrbitPeriod, activatePlanPeriod, paidPlan } from "../../modules/billing/quota.service.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import {
@@ -116,7 +116,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const plan = await getResolvedPlan(planSlug);
   if (!plan) return res.status(404).json({ error: "plan not found" });
 
-  const active = await currentPlan(workspace.id);
+  const active = await paidPlan(workspace.id);
   if (active && getPlanCatalogEntry(plan.slug)!.sortOrder < active.sortOrder) {
     return res.status(409).json({
       error: `this workspace is on ${active.name} until its period ends — a lower plan cannot be bought before then`,

@@ -36,10 +36,15 @@ async function allowanceFor(workspaceId: string): Promise<number | null> {
   );
   if (!sub) return null;
 
+  // A lapsed period drops to Free rather than stopping ingest: the tracker on
+  // the customer's site has no idea about billing and keeps sending, so cutting
+  // off entirely just puts an unexplained hole in their history. Free's
+  // allowance is the floor until they renew.
   const end = sub.get("currentPeriodEnd") as Date | null;
-  if (end && end.getTime() < Date.now()) return null;
+  const expired = end ? end.getTime() < Date.now() : true;
 
-  const plan = getPlanCatalogEntry(sub.get("planSlug") as string);
+  const slug = expired ? "free" : (sub.get("planSlug") as string);
+  const plan = getPlanCatalogEntry(slug);
   if (!plan) return null;
 
   const used = (sub.get("eventsUsed") as number) ?? 0;

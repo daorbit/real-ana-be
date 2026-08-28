@@ -92,8 +92,34 @@ function isExpired(sub: { currentPeriodEnd?: Date | null }): boolean {
   return sub.currentPeriodEnd.getTime() < Date.now();
 }
 
-/** The catalogue plan this workspace is on, or null if it has no subscription, an unknown slug, or a lapsed period. */
+/**
+ * The catalogue plan this workspace may use right now.
+ *
+ * A lapsed paid period falls back to Free rather than to nothing. Cutting a
+ * workspace off entirely would leave it worse off than one that never paid —
+ * unable to read the history it already bought — and the events kept flowing in
+ * from a tracker that has no idea about billing. Free is the floor: tracking
+ * continues at Free's allowance, the data stays readable at Free's ranges, and
+ * only the paid features lock.
+ *
+ * Null still means "no subscription row at all" or an unknown slug, which is a
+ * different thing from an expired one and is left to the caller.
+ */
 export async function currentPlan(workspaceId: string) {
+  const sub = await Subscription.findOne({ workspaceId });
+  if (!sub) return null;
+  if (isExpired(sub)) return getPlanCatalogEntry("free") ?? null;
+  return getPlanCatalogEntry(sub.planSlug as string) ?? null;
+}
+
+/**
+ * The plan actually paid for, ignoring the Free fallback above.
+ *
+ * Only for deciding what may be bought next: a lapsed Pro workspace is on Free
+ * for access purposes, but it must still be able to buy Starter, which the
+ * downgrade guard would otherwise refuse.
+ */
+export async function paidPlan(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub || isExpired(sub)) return null;
   return getPlanCatalogEntry(sub.planSlug as string) ?? null;
@@ -458,8 +484,15 @@ export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<
 export async function quotaSummary(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return null;
-  const plan = getPlanCatalogEntry(sub.planSlug as string);
+
+  // The plan whose limits actually apply, which after a lapsed period is Free
+  // rather than whatever was last bought. Reporting the bought plan here would
+  // show a workspace quotas it cannot spend.
+  const expired = isExpired(sub);
+  const boughtSlug = sub.planSlug as string;
+  const plan = getPlanCatalogEntry(expired ? "free" : boughtSlug);
   if (!plan) return null;
+  const boughtPlan = getPlanCatalogEntry(boughtSlug);
 
   // Only what is still queued: a sent post is history and holds no slot, which
   // is the same rule `canCreateScheduledPost` counts by.
