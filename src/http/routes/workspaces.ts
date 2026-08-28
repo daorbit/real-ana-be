@@ -913,13 +913,33 @@ router.get("/:wid/users", async (req: AuthedRequest, res: Response) => {
   const pageSize = Math.min(Math.max(Number(req.query.limit) || 10, 1), 100);
   const page = Math.max(Number(req.query.page) || 1, 1);
 
+  // Recency is the default because the support question this list answers —
+  // "what did the person who just wrote in do?" — is nearly always about
+  // someone active minutes ago. Volume and first-seen are the two other ways
+  // people arrive at a specific user.
+  const sortKey = String(req.query.sort ?? "recent");
+  const sortStage: Record<string, 1 | -1> =
+    sortKey === "events" ? { eventCount: -1 } :
+    sortKey === "new" ? { firstSeen: -1 } :
+    { lastSeen: -1 };
+
+  // "Active" is the window the summary counts against, and the one an
+  // `active` filter narrows the list to. A day matches how support tickets
+  // arrive; anything longer stops being a useful "who is here now".
+  const activeSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
   const [result] = await Event.aggregate([
     {
       $match: {
         siteId: { $in: ids },
-        appUserId: search
-          ? { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" }
-          : { $ne: "" },
+        // `$ne: ""` alone still let through null and whitespace-only ids,
+        // which surfaced as a nameless row nobody could act on.
+        appUserId: {
+          $nin: [null, ""],
+          ...(search
+            ? { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" }
+            : { $regex: /\S/ }),
+        },
       },
     },
     { $sort: { ts: -1 } },
@@ -927,32 +947,65 @@ router.get("/:wid/users", async (req: AuthedRequest, res: Response) => {
       $group: {
         _id: "$appUserId",
         lastSeen: { $first: "$ts" },
+        firstSeen: { $last: "$ts" },
         lastAction: { $first: "$name" },
         siteId: { $first: "$siteId" },
         eventCount: { $sum: 1 },
+        // A visit count reads as activity in a way a raw event total never
+        // does: 40 events over 12 sessions is a regular, 40 in one is a
+        // single frantic afternoon.
+        sessions: { $addToSet: "$sessionId" },
       },
     },
-    { $sort: { lastSeen: -1 } },
     {
-      // One round trip for both the page and the count it's paged against —
-      // the alternative is two queries that can disagree if a user is traced
+      $addFields: {
+        sessionCount: { $size: { $filter: { input: "$sessions", cond: { $ne: ["$$this", null] } } } },
+      },
+    },
+    { $project: { sessions: 0 } },
+    ...(String(req.query.filter) === "active"
+      ? [{ $match: { lastSeen: { $gte: activeSince } } }]
+      : []),
+    { $sort: sortStage },
+    {
+      // One round trip for the page, the count it's paged against, and the
+      // summary above it — three queries could disagree if a user is traced
       // between them.
       $facet: {
         users: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }],
         total: [{ $count: "count" }],
+        summary: [
+          {
+            $group: {
+              _id: null,
+              users: { $sum: 1 },
+              events: { $sum: "$eventCount" },
+              active: { $sum: { $cond: [{ $gte: ["$lastSeen", activeSince] }, 1, 0] } },
+            },
+          },
+        ],
       },
     },
   ]);
+
+  const summary = result?.summary?.[0];
 
   res.json({
     users: (result?.users ?? []).map((u: any) => ({
       appUserId: u._id,
       lastSeen: u.lastSeen,
+      firstSeen: u.firstSeen,
       lastAction: u.lastAction,
       siteId: u.siteId,
       eventCount: u.eventCount,
+      sessionCount: u.sessionCount,
     })),
     total: result?.total?.[0]?.count ?? 0,
+    summary: {
+      users: summary?.users ?? 0,
+      events: summary?.events ?? 0,
+      activeToday: summary?.active ?? 0,
+    },
     page,
     pageSize,
   });
