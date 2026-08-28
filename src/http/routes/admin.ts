@@ -14,7 +14,7 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
-import { AddonPack } from "../../modules/billing/models/AddonPack.js";
+import { AddonPack, ADDON_TYPES, type AddonType } from "../../modules/billing/models/AddonPack.js";
 import { Coupon } from "../../modules/billing/models/Coupon.js";
 import {
   listResolvedPlans,
@@ -834,7 +834,9 @@ router.delete("/billing/addons/:id", async (req: AuthedRequest, res: Response) =
 });
 
 function readAddonBody(body: Record<string, unknown>) {
-  const type: "audit" | "crawl" = body?.type === "crawl" ? "crawl" : "audit";
+  const type: AddonType = ADDON_TYPES.includes(body?.type as AddonType)
+    ? (body.type as AddonType)
+    : "audit";
   const price = Object.fromEntries(
     CURRENCIES.map((c) => [c, Math.max(0, Number((body?.price as Record<string, unknown>)?.[c]) || 0)])
   );
