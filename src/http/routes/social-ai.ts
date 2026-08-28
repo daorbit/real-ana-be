@@ -296,6 +296,13 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
       // times the slowest run measured, which leaves room for a bad day
       // without making someone watch a spinner for a minute when a model
       // genuinely hangs.
+      // This route asked the model for a plan object, not for Orbit's
+      // `{reply, suggestions}` envelope — so the raw text is what it wants.
+      // Without this the envelope check rejects a correctly-formed plan for
+      // having no `reply` key, and every model in the chain is scored as
+      // having returned "an unusable answer".
+      rawOutput: true,
+
       budgetMs: 32_000,
       attemptMs: 15_000,
     },

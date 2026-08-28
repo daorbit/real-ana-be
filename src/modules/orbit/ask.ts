@@ -248,6 +248,25 @@ export type AskOptions = {
    * budget buys two attempts only if both fail at exactly the timeout.
    */
   attemptMs?: number;
+  /**
+   * Accept the model's raw text instead of requiring Orbit's answer envelope.
+   *
+   * For callers that asked for their own JSON shape. The envelope exists for
+   * the chat panel, where an answer is prose plus follow-up questions; a route
+   * that told the model to return a plan object gets exactly that, and
+   * `sanitiseModelAnswer` then rejects it for having no `reply` key — a model
+   * that followed the instruction perfectly is scored as having failed.
+   *
+   * The older models hid this by wrapping their object in `{"reply": "{...}"}`,
+   * which is double-encoded JSON and the thing `parsePlan` spends most of its
+   * length undoing. Llama returns the object directly, which is what was asked
+   * for, so this flag stops punishing it for that.
+   *
+   * `suggestions` is always empty here: nothing produced them, and inventing
+   * them from the raw text would put fragments of a JSON document into the
+   * follow-up buttons.
+   */
+  rawOutput?: boolean;
 };
 
 /**
@@ -273,6 +292,7 @@ export async function askOrbit(
     exclude = [],
     budgetMs = TOTAL_BUDGET_MS,
     attemptMs = TIMEOUT_MS,
+    rawOutput = false,
   } = options;
   const barred = new Set(exclude);
 
@@ -375,7 +395,13 @@ export async function askOrbit(
     const raw = await callModel(model, question, history, prompt, budgetMs - elapsed, attemptMs);
 
     if (raw.ok) {
-      const parsed = parseAnswer(raw.text);
+      // `rawOutput` callers asked the model for their own JSON shape, so the
+      // envelope check would reject the very thing they asked for.
+      const parsed = rawOutput
+        ? raw.text.trim()
+          ? { reply: raw.text.trim(), suggestions: [] as string[] }
+          : null
+        : parseAnswer(raw.text);
       // A model that returned prose instead of the agreed shape has still
       // answered; only an empty reply is worth failing over.
       if (parsed) {
