@@ -62,7 +62,9 @@ async function runFxSync(): Promise<void> {
   try {
     const result = await repriceAllPlans();
     const rate = result.snapshot.rates.USD;
-    console.log(`[fx-cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${rate} USD`);
+    console.log(
+      `[fx-cron] repriced ${result.plans.length} plans and ${result.addons.length} addons at 1 ${result.base} = ${rate} USD`,
+    );
     await sendFxSuccessReport(result, "in-process cron");
   } catch (e) {
     const message = (e as Error).message;

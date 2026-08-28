@@ -1,6 +1,7 @@
 import axios from "axios";
 import { AppSetting } from "../../config/AppSetting.js";
 import { Plan } from "./models/Plan.js";
+import { AddonPack } from "./models/AddonPack.js";
 import { listResolvedPlans, listResolvedOrbitPlans } from "./plan-pricing.js";
 import { CURRENCIES, type Currency } from "./currency.js";
 
@@ -116,12 +117,19 @@ export type RepricedPlan = {
   priceYearly: Record<string, number>;
 };
 
+export type RepricedAddon = {
+  slug: string;
+  name: string;
+  price: Record<string, number>;
+};
+
 export type RepriceResult = {
   snapshot: FxSnapshot;
   base: Currency;
   /** The currencies that were recomputed — everything except the base. */
   derived: Currency[];
   plans: RepricedPlan[];
+  addons: RepricedAddon[];
 };
 
 /**
@@ -132,8 +140,8 @@ export type RepriceResult = {
  *
  * Fetches the rate fresh rather than reading the cache: the point of a reprice
  * is that the new numbers reflect today's rate, not whenever someone last
- * looked. If the fetch fails this throws and no plan is touched — a partial
- * reprice, where some tiers moved and others didn't, is worse than none.
+ * looked. If the fetch fails this throws and nothing is touched — a partial
+ * reprice, where some prices moved and others didn't, is worse than none.
  */
 export async function repriceAllPlans(): Promise<RepriceResult> {
   const snapshot = await fetchRates();
@@ -156,5 +164,24 @@ export async function repriceAllPlans(): Promise<RepriceResult> {
     repriced.push({ slug: plan.slug, name: plan.name, priceMonthly, priceYearly });
   }
 
-  return { snapshot, base: FX_BASE, derived, plans: repriced };
+  // Add-on packs are priced in INR the same way and sold in every currency, so
+  // they track the rate on the same run — otherwise their USD price stays
+  // frozen at whatever it was when the pack was created, while plans move.
+  const addons = await AddonPack.find();
+  const repricedAddons: RepricedAddon[] = [];
+
+  for (const addon of addons) {
+    const price = { ...(addon.get("price") as Record<string, number>) };
+    for (const currency of derived) {
+      price[currency] = convertMinor(price[FX_BASE] ?? 0, currency, snapshot);
+    }
+    await AddonPack.updateOne({ _id: addon._id }, { $set: { price } });
+    repricedAddons.push({
+      slug: addon.get("slug") as string,
+      name: addon.get("name") as string,
+      price,
+    });
+  }
+
+  return { snapshot, base: FX_BASE, derived, plans: repriced, addons: repricedAddons };
 }

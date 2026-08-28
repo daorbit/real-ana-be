@@ -1,20 +1,7 @@
 import { sendOne, mailConfigured, shell, button, C } from "../../infra/mail/mailer.js";
 import type { RepriceResult } from "./fx.js";
 
-/**
- * The nightly "did the reprice work" email.
- *
- * Sent on both outcomes, on purpose. A mail only on failure is a mail you stop
- * trusting: silence then means either "it worked" or "the job never ran at
- * all", and those are the two cases you most need to tell apart. A nightly
- * success note that stops arriving is itself the alarm.
- *
- * Never throws. The reprice has already been committed to the database by the
- * time this runs, so a mail-server hiccup must not turn a successful job into a
- * failed request — it degrades to a log line.
- */
-
-/** Where the nightly report goes. Overridable, since the operator isn't always the sender. */
+ 
 function reportRecipient(): string {
   return process.env.FX_REPORT_EMAIL || process.env.SMTP_USER || "";
 }
@@ -50,30 +37,64 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
     .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
     .join("");
 
+  const addonRows = result.addons
+    .map((addon) => {
+      const cells = [addon.name, `${result.base} ${money(addon.price[result.base] ?? 0)}`]
+        .concat(result.derived.map((c) => `${c} ${money(addon.price[c] ?? 0)}`));
+      return `<tr>${cells
+        .map(
+          (cell, i) =>
+            `<td style="padding:9px 12px;border-top:1px solid ${C.line};color:${i === 0 ? C.text : C.dim};font-weight:${i === 0 ? 600 : 400};font-size:14px">${cell}</td>`
+        )
+        .join("")}</tr>`;
+    })
+    .join("");
+
+  const addonHeader = ["Add-on pack", result.base]
+    .concat(result.derived.map((c) => `${c}`))
+    .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
+    .join("");
+
   const text = [
     `Plan prices repriced successfully (${source}).`,
     ``,
     `Rate: ${rates}`,
     `Plans updated: ${result.plans.length}`,
+    `Add-on packs updated: ${result.addons.length}`,
     ``,
     ...result.plans.map(
       (p) =>
         `${p.name}: ${result.base} ${money(p.priceMonthly[result.base] ?? 0)}/mo` +
         result.derived.map((c) => ` -> ${c} ${money(p.priceMonthly[c] ?? 0)}`).join("")
     ),
+    ``,
+    ...result.addons.map(
+      (a) =>
+        `${a.name}: ${result.base} ${money(a.price[result.base] ?? 0)}` +
+        result.derived.map((c) => ` -> ${c} ${money(a.price[c] ?? 0)}`).join("")
+    ),
   ].join("\n");
 
   const html = shell(
     `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan prices repriced</p>
      <p style="margin:0 0 20px;font-size:14.5px;line-height:1.7;color:${C.dim}">
-       ${result.plans.length} plan${result.plans.length === 1 ? "" : "s"} updated from the ${result.base} price at today's rate.
+       ${result.plans.length} plan${result.plans.length === 1 ? "" : "s"} and ${result.addons.length} add-on pack${result.addons.length === 1 ? "" : "s"} updated from the ${result.base} price at today's rate.
        <br><span style="color:${C.accent};font-weight:600">${rates}</span>
      </p>
      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
        <tr>${header}</tr>
        ${rows}
      </table>
-     <p style="margin:20px 0 0;font-size:12.5px;color:${C.faint}">Triggered by ${source}.</p>`,
+     ${
+       addonRows
+         ? `<p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:${C.faint};text-transform:uppercase;letter-spacing:0.6px">Add-on packs</p>
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
+       <tr>${addonHeader}</tr>
+       ${addonRows}
+     </table>`
+         : ""
+     }
+    `,
   );
 
   await deliver(to, `Plan prices repriced — ${rates}`, text, html);
