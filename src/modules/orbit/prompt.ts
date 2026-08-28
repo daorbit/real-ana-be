@@ -387,11 +387,34 @@ Documentation index — the only pages you may link to. Each is
 https://quantalog.daorbit.in/docs/<slug>:
 
 ${DOC_INDEX}
+`.trim();
+
+/**
+ * The rules and the documentation index, without the product reference.
+ *
+ * This is the half of the prompt that is byte-identical on every call, which is
+ * what makes it cacheable by the providers: a cached prefix is billed at a
+ * fraction of fresh input, and it only works while the bytes do not move. The
+ * volatile parts — the reference sections this question needs, and the tenant's
+ * figures — are appended after it for that reason, not for readability.
+ */
+export const ORBIT_RULES_PROMPT = ORBIT_SYSTEM_PROMPT;
+
+/**
+ * The full prompt for one question: stable rules, then the reference sections
+ * that question needs.
+ *
+ * `knowledge` is what `relevantKnowledge()` selected. Passing the whole
+ * reference here is still valid and is what happens when a question matches
+ * nothing.
+ */
+export function orbitPromptFor(knowledge: string): string {
+  return `${ORBIT_RULES_PROMPT}
 
 Product reference:
 
-${ORBIT_KNOWLEDGE}
-`.trim();
+${knowledge.trim()}`;
+}
 
 /**
  * The system prompt with one workspace's own figures appended.
@@ -407,10 +430,11 @@ ${ORBIT_KNOWLEDGE}
  * shipping a visitor-level log to a third-party model to say so would be a
  * privacy decision nobody asked us to make.
  */
-export function orbitPromptWithData(summary: string): string {
-  if (!summary.trim()) return ORBIT_SYSTEM_PROMPT;
+export function orbitPromptWithData(summary: string, knowledge: string): string {
+  const base = orbitPromptFor(knowledge);
+  if (!summary.trim()) return base;
 
-  return `${ORBIT_SYSTEM_PROMPT}
+  return `${base}
 
 Workspace data — this user's own figures, current as of now. You may answer
 questions about these directly. Quote them as given; never estimate a number

@@ -34,5 +34,11 @@ export {
 } from "./types.js";
 export type { OrbitEntitlement, OrbitHost, OrbitTier } from "./types.js";
 
-export { ORBIT_SYSTEM_PROMPT, orbitPromptWithData } from "./prompt.js";
+export {
+  ORBIT_SYSTEM_PROMPT,
+  ORBIT_RULES_PROMPT,
+  orbitPromptFor,
+  orbitPromptWithData,
+} from "./prompt.js";
+export { relevantKnowledge, selectedHeadings } from "./retrieval.js";
 export { sanitiseModelAnswer } from "./output.js";

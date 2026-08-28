@@ -17,7 +17,8 @@
  * was a problem.
  */
 
-import { ORBIT_SYSTEM_PROMPT, orbitPromptWithData } from "./prompt.js";
+import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
+import { relevantKnowledge, selectedHeadings } from "./retrieval.js";
 import { sanitiseModelAnswer } from "./output.js";
 import {
   availableModels,
@@ -65,6 +66,64 @@ const MAX_TOKENS = 2600;
 
 /** At most this many follow-ups. Three fits the panel; more is a menu. */
 const MAX_SUGGESTIONS = 3;
+
+/**
+ * Phrases that mean "about my own numbers" rather than "about the product".
+ *
+ * Building the workspace digest costs several database queries and a large
+ * block of prompt, and most support questions cannot use a single figure in it.
+ * This decides whether that is worth doing.
+ *
+ * Written to over-include on purpose. Sending the digest to a question that did
+ * not need it wastes tokens; withholding it from one that did produces "I
+ * cannot see your analytics" to someone whose plan says otherwise, which is a
+ * bug report. So anything possessive, comparative, or time-bound counts, and
+ * only a question with none of those markers skips it.
+ */
+const DATA_MARKERS = [
+  " my ", " our ", " mine", " we ", " us ",
+  "yesterday", "today", "this week", "last week", "this month", "last month",
+  "traffic", "visitors", "pageviews", "views", "sessions", "bounce",
+  "how many", "how much", "top ", "best ", "worst ", "most ",
+  "down", "up ", "dropped", "drop", "fell", "spike", "increase", "decrease",
+  "why is", "why are", "why did", "compare", "competitor", "beat them",
+  "score", "rank", "performing", "performance",
+];
+
+function wantsData(question: string): boolean {
+  const q = ` ${question.toLowerCase()} `;
+  return DATA_MARKERS.some((m) => q.includes(m));
+}
+
+/** Where the stable rules end and this question's own context begins. */
+const KNOWLEDGE_MARKER = "\n\nProduct reference:\n\n";
+
+/**
+ * The system prompt split into a cacheable prefix and the rest.
+ *
+ * Everything up to the product reference is identical on every call, so it is
+ * sent as its own content part carrying a cache marker; the reference sections
+ * and any workspace figures follow in a second, uncached part. Providers that
+ * support prompt caching bill the first at a fraction of fresh input, and
+ * providers that do not simply see a two-part message with an unknown field.
+ *
+ * A prompt with no marker (a caller's own `systemPrompt`) is returned as one
+ * uncached part rather than guessed at — splitting someone else's instructions
+ * at an arbitrary point is how a cache prefix stops being stable.
+ */
+function cacheableSystem(prompt: string): unknown {
+  const at = prompt.indexOf(KNOWLEDGE_MARKER);
+  if (at === -1) return [{ type: "text", text: prompt }];
+
+  return [
+    {
+      type: "text",
+      text: prompt.slice(0, at),
+      cache_control: { type: "ephemeral" },
+    },
+    { type: "text", text: prompt.slice(at) },
+  ];
+}
 
 /** One turn of the conversation. */
 export type OrbitTurn = {
@@ -212,12 +271,33 @@ export async function askOrbit(
   // everyone else gets the base prompt, whose "you cannot read their data" rule
   // then holds. A failure here degrades to the base prompt rather than failing
   // the question: an answer without the numbers still beats an error.
-  let prompt = options.systemPrompt ?? ORBIT_SYSTEM_PROMPT;
+  // Only the sections this question needs, rather than the whole reference.
+  // The rules block in front of them is byte-identical every time, which is
+  // what the providers' prompt caches key on.
+  const knowledge = relevantKnowledge(question);
+  if (process.env.ORBIT_DEBUG_PROMPT) {
+    console.log(
+      `[orbit] sections=${selectedHeadings(question).join("|") || "all"} ` +
+        `knowledge=${knowledge.length}ch`,
+    );
+  }
+
+  let prompt = options.systemPrompt ?? orbitPromptFor(knowledge);
   // Only the assistant's own prompt takes the tenant's figures. A caller that
   // brought its own instructions also brought its own data in the question.
-  if (!options.systemPrompt && entitlement?.dataAccess && host?.dataSummary && tenantId) {
+  //
+  // The digest is fetched only when the question is actually about their
+  // numbers: "how do I install the tracker" was paying to build and send a
+  // stats-and-competitor summary it could not use, on the most expensive tier.
+  if (
+    !options.systemPrompt &&
+    entitlement?.dataAccess &&
+    host?.dataSummary &&
+    tenantId &&
+    wantsData(question)
+  ) {
     try {
-      prompt = orbitPromptWithData(await host.dataSummary(tenantId));
+      prompt = orbitPromptWithData(await host.dataSummary(tenantId), knowledge);
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);
     }
@@ -467,7 +547,13 @@ async function callOpenAiCompatible(
     {
       model: model.model,
       messages: [
-        { role: "system", content: prompt },
+        // The system message is sent as a content array with the rules block
+        // marked cacheable, so a provider that supports prompt caching bills
+        // the repeated half at its cached rate. The marker is ignored by
+        // providers that do not — it is an extra field on a content part,
+        // which is why this is safe to send everywhere rather than gated on a
+        // per-model capability flag we would have to maintain.
+        { role: "system", content: cacheableSystem(prompt) },
         ...history.map((t) => ({ role: t.role, content: t.content })),
         { role: "user", content: question },
       ],
