@@ -19,6 +19,7 @@
 
 import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
 import { relevantKnowledge, selectedHeadings } from "./retrieval.js";
+import { cloudflareChat } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
 import {
   availableModels,
@@ -49,6 +50,17 @@ const TIMEOUT_MS = 35_000;
  * answering in time, and the user gets an error while they still care.
  */
 const TOTAL_BUDGET_MS = 75_000;
+
+/**
+ * The least time worth starting an attempt with.
+ *
+ * Deliberately small. Most failures in this chain are immediate — a 429 or a
+ * 503 arrives in well under a second — so a few seconds is enough for a healthy
+ * model to answer or an unhealthy one to refuse, and reserving more would
+ * re-introduce the bug where one slow model cancelled the whole rest of the
+ * chain.
+ */
+const MIN_ATTEMPT_MS = 4_000;
 
 /**
  * Room for a numbered fix — an SEO answer runs to several steps with a tag to
@@ -111,9 +123,20 @@ const KNOWLEDGE_MARKER = "\n\nProduct reference:\n\n";
  * uncached part rather than guessed at — splitting someone else's instructions
  * at an arbitrary point is how a cache prefix stops being stable.
  */
-function cacheableSystem(prompt: string): unknown {
+function cacheableSystem(prompt: string, provider: OrbitModel["provider"]): unknown {
+  // Only OpenRouter documents `cache_control` on a content part. Sending the
+  // array form to a provider that has no use for it is all risk and no saving:
+  // NVIDIA's endpoint is strict about the system message's shape, and a
+  // rejected request costs that model its turn in the chain.
+  if (provider !== "openrouter") return prompt;
+
   const at = prompt.indexOf(KNOWLEDGE_MARKER);
-  if (at === -1) return [{ type: "text", text: prompt }];
+  // A plain string when there is nothing to cache — which is every caller that
+  // brought its own instructions, the social scheduler included. Several models
+  // reject a content *array* on the system message outright, so wrapping an
+  // unsplittable prompt in one to no benefit failed the whole chain and the
+  // route answered "Orbit could not answer that" whatever model was picked.
+  if (at === -1) return prompt;
 
   return [
     {
@@ -215,6 +238,16 @@ export type AskOptions = {
    * someone is watching wants a much shorter one than a background job does.
    */
   budgetMs?: number;
+  /**
+   * Cap on a single model attempt, in milliseconds.
+   *
+   * Separate from `budgetMs` because they bound different things: the budget is
+   * how long the *person* waits, this is how long one hung provider may hold
+   * that budget hostage. A route with a tight budget needs a tighter attempt
+   * ceiling to fit more than one try inside it — at the default 35s, a 70s
+   * budget buys two attempts only if both fail at exactly the timeout.
+   */
+  attemptMs?: number;
 };
 
 /**
@@ -233,7 +266,14 @@ export async function askOrbit(
   question: string,
   options: AskOptions = {},
 ): Promise<OrbitResult> {
-  const { modelId, host, tenantId, exclude = [], budgetMs = TOTAL_BUDGET_MS } = options;
+  const {
+    modelId,
+    host,
+    tenantId,
+    exclude = [],
+    budgetMs = TOTAL_BUDGET_MS,
+    attemptMs = TIMEOUT_MS,
+  } = options;
   const barred = new Set(exclude);
 
   const entitlement: OrbitEntitlement | null =
@@ -321,13 +361,18 @@ export async function askOrbit(
     // are fast (a 429 or a 503 comes back immediately); it is only a hang that
     // costs a full timeout, and refusing to try because of that possibility is
     // what turned one overloaded provider into a total outage.
-    if (elapsed > budgetMs) {
+    //
+    // The floor below is not a return to that: it reserves a few seconds, not
+    // a full timeout, so the loop stops starting an attempt that provably
+    // cannot finish — at 69s of a 70s budget the old check still began a call
+    // and let it run past the ceiling the budget exists to enforce.
+    if (elapsed > budgetMs - MIN_ATTEMPT_MS) {
       console.error("[orbit] out of time budget; giving up on the chain");
       break;
     }
 
     // Whatever is left, so a late attempt still runs rather than being skipped.
-    const raw = await callModel(model, question, history, prompt, budgetMs - elapsed);
+    const raw = await callModel(model, question, history, prompt, budgetMs - elapsed, attemptMs);
 
     if (raw.ok) {
       const parsed = parseAnswer(raw.text);
@@ -386,11 +431,17 @@ function callModel(
   prompt: string,
   /** What is left of the overall budget, so a late attempt is capped, not skipped. */
   budgetMs = TIMEOUT_MS,
+  /** The caller's per-attempt ceiling; the default is the standard timeout. */
+  attemptMs = TIMEOUT_MS,
 ): Promise<CallResult> {
-  const timeout = Math.min(TIMEOUT_MS, Math.max(4_000, budgetMs));
-  return model.provider === "gemini"
-    ? callGemini(model, question, history, prompt, timeout)
-    : callOpenAiCompatible(model, question, history, prompt, timeout);
+  const timeout = Math.min(attemptMs, Math.max(MIN_ATTEMPT_MS, budgetMs));
+  if (model.provider === "gemini") {
+    return callGemini(model, question, history, prompt, timeout);
+  }
+  if (model.provider === "cloudflare") {
+    return callCloudflare(model, question, history, prompt, timeout);
+  }
+  return callOpenAiCompatible(model, question, history, prompt, timeout);
 }
 
 /** Host, key and any provider-specific headers for an OpenAI-shaped API. */
@@ -531,6 +582,40 @@ async function callGemini(
   }
 }
 
+/**
+ * Cloudflare Workers AI, through the client in `infra/http-client`.
+ *
+ * The system prompt is sent as an ordinary first message: this endpoint has no
+ * system field of its own, and no cache markers either, so the prompt goes
+ * whole rather than split the way the OpenRouter path splits it.
+ */
+async function callCloudflare(
+  model: OrbitModel,
+  question: string,
+  history: OrbitTurn[],
+  prompt: string,
+  timeoutMs: number = TIMEOUT_MS,
+): Promise<CallResult> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+
+  try {
+    return await cloudflareChat({
+      model: model.model,
+      messages: [
+        { role: "system", content: prompt },
+        ...history.map((t) => ({ role: t.role, content: t.content })),
+        { role: "user", content: question },
+      ],
+      maxTokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
+      temperature: 0.3,
+      signal: abort.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function callOpenAiCompatible(
   model: OrbitModel,
   question: string,
@@ -547,13 +632,9 @@ async function callOpenAiCompatible(
     {
       model: model.model,
       messages: [
-        // The system message is sent as a content array with the rules block
-        // marked cacheable, so a provider that supports prompt caching bills
-        // the repeated half at its cached rate. The marker is ignored by
-        // providers that do not — it is an extra field on a content part,
-        // which is why this is safe to send everywhere rather than gated on a
-        // per-model capability flag we would have to maintain.
-        { role: "system", content: cacheableSystem(prompt) },
+        // A plain string, except on OpenRouter with a splittable prompt, where
+        // the stable rules block is sent as its own cacheable content part.
+        { role: "system", content: cacheableSystem(prompt, model.provider) },
         ...history.map((t) => ({ role: t.role, content: t.content })),
         { role: "user", content: question },
       ],

@@ -7,6 +7,7 @@ import linkedinRoutes from "./http/routes/linkedin.js";
 import instagramRoutes from "./http/routes/instagram.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
+import socialAiRoutes from "./http/routes/social-ai.js";
 import collectRoutes from "./http/routes/collect.js";
 import trackRoutes from "./http/routes/track.js";
 import statsRoutes from "./http/routes/stats.js";
@@ -217,6 +218,10 @@ app.use("/api/social/posts", dashboardCors, socialPostRoutes);
 
 // Dashboard API (restricted origin + JWT inside route modules)
 app.use("/api/auth", dashboardCors, authRoutes);
+// Before the general workspace router: both mount on the same prefix, and the
+// composer's two routes are specific paths that a later `/:wid/...` pattern
+// could otherwise shadow.
+app.use("/api/workspaces", dashboardCors, socialAiRoutes);
 app.use("/api/workspaces", dashboardCors, workspaceRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.

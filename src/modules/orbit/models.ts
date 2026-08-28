@@ -1,9 +1,10 @@
 /**
  * The models Orbit can answer with, and the order it falls back through.
  *
- * Two providers. Gemini is called directly; the rest go through OpenRouter,
- * which is one key and one request shape for models from four vendors. Adding a
- * model is a line here — nothing else in the stack needs to know the list.
+ * Gemini and Cloudflare are called directly, each with its own request shape;
+ * the rest go through OpenRouter, which is one key and one shape for models
+ * from four vendors. Adding a model is a line here — nothing else in the stack
+ * needs to know the list.
  *
  * Why a chain at all: three of these are free tiers, and a free tier is
  * rate-limited by definition. A support assistant that answers "try again
@@ -13,7 +14,7 @@
 
 import { type OrbitTier } from "./types.js";
 
-export type ModelProvider = "gemini" | "openrouter" | "nvidia";
+export type ModelProvider = "gemini" | "openrouter" | "nvidia" | "cloudflare";
 
 export type OrbitModel = {
   /** Stable id, sent by the client and stored nowhere else. */
@@ -101,6 +102,17 @@ export const ORBIT_MODELS: OrbitModel[] = [
     tier: "standard",
   },
   {
+    id: "kimi",
+    label: "Kimi K2.7",
+    hint: "Fast, good at structured replies.",
+    provider: "cloudflare",
+    model: "@cf/moonshotai/kimi-k2.7-code",
+    // Cloudflare's run endpoint takes no schema, so the model is asked in the
+    // prompt like the other unstructured ones and the parser strips the fence.
+    structured: false,
+    tier: "standard",
+  },
+  {
     id: "deepseek",
     label: "DeepSeek V4",
     hint: "Best for multi-step questions.",
@@ -138,6 +150,10 @@ export function providerReady(provider: ModelProvider): boolean {
       return Boolean(process.env.GEMINI_API_KEY);
     case "nvidia":
       return Boolean(process.env.NVIDIA_API_KEY);
+    // Both halves, because the account id is part of the URL — a token with no
+    // account to call it against is a model that would fail on every request.
+    case "cloudflare":
+      return Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
     default:
       return Boolean(process.env.OPENROUTER_API_KEY);
   }
