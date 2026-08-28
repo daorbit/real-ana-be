@@ -2,7 +2,7 @@
 #
 # A respondent who picks a file and then abandons the form leaves an asset in
 # Cloudinary that nothing will ever reference. The route deletes those once they
-# are past their grace period (UPLOAD_GRACE_MINUTES, default 2), which only
+# are past their grace period (UPLOAD_GRACE_MINUTES, default 5), which only
 # works if something calls it at that granularity — Vercel's Hobby plan caps
 # cron at one run per day, so this Worker is the scheduler.
 #
@@ -18,7 +18,7 @@ account_id = "594bc4ae163c865c9faa90cbb457d30b"
 workers_dev = false
 
 [triggers]
-# Every minute, so an abandoned upload survives 2-3 minutes at worst. The grace
+# Every minute, so an abandoned upload survives 5-6 minutes at worst. The grace
 # period is the knob for that ceiling, not this interval -- the route sweeps
 # what is past its grace rather than what this tick missed.
 crons = ["* * * * *"]
