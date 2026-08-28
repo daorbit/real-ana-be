@@ -82,7 +82,13 @@ export type OrbitAnswer = {
 
 export type OrbitResult =
   | ({ ok: true } & OrbitAnswer)
-  | { ok: false; error: string; status: number };
+  /**
+   * `quotaExceeded` marks the one failure the host should surface as an upgrade
+   * prompt rather than an error. Named rather than inferred from the 402, so the
+   * host does not have to read status codes to tell a spent allowance from any
+   * other payment-shaped refusal.
+   */
+  | { ok: false; error: string; status: number; quotaExceeded?: true };
 
 /** Whether any provider is configured. Routes check this before accepting a question. */
 export function orbitConfigured(): boolean {
@@ -191,6 +197,7 @@ export async function askOrbit(
     return {
       ok: false,
       status: 402,
+      quotaExceeded: true,
       error: entitlement
         ? `You have used all ${entitlement.monthlyQuota} questions included this period. Buy a question pack, or upgrade.`
         : "You are out of questions for this period.",

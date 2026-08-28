@@ -8,6 +8,7 @@ import { Competitor } from "../../modules/seo/models/Competitor.js";
 import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
 import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import { planLimit } from "../plan-limit.js";
 import {
   computeStats,
   computeFunnel,
@@ -200,7 +201,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     return res.status(400).json({ error: "domain required" });
 
   const allowed = await canCreateSite(ws.id);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const site = await Site.create({
     workspaceId: ws.id,
@@ -748,7 +749,7 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
 
   const rangeKey = String(req.query.range ?? "24h");
   const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   // A baseline the plan doesn't include degrades to "previous" rather than
   // refusing the request — see `canUseCompare`.
@@ -824,7 +825,7 @@ router.get("/:wid/stats/compare", async (req: AuthedRequest, res: Response) => {
 
   const rangeKey = String(req.query.range ?? "24h");
   const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const askedCompare = parseCompareMode(req.query.compare);
   const compare = (await canUseCompare(ws.id, askedCompare)) ? askedCompare : "previous";
@@ -853,7 +854,7 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
 
   const rangeKey = String(req.query.range ?? "24h");
   const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const filters = parseFilters(req.query.filter);
@@ -1041,10 +1042,12 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   // spend compute on it.
   const plan = await currentPlan(ws.id);
   if (!plan || plan.slug === "free") {
-    return res.status(402).json({
-      error: "funnels need this workspace on the Starter or Pro plan",
-      code: "plan_required",
-    });
+    return planLimit(
+      res,
+      "funnels need this workspace on the Starter or Pro plan",
+      { kind: "funnels", label: "Funnels", plan: plan?.name },
+      "plan_required",
+    );
   }
 
   const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
@@ -1066,7 +1069,7 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
 
   const rangeKey = String(req.body?.range ?? "24h");
   const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
   const result = await computeFunnel(ids, steps, rangeKey, win);
@@ -1152,7 +1155,7 @@ router.get("/:wid/user-flow", async (req: AuthedRequest, res: Response) => {
 
   const rangeKey = String(req.query.range ?? "24h");
   const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const result = await computeUserFlow(ids, rangeKey, win);

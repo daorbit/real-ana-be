@@ -8,6 +8,7 @@ import { runSchedule, testWhatsApp } from "../../modules/reports/report-runner.j
 import { normalizePhone, whatsappConfigured, sessionStatus } from "../../infra/messaging/whatsapp.js";
 import { mailConfigured } from "../../infra/mail/mailer.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
+import { planLimit } from "../plan-limit.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 
 /**
@@ -151,10 +152,10 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
   const allowed = await canCreateReportSchedule(ws.id);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error, code: "quota_exceeded" });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
-  if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
+  if (!configurable.ok) return planLimit(res, configurable.error, configurable.limit);
 
   const schedule = await ReportSchedule.create({
     workspaceId: ws.id,
@@ -183,7 +184,7 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
   const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
-  if (!configurable.ok) return res.status(402).json({ error: configurable.error, code: "quota_exceeded" });
+  if (!configurable.ok) return planLimit(res, configurable.error, configurable.limit);
 
   // Existing recipients keep their unsubscribe token, and their unsubscribed
   // state with it. Reissuing tokens on every edit would silently resubscribe
@@ -303,7 +304,7 @@ router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
   // WhatsApp channel after a downgrade, and without this the test button
   // stays a working way to send messages the plan no longer includes.
   const allowed = await canUseWhatsAppReports(ws.id);
-  if (!allowed.ok) return res.status(402).json({ error: allowed.error });
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
   if (!schedule) return res.status(404).json({ error: "schedule not found" });

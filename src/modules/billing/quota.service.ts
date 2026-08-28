@@ -11,6 +11,7 @@ import {
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { invalidateSite } from "./event-quota.js";
+import type { PlanLimitInfo } from "../../http/plan-limit.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
   resolveOrbitPlan,
@@ -121,6 +122,18 @@ export async function activateOrbitPeriod(
 }
 
 /**
+ * The answer to "may this workspace do that?".
+ *
+ * `limit` describes the cap that stopped it, and travels to the client so the
+ * upgrade dialog can name which allowance ran out rather than making the reader
+ * infer it from the sentence. Optional: a check that has nothing to count (a
+ * feature the plan simply does not include) sends the prose alone.
+ */
+export type QuotaCheck =
+  | { ok: true }
+  | { ok: false; error: string; limit?: PlanLimitInfo };
+
+/**
  * Whether `workspaceId` may hold one more site.
  *
  * The cap is flat across tiers (see `MAX_SITES_PER_WORKSPACE`) — the way to
@@ -130,7 +143,7 @@ export async function activateOrbitPeriod(
  */
 export async function canCreateSite(
   workspaceId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to add a site" };
 
@@ -142,6 +155,7 @@ export async function canCreateSite(
     return {
       ok: false,
       error: `a workspace holds up to ${cap} sites — create another workspace to track more`,
+      limit: { kind: "sites", label: "Sites", used: count, quota: cap, plan: plan.name },
     };
   return { ok: true };
 }
@@ -155,7 +169,7 @@ export async function canCreateSite(
 export async function canUseRange(
   workspaceId: string,
   range: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to view analytics" };
 
@@ -164,6 +178,7 @@ export async function canUseRange(
     return {
       ok: false,
       error: `this workspace's plan only supports ${plan.allowedRanges.join("/")} ranges — upgrade for 7d, 30d, and custom ranges`,
+      limit: { kind: "date_range", label: "Date range", plan: plan.name },
     };
   return { ok: true };
 }
@@ -195,7 +210,7 @@ export async function canUseCompare(
 export async function canCreateReportSchedule(
   workspaceId: string,
   excludeId?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to schedule reports" };
 
@@ -206,6 +221,13 @@ export async function canCreateReportSchedule(
     return {
       ok: false,
       error: `this workspace's plan allows ${plan.maxReportSchedules} scheduled report${plan.maxReportSchedules === 1 ? "" : "s"} — upgrade to add more`,
+      limit: {
+        kind: "report_schedules",
+        label: "Scheduled reports",
+        used: count,
+        quota: plan.maxReportSchedules,
+        plan: plan.name,
+      },
     };
   return { ok: true };
 }
@@ -213,13 +235,14 @@ export async function canCreateReportSchedule(
 /** Whether this workspace's plan includes WhatsApp report delivery at all. */
 export async function canUseWhatsAppReports(
   workspaceId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to schedule reports" };
   if (!plan.whatsappReports)
     return {
       ok: false,
       error: "WhatsApp delivery is a Pro feature — upgrade this workspace, or deliver this report by email",
+      limit: { kind: "whatsapp_reports", label: "WhatsApp delivery", plan: plan.name },
     };
   return { ok: true };
 }
@@ -236,7 +259,7 @@ export async function canConfigureReport(
   frequency: string,
   recipientCount: number,
   wantsWhatsApp = false,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to schedule reports" };
 
@@ -249,29 +272,30 @@ export async function canConfigureReport(
     return {
       ok: false,
       error: `this workspace's plan supports ${plan.allowedReportFrequencies.join("/")} reports — upgrade for more frequent delivery`,
+      limit: { kind: "report_frequency", label: "Report frequency", plan: plan.name },
     };
 
   if (recipientCount > plan.maxReportRecipients)
     return {
       ok: false,
       error: `this workspace's plan allows ${plan.maxReportRecipients} recipient${plan.maxReportRecipients === 1 ? "" : "s"} per report — upgrade to send to more people`,
+      limit: {
+        kind: "report_recipients",
+        label: "Report recipients",
+        used: recipientCount,
+        quota: plan.maxReportRecipients,
+        plan: plan.name,
+      },
     };
 
   return { ok: true };
 }
 
-/**
- * Whether `workspaceId` may add one more scheduled social post.
- *
- * Counts what is queued rather than what has ever been sent: a post that has
- * already published is history and holds nothing open, so it does not spend a
- * slot. `excludeId` lets an edit re-check the cap without the post being
- * edited counting against itself.
- */
+
 export async function canCreateScheduledPost(
   workspaceId: string,
   excludeId?: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to schedule posts" };
 
@@ -282,7 +306,11 @@ export async function canCreateScheduledPost(
   const cap = plan.maxScheduledPosts + bought;
 
   if (cap === 0)
-    return { ok: false, error: "this workspace's plan does not include scheduled posts — upgrade to use them" };
+    return {
+      ok: false,
+      error: "this workspace's plan does not include scheduled posts — upgrade to use them",
+      limit: { kind: "scheduled_posts", label: "Scheduled posts", used: 0, quota: 0, plan: plan.name },
+    };
 
   const count = await ScheduledPost.countDocuments({
     workspaceId,
@@ -293,26 +321,20 @@ export async function canCreateScheduledPost(
     return {
       ok: false,
       error: `this workspace can hold ${cap} scheduled post${cap === 1 ? "" : "s"} — upgrade or buy more slots to schedule beyond that`,
+      limit: {
+        kind: "scheduled_posts",
+        label: "Scheduled posts",
+        used: count,
+        quota: cap,
+        plan: plan.name,
+      },
     };
   return { ok: true };
 }
 
-/**
- * What the forms service is allowed to do for this workspace.
- *
- * Forms live in their own service with their own database, so this is the whole
- * answer in one call rather than a check per rule: the caller is across a
- * network boundary and caches what it gets back, and a round trip per limit on
- * a public form submission would be three round trips too many.
- *
- * `formsUsed` is deliberately absent — the forms service counts its own rows,
- * because it owns them. This returns the caps and the submission meter, which
- * are the parts billing owns.
- */
+ 
 export async function formLimits(workspaceId: string) {
-  // A lapsed or missing plan is not "no forms": the workspace keeps what it
-  // built and can still receive responses at the Free allowance, which is what
-  // an expired paid period falls back to everywhere else.
+
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
   const sub = await Subscription.findOne({ workspaceId }).select(
     "formSubmissionsUsed addonFormSubmissionCredits",
@@ -320,36 +342,22 @@ export async function formLimits(workspaceId: string) {
 
   return {
     plan: plan.slug,
+    // The display name too: the forms service builds its own limit dialogs and
+    // would otherwise have to keep its own slug-to-name table in sync with this
+    // catalogue.
+    planName: plan.name,
     maxForms: plan.maxForms,
     monthlySubmissionQuota: plan.monthlySubmissionQuota,
     submissionsUsed: (sub?.get("formSubmissionsUsed") as number) ?? 0,
-    // Bought responses sit on top of the cycle's allowance and never expire, so
-    // the forms service has to weigh both before refusing one.
     submissionCredits: (sub?.get("addonFormSubmissionCredits") as number) ?? 0,
     notificationEmails: plan.formNotificationEmails,
     fileUploads: plan.formFileUploads,
   };
 }
 
-/**
- * Record one stored form submission, against the plan's allowance first and
- * bought credits after.
- *
- * Unconditional, unlike `spendQuota`: the response has already been saved by
- * the time this is called, so refusing would lose the count rather than the
- * row. Whether the *next* one is accepted is decided by `formLimits` above.
- *
- * The plan's own allowance is spent before any purchased credit, so a customer's
- * addon outlasts the cycle it was bought in instead of being consumed alongside
- * the quota they already had.
- */
 export async function recordFormSubmission(workspaceId: string): Promise<void> {
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
 
-  // Conditional so two submissions arriving together cannot both read "quota
-  // left" before either writes, and spend the same last unit twice. The `$or`
-  // covers rows written before this field existed, which `$lt` alone will not
-  // match.
   const withinPlan = await Subscription.findOneAndUpdate(
     {
       workspaceId,
@@ -376,37 +384,26 @@ export async function recordFormSubmission(workspaceId: string): Promise<void> {
 /** Whether this workspace's plan allows a post to repeat rather than go out once. */
 export async function canUseRepeatingPosts(
   workspaceId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<QuotaCheck> {
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan" };
   if (!plan.repeatingPosts)
-    return { ok: false, error: "repeating posts are not included in this workspace's plan — upgrade to use them" };
+    return {
+      ok: false,
+      error: "repeating posts are not included in this workspace's plan — upgrade to use them",
+      limit: { kind: "repeating_posts", label: "Repeating posts", plan: plan.name },
+    };
   return { ok: true };
 }
 
-/**
- * Whether `workspaceId` has room for one more audit or crawl this cycle,
- * without spending it. Used to give a clear pre-flight error instead of letting
- * the (slow, external) audit/crawl run and then discovering there was no quota.
- */
-/**
- * This cycle's plan allowance for one quota kind, or null if there is no live
- * plan behind it.
- *
- * Orbit is read from its own ladder and its own expiry, so the two tiers lapse
- * independently. It also never returns null for a live workspace: an expired
- * Orbit period lands on Free, which still has an allowance.
- */
+
 async function planAllowance(
   sub: { planSlug: unknown; currentPeriodEnd?: Date | null },
   workspaceId: string,
   kind: QuotaKind,
 ): Promise<number | null> {
   if (kind === "orbit") {
-    // Imported lazily to break a cycle: `orbit-host` owns the rule for which
-    // Orbit tier a workspace is effectively on — which depends on its analytics
-    // plan — and in turn calls back into this module for the quota primitives.
-    // A static import either way round would be circular at load time.
+
     const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
     return (await effectiveOrbitPlan(workspaceId)).monthlyQuota;
   }
@@ -418,10 +415,6 @@ async function planAllowance(
 
 export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ workspaceId });
-  // No subscription, or a lapsed paid period, means no plan quota — but a
-  // lapsed period can still have unspent addon credits, which never expire,
-  // so this falls through to the credits check below rather than refusing
-  // outright.
   if (!sub) return false;
 
   const fields = QUOTA_FIELDS[kind];
@@ -435,15 +428,6 @@ export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<bo
   return (((sub.get(fields.credits) as number) ?? 0) > 0);
 }
 
-/**
- * Spend one unit of this workspace's quota, preferring the plan's own allowance
- * before dipping into purchased addon credits — a customer's addon purchase
- * should outlast this cycle's plan allotment, not get consumed alongside it.
- *
- * Returns false (and spends nothing) if there was no quota left; the caller
- * must check this *before* doing the expensive work, then call this to commit
- * the spend once the audit/crawl actually ran.
- */
 export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return false;
@@ -451,15 +435,8 @@ export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<
   const { used: usedField, credits: creditField } = QUOTA_FIELDS[kind];
   const allowance = await planAllowance(sub, workspaceId, kind);
 
-  // Atomic conditional increments — two concurrent requests (double-click, two
-  // tabs, a client retry) must not both read "quota left" before either
-  // writes, or the workspace spends one more unit than it has. The condition is
-  // re-checked by Mongo at write time, not by JS after a separate read.
   if (allowance !== null) {
-    // The `$or` covers rows written before this field existed: Mongo's `$lt`
-    // does not match a missing field, so without the null branch every
-    // pre-Orbit subscription would read as having no allowance left and go
-    // straight to credits it also does not have.
+
     const spent = await Subscription.findOneAndUpdate(
       {
         workspaceId,

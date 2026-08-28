@@ -12,6 +12,7 @@ import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { quotaSummary } from "../../modules/billing/quota.service.js";
 import { effectiveOrbitPlan, quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
+import { planLimit } from "../plan-limit.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -189,6 +190,15 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   });
 
   if (!result.ok) {
+    // A spent question allowance is a plan limit, not a failure — it goes back
+    // in the shape the dashboard's upgrade dialog reads, like every other cap.
+    if (result.quotaExceeded) {
+      return planLimit(res, result.error, {
+        kind: "orbit_questions",
+        label: "Orbit questions",
+        quota: plan.monthlyQuota,
+      });
+    }
     return res.status(result.status).json({ error: result.error });
   }
 

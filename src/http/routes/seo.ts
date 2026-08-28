@@ -4,6 +4,7 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { SeoReport } from "../../modules/seo/models/SeoReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import { planLimit } from "../plan-limit.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js";
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
 import { resolveSite, siteRefused, type SiteRefused } from "./resolve-site.js";
@@ -89,10 +90,11 @@ router.post(
     // here. Checked before the (slow) analysis runs, spent only after it
     // succeeds — a failed audit should not cost the workspace a credit.
     if (!(await hasQuota(ws.id, "audit")))
-      return res.status(402).json({
-        error: "this workspace's monthly audit quota is used up — buy an addon pack or upgrade its plan",
-        code: "quota_exceeded",
-      });
+      return planLimit(
+        res,
+        "this workspace's monthly audit quota is used up — buy an addon pack or upgrade its plan",
+        { kind: "audits", label: "SEO audits" },
+      );
 
     const lockKey = `${site.siteId}:${url}`;
     if (running.has(lockKey))
@@ -278,10 +280,11 @@ router.post(
       });
 
     if (!(await hasQuota(ws.id, "crawl")))
-      return res.status(402).json({
-        error: "this workspace's monthly crawl quota is used up — buy an addon pack or upgrade its plan",
-        code: "quota_exceeded",
-      });
+      return planLimit(
+        res,
+        "this workspace's monthly crawl quota is used up — buy an addon pack or upgrade its plan",
+        { kind: "crawls", label: "Site crawls" },
+      );
 
     crawling.add(site.siteId);
     try {
