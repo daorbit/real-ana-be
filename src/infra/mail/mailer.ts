@@ -1328,6 +1328,64 @@ This invitation expires in ${invite.expiresInDays} days. If you weren't expectin
   );
 }
 
+export async function sendPlanExpiryEmail(
+  to: Recipient,
+  info: { workspaceName: string; planName: string; daysLeft: number; endsOn: Date },
+): Promise<void> {
+  const link = `${LINKS.app}/app/billing`;
+  const when =
+    info.daysLeft <= 1 ? "tomorrow" : `in ${info.daysLeft} days`;
+  const endsOn = info.endsOn.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+
+  const text = `Your ${info.planName} plan for "${info.workspaceName}" ends ${when}, on ${endsOn}.
+
+Plans do not renew automatically, so nothing will be charged. When the period ends the workspace drops to the Free plan: tracking continues at Free's allowance and everything already collected stays readable, but the paid features stop.
+
+Renew here: ${link}`;
+
+  await sendOne(
+    to,
+    `Your ${info.planName} plan ends ${when}`,
+    text,
+    planExpiryHtml(info, link, when, endsOn),
+  );
+}
+
+export function planExpiryHtml(
+  info: { workspaceName: string; planName: string; daysLeft: number },
+  link: string,
+  when: string,
+  endsOn: string,
+): string {
+  return shell(
+    `${heading(`Your plan ends ${when}`)}
+     ${paragraph(
+       `The <strong style="color:${C.text}">${escapeHtml(info.planName)}</strong> plan for this workspace is coming to an end.`,
+     )}
+
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.block}px 0 0">
+       <tr><td class="panel" align="center" style="background:${C.panel};border-radius:10px;padding:18px 20px">
+         <p style="margin:0;font-size:16px;font-weight:700;line-height:1.4;color:${C.text};letter-spacing:-0.2px">${escapeHtml(info.workspaceName)}</p>
+         <p style="margin:5px 0 0;font-size:13px;line-height:1.6;color:${C.faint}">Ends on ${escapeHtml(endsOn)}</p>
+       </td></tr>
+     </table>
+
+     ${paragraph(
+       "Plans do not renew automatically, so nothing will be charged. When the period ends the workspace drops to the Free plan — tracking continues at Free's allowance and everything already collected stays readable, but the paid features stop.",
+     )}
+
+     ${button("Renew plan", link)}
+
+     ${footnote(
+       "If you have already renewed, or meant to let this lapse, you can ignore this email.",
+     )}`,
+  );
+}
+
 export function workspaceInviteHtml(
   invite: { workspaceName: string; inviterName: string; expiresInDays: number },
   link: string,

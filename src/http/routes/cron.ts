@@ -4,6 +4,7 @@ import { sendFxSuccessReport, sendFxFailureReport } from "../../modules/billing/
 import { runDueSchedules } from "../../modules/reports/report-runner.js";
 import { runDuePosts } from "../../modules/social/post-runner.js";
 import { runStatsRefresh } from "../../modules/social/stats-runner.js";
+import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -166,6 +167,22 @@ router.get("/social-stats", async (req: Request, res: Response) => {
   }
 });
 
+router.get("/plan-expiry", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await sendExpiryReminders();
+    if (summary.sent > 0) {
+      console.log(`[cron] plan expiry: ${summary.checked} checked, ${summary.sent} sent, ${summary.failed} failed`);
+    }
+    if (summary.errors.length) console.error("[cron] plan expiry errors:", summary.errors.join(" | "));
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] plan expiry run failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 /**
  * Run every job in one request.
  *
@@ -220,6 +237,14 @@ router.get("/run", async (req: Request, res: Response) => {
     const message = (e as Error).message;
     console.error("[cron] social post run failed:", message);
     errors.push(`social-posts: ${message}`);
+  }
+
+  try {
+    ran["plan-expiry"] = await sendExpiryReminders();
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] plan expiry run failed:", message);
+    errors.push(`plan-expiry: ${message}`);
   }
 
   try {

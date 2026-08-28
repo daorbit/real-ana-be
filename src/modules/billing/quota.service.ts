@@ -57,6 +57,7 @@ export async function activatePlanPeriod(
         crawlsUsed: 0,
         eventsUsed: 0,
         formSubmissionsUsed: 0,
+        expiryRemindersSent: [],
       },
     },
     { upsert: true }
@@ -516,8 +517,17 @@ export async function quotaSummary(workspaceId: string) {
     },
     workspaceId: String(sub.workspaceId),
     plan: { slug: plan.slug, name: plan.name },
+    /**
+     * The plan that lapsed, when one has. Null while the period is live. The
+     * dashboard needs it to say what expired — `plan` above has already fallen
+     * back to Free by then and cannot answer that.
+     */
+    lapsedPlan:
+      expired && boughtPlan && boughtPlan.slug !== "free"
+        ? { slug: boughtPlan.slug, name: boughtPlan.name }
+        : null,
     cycle: sub.cycle,
-    status: isExpired(sub) ? ("expired" as const) : sub.status,
+    status: expired ? ("expired" as const) : sub.status,
     currentPeriodEnd: sub.currentPeriodEnd,
     audits: {
       planQuota: plan.monthlyAuditQuota,
