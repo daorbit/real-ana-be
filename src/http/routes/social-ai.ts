@@ -156,6 +156,17 @@ type PlanTurn = { role: "user" | "assistant"; content: string };
 /** How many exchanges of a planning conversation are carried into the model. */
 const MAX_PLAN_TURNS = 12;
 
+/**
+ * The models this route will start on, whatever the client asks for.
+ *
+ * An allow-list rather than a rejection, because the id arrives from the chat
+ * panel's own picker via localStorage — it is a preference about support
+ * answers, and a perfectly valid one there can be a model measured as unusable
+ * here. Anything outside this set falls back to the route's own default rather
+ * than failing the request: the author asked for a post, not for a model.
+ */
+const PLAN_MODELS = new Set(["kimi", "deepseek", "nemotron", "north-mini"]);
+
  
 router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
@@ -250,36 +261,26 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
       // is not one — returns clean JSON and the best captions of anything in
       // the chain. `parsePlan` handles a fence or a stray sentence, so asking
       // nicely in the prompt is enough.
-      // Defaulted to DeepSeek rather than to the chain's own head, which is
-      // Gemini — barred below, so without this the route would start on
-      // whatever happens to be second.
-      modelId: String(req.body?.modelId ?? "").slice(0, 60) || "deepseek",
+ 
+      modelId: PLAN_MODELS.has(String(req.body?.modelId ?? ""))
+        ? String(req.body.modelId)
+        : "kimi",
 
-      // Measured against this exact prompt on 2026-08-21:
-      //   deepseek     15s, correct JSON, a caption worth publishing
-      //   north-mini   55s, correct JSON, but a caption that only echoes the
-      //                instruction back
-      //   gpt-oss      returns an empty completion however large its token
-      //                budget — it reasons and then writes nothing
-      //   gemma        429, the free pool is rate-limited upstream
-      //   gemini       503 while it is overloaded, and it is first in the
-      //                chain, so it burned the budget before anything else ran
+ 
+      // Models measured as unusable for *this* prompt. They stay in the chat
+      // panel's chain, where they are fine; the difference is that this route
+      // needs a JSON object back and has someone waiting on it.
       //
-      // Only the two that cannot produce an answer here are barred. Gemini
-      // stays in the chat panel's chain, where it is the best model when it is
-      // up; this route cannot afford to wait for it to fail first.
-      exclude: ["gemini-flash", "gpt-oss"],
+      //   gemini-flash  503s while overloaded, and leads the chain — so it
+      //                 burned the budget before anything else ran
+      //   gpt-oss       returns an empty completion however large its token
+      //                 budget; it reasons and then writes nothing
+      //   gemma         the free pool is rate-limited upstream and answers 429
+      //                 on most attempts. Not the same model as gemini-flash,
+      //                 which is why excluding that one never stopped this.
+      exclude: ["gemini-flash", "gpt-oss", "gemma"],
 
-      // Someone is watching a chat panel, and a minute of spinner is worse
-      // than an honest "try rewording that" — the composer keeps the
-      // conversation, so retrying costs one click.
-      //
-      // Measured against this prompt on 2026-08-28: DeepSeek returns in 17-31s,
-      // varying run to run on identical input. The ceiling has to clear that
-      // tail or the chain aborts a model that was about to answer — a 20s cap
-      // turned every request into 504s and an error, which is worse than
-      // waiting. Kimi leads the chain because it is the fast one; this budget
-      // is sized for the fallback behind it, not the normal path.
+ 
       budgetMs: 72_000,
       attemptMs: 34_000,
     },

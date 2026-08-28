@@ -103,12 +103,17 @@ export const ORBIT_MODELS: OrbitModel[] = [
   },
   {
     id: "kimi",
-    label: "Kimi K2.7",
-    hint: "Fast, good at structured replies.",
+    label: "Kimi K2.6",
+    hint: "Fast, strong on structure.",
     provider: "cloudflare",
-    model: "@cf/moonshotai/kimi-k2.7-code",
-    // Cloudflare's run endpoint takes no schema, so the model is asked in the
-    // prompt like the other unstructured ones and the parser strips the fence.
+    // The general model, not `kimi-k2.7-code`: that variant is tuned for
+    // agentic coding, and this chain's work is writing a caption in someone's
+    // own voice. Both are 1T-parameter MoE with a 262k context.
+    model: "@cf/moonshotai/kimi-k2.6",
+    // Cloudflare's `/ai/run` endpoint takes no JSON schema, so the model is
+    // asked in the prompt like the other unstructured ones and the parser
+    // strips the fence. The model itself does support structured output — this
+    // flag is about the request shape we send, not the model's capability.
     structured: false,
     tier: "standard",
   },
