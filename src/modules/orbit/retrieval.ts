@@ -115,7 +115,20 @@ export function relevantKnowledge(question: string): string {
     .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score);
 
-  if (scored.length === 0) return ORBIT_KNOWLEDGE;
+  // The always-on section is excluded from the ranking (it travels regardless)
+  // but its cues still count as a match: "do I need a cookie banner" scores
+  // only under Core concepts, and treating that as "matched nothing" sent the
+  // whole reference for a question the always-on section already answers.
+  const alwaysMatched = score(
+    SECTIONS.find((s) => s.heading === ALWAYS) ?? { heading: "", body: "", cues: [] },
+    question,
+  ) > 0;
+
+  if (scored.length === 0 && !alwaysMatched) return ORBIT_KNOWLEDGE;
+  if (scored.length === 0) {
+    const always = SECTIONS.find((s) => s.heading === ALWAYS);
+    return [PREAMBLE, always?.body].filter(Boolean).join("\n\n");
+  }
 
   // Ties at the cut-off line are kept rather than broken arbitrarily: two
   // sections scoring equally are equally likely to hold the answer, and the
