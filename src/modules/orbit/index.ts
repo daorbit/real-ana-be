@@ -34,5 +34,6 @@ export {
   orbitPublicPromptFor,
   PUBLIC_ORBIT_SUGGESTIONS,
 } from "./prompt-public.js";
+export type { PageContext } from "./prompt-public.js";
 export { relevantKnowledge, selectedHeadings } from "./retrieval.js";
 export { sanitiseModelAnswer } from "./output.js";
