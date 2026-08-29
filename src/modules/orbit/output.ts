@@ -387,6 +387,30 @@ function splitTrailingQuestions(reply: string): { reply: string; questions: stri
     if (body && items.length > 0) return { reply: body, questions: items.slice(0, 3) };
   }
 
+  // The single-line form: an unstructured model (Cloudflare's Llama does this)
+  // ends the reply with `suggestions: first thing, second thing` on one line,
+  // comma-separated, rather than a JSON array or a bulleted block. Neither the
+  // headed regex above (it wants a newline after the colon) nor the
+  // question-mark line-walker below catches it, so the chips come back empty
+  // and the junk line stays stuck on the end of the answer.
+  const inlineList =
+    /\n[ \t]*(?:\*\*)?(?:suggestions?|follow[- ]?ups?(?:\s+questions?)?|related questions?)(?:\*\*)?[ \t]*:[ \t]*(.+?)[ \t]*$/i.exec(
+      reply,
+    );
+
+  if (inlineList) {
+    // Split on real separators only — a comma, a semicolon, or a pipe. Not
+    // "and": "add and remove a site" is one suggestion, and the models that
+    // use this form reliably comma-separate.
+    const items = inlineList[1]
+      .split(/\s*(?:,|;|\|)\s*/)
+      .map((l) => l.replace(/^["'“]|["'”.]$/g, "").trim())
+      .filter((l) => l.length > 0 && l.length <= 80);
+
+    const body = reply.slice(0, inlineList.index).trim();
+    if (body && items.length > 0) return { reply: body, questions: items.slice(0, 3) };
+  }
+
   const lines = reply.split("\n");
   const questions: string[] = [];
 
