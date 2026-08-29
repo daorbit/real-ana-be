@@ -49,27 +49,9 @@ export type OrbitModel = {
    * the information it would need.
    */
   tier: OrbitTier;
-  /**
-   * Whether the model thinks before it writes, spending the token budget on a
-   * `reasoning` field first.
-   *
-   * The answer's own allowance is whatever is left, so at the shared limit
-   * these return an empty completion — a 200 with nothing in it, which costs
-   * the model its turn in the chain for no reason. Callers give them a larger
-   * budget. Measured, not assumed: GPT-OSS answered a short prompt in three
-   * seconds and returned an empty string on a long one at the same limit.
-   */
   reasoning?: boolean;
 };
-
-/**
- * Ordered. The first entry is the default, and a failed call falls through to
- * the next — so this is a preference list, not a menu.
- *
- * Gemini leads because it is the only one on a paid key here: it is the least
- * likely to be rate-limited, and the only one that reliably honours the JSON
- * schema rather than fencing its output.
- */
+ 
 export const ORBIT_MODELS: OrbitModel[] = [
   {
     id: "gemini-flash",
@@ -106,14 +88,7 @@ export const ORBIT_MODELS: OrbitModel[] = [
     label: "Llama 3.3 70B",
     hint: "Fastest for structured replies.",
     provider: "cloudflare",
-    // Measured on the composer's plan prompt, 2026-08-28: 1.6-3.6s and a
-    // parseable object on every attempt, against 17-31s for DeepSeek on
-    // OpenRouter. Kimi would have been the better writer but is not on
-    // Cloudflare's free tier — both K2.6 and K2.7 answer 403 there.
     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-    // Cloudflare's `/ai/run` endpoint takes no JSON schema, so the model is
-    // asked in the prompt like the other unstructured ones and the parser
-    // strips whatever wrapper it adds.
     structured: false,
     tier: "standard",
   },
@@ -160,15 +135,12 @@ export const ORBIT_MODELS: OrbitModel[] = [
   },
 ];
 
-/** Whether a provider has the key it needs. */
 export function providerReady(provider: ModelProvider): boolean {
   switch (provider) {
     case "gemini":
       return Boolean(process.env.GEMINI_API_KEY);
     case "nvidia":
       return Boolean(process.env.NVIDIA_API_KEY);
-    // Both halves, because the account id is part of the URL — a token with no
-    // account to call it against is a model that would fail on every request.
     case "cloudflare":
       return Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
     default:
@@ -176,18 +148,27 @@ export function providerReady(provider: ModelProvider): boolean {
   }
 }
 
-/**
- * The models that can actually run right now, in preference order.
- *
- * Every configured model, for every caller. Models are not sold separately —
- * what a plan buys is quota, history and data access, and a question that has
- * quota may be answered by whichever model is up. The `tier` argument is kept
- * so call sites read the same, and deliberately ignored: gating the list by
- * tier is what left a plan with one eligible model and no fallback when that
- * model was rate-limited.
- */
+ 
 export function availableModels(_tier?: OrbitTier): OrbitModel[] {
   return ORBIT_MODELS.filter((m) => providerReady(m.provider));
+}
+
+/**
+ * The ids of every model served by Cloudflare Workers AI.
+ *
+ * For callers that want to pin the chain to one provider — the public
+ * marketing endpoint does this so an unauthenticated bill is bounded to one
+ * account's rate, and because Cloudflare's models are the fastest here, which
+ * is what a visitor watching a chat panel notices. Returned as ids so a caller
+ * can hand them straight to `askOrbit`'s `exclude` after inverting.
+ */
+export function cloudflareModelIds(): string[] {
+  return ORBIT_MODELS.filter((m) => m.provider === "cloudflare").map((m) => m.id);
+}
+
+/** The ids of every model NOT served by Cloudflare — the `exclude` list for a CF-only call. */
+export function nonCloudflareModelIds(): string[] {
+  return ORBIT_MODELS.filter((m) => m.provider !== "cloudflare").map((m) => m.id);
 }
 
 /**

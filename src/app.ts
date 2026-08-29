@@ -32,6 +32,7 @@ import contactPublicRoutes from "./http/routes/contact-public.js";
 import newsletterPublicRoutes from "./http/routes/newsletter-public.js";
 import supportRoutes from "./http/routes/support.js";
 import orbitRoutes from "./http/routes/orbit.js";
+import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
@@ -188,6 +189,10 @@ app.use("/api/public/reports", openCors, reportsPublicRoutes);
 app.use("/api/public/contact", openCors, contactPublicRoutes);
 // The newsletter dialog on the same site. Same origin story, same write-only shape.
 app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
+// Orbit on the marketing site — unauthenticated pre-sales chat, Cloudflare-only
+// models, rate-limited per IP. Separate from the workspace-metered in-app
+// assistant at /api/workspaces/:wid/orbit.
+app.use("/api/public/orbit", openCors, orbitPublicRoutes);
 // LinkedIn account connection and publishing. Mounted before `/api/auth` so
 // its paths win. The router applies CORS per route rather than taking it here:
 // its two redirect endpoints are browser navigations (one from a

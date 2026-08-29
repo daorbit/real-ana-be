@@ -1,17 +1,4 @@
-/**
- * Orbit — an embeddable support assistant.
- *
- * The public surface of what will become a standalone package. Nothing in this
- * directory imports from the rest of the application: the product it is
- * embedded in supplies entitlements, quota and (optionally) its own data
- * through the `OrbitHost` interface, and Orbit supplies the models, the prompt,
- * the fallback chain and the answer.
- *
- * The rule that keeps it extractable: policy about *who may do what* belongs to
- * the host, and mechanism belongs here. "The Pro plan includes the Pro AI tier"
- * is a pricing decision that differs per embedder; "advanced tier reaches every
- * model" is a fact about Orbit.
- */
+ 
 
 export { askOrbit, orbitConfigured } from "./ask.js";
 export type { AskOptions, OrbitAnswer, OrbitResult, OrbitTurn } from "./ask.js";
@@ -19,7 +6,9 @@ export type { AskOptions, OrbitAnswer, OrbitResult, OrbitTurn } from "./ask.js";
 export {
   ORBIT_MODELS,
   availableModels,
+  cloudflareModelIds,
   fallbackChain,
+  nonCloudflareModelIds,
   providerReady,
   resolveModel,
   structuredModelId,
@@ -40,5 +29,10 @@ export {
   orbitPromptFor,
   orbitPromptWithData,
 } from "./prompt.js";
+export {
+  ORBIT_PUBLIC_SYSTEM_PROMPT,
+  orbitPublicPromptFor,
+  PUBLIC_ORBIT_SUGGESTIONS,
+} from "./prompt-public.js";
 export { relevantKnowledge, selectedHeadings } from "./retrieval.js";
 export { sanitiseModelAnswer } from "./output.js";
