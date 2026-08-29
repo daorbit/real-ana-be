@@ -7,6 +7,7 @@ import linkedinRoutes from "./http/routes/linkedin.js";
 import instagramRoutes from "./http/routes/instagram.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
+import formsTokenRoutes from "./http/routes/forms-token.js";
 import socialAiRoutes from "./http/routes/social-ai.js";
 import collectRoutes from "./http/routes/collect.js";
 import trackRoutes from "./http/routes/track.js";
@@ -228,6 +229,10 @@ app.use("/api/auth", dashboardCors, authRoutes);
 // could otherwise shadow.
 app.use("/api/workspaces", dashboardCors, socialAiRoutes);
 app.use("/api/workspaces", dashboardCors, workspaceRoutes);
+// Mints the short-lived token the embedded forms service needs before it will
+// hand over or change a workspace's payment credentials. Same prefix, same
+// membership check as everything else here.
+app.use("/api/workspaces", dashboardCors, formsTokenRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.
 app.use("/api/workspaces", dashboardCors, seoRoutes);
