@@ -46,6 +46,104 @@ const vitals = (raw: unknown) => {
   return Object.values(out).some((x) => x !== null) ? out : undefined;
 };
 
+/**
+ * How many events one request may carry.
+ *
+ * Tracker v8+ batches deferrable events, so a normal request holds a handful.
+ * The cap is what stops a hostile client turning one beacon into an unbounded
+ * write, and events past it are dropped rather than failing the whole batch —
+ * a partial record beats none.
+ */
+const MAX_BATCH = 50;
+
+/**
+ * Build the Event document for one item in a request.
+ *
+ * Split out of the handler so a single event and a batched one go through
+ * exactly the same shaping and clamping — the batch path must not become a
+ * second, subtly different collector.
+ */
+function buildEvent(
+  body: any,
+  siteId: string,
+  shared: { vh: string; device: string; os: string; browser: string; country: string },
+) {
+  return {
+    siteId,
+    type: body.type ?? "pageview",
+    name: str(body.name, 80),
+    path: str(body.path, 300) || "/",
+    hostname: str(body.hostname, 253),
+    referrer: str(body.referrer, 300),
+
+    clickText: str(body.clickText, 120),
+    clickTag: str(body.clickTag, 20),
+    clickId: str(body.clickId, 120),
+    clickHref: str(body.clickHref, 300),
+    visitorHash: shared.vh,
+    // Identified-tracking fields — absent on anonymous (landing page) events.
+    appUserId: str(body.appUserId, 120),
+    installId: str(body.installId, 120),
+    source: str(body.source, 120),
+    destination: str(body.destination, 120),
+    // Prefer the tracker's session id; fall back to the daily visitor hash.
+    sessionId: str(body.sessionId, 60) || shared.vh,
+
+    device: shared.device,
+    os: shared.os,
+    browser: shared.browser,
+    country: shared.country,
+    language: str(body.language, 20),
+    timezone: str(body.timezone, 60),
+    screenW: num(body.screenW, 20000),
+    screenH: num(body.screenH, 20000),
+    viewportW: num(body.viewportW, 20000),
+    viewportH: num(body.viewportH, 20000),
+
+    isEntry: !!body.isEntry,
+    isExit: !!body.isExit,
+    entryPath: str(body.entryPath, 300),
+
+    durationMs: num(body.durationMs, MAX_DURATION_MS),
+    bounce: !!body.bounce,
+    scrollDepth: num(body.scrollDepth, 100),
+    vitals: vitals(body.vitals),
+
+    utm: {
+      source: str(body.utm?.source, 80),
+      medium: str(body.utm?.medium, 80),
+      campaign: str(body.utm?.campaign, 80),
+      term: str(body.utm?.term, 120),
+      content: str(body.utm?.content, 120),
+      clickId: str(body.utm?.clickId, 200),
+      landingReferrer: str(body.utm?.landingReferrer, 300),
+    },
+    props: body.props,
+
+    // Each event carries the moment it was queued on the client, so a batch
+    // held for a second does not stamp every event with the flush time and
+    // flatten the timeline. Clamped to now: a client with a skewed clock or a
+    // forged timestamp must not write events into the future, and anything
+    // older than the retention window is nudged forward rather than trusted.
+    ts: eventTime(body.t),
+  };
+}
+
+/**
+ * When an event happened, from the client's `t` offset.
+ *
+ * The tracker sends milliseconds-ago rather than an absolute timestamp, so a
+ * device with a wrong clock still lands in the right place: the offset is
+ * relative to a request whose arrival time the server knows.
+ */
+const MAX_BACKDATE_MS = 6 * 60 * 60 * 1000; // 6h — longer than any held batch
+function eventTime(rawOffset: unknown): Date {
+  const now = Date.now();
+  const ago = Number(rawOffset);
+  if (!Number.isFinite(ago) || ago <= 0) return new Date(now);
+  return new Date(now - Math.min(ago, MAX_BACKDATE_MS));
+}
+
 // Public ingest endpoint. Called by tracker.js embedded on customer sites.
 router.post("/", async (req, res) => {
   try {
@@ -59,8 +157,19 @@ router.post("/", async (req, res) => {
       }
     }
 
-    const { siteId, type, name } = body ?? {};
+    /**
+     * One event or many.
+     *
+     * Tracker v8+ posts `{ siteId, v, events: [...] }`; every earlier version
+     * posts a single flat event. Both shapes are read here so an embedded site
+     * that never updates its snippet keeps reporting unchanged.
+     */
+    const batched: any[] | null = Array.isArray(body?.events) ? body.events : null;
+    const items: any[] = batched ?? [body];
+
+    const siteId = body?.siteId;
     if (!siteId) return res.status(400).json({ error: "siteId required" });
+    if (!items.length) return res.status(204).end();
 
     /**
      * Existence and quota in one cached check.
@@ -100,65 +209,26 @@ router.post("/", async (req, res) => {
     const vh = visitorHash(ip, ua, siteId);
     const { device, os, browser } = parseUA(ua);
 
-    await Event.create({
-      siteId,
-      type: type ?? "pageview",
-      name: str(name, 80),
-      path: str(body.path, 300) || "/",
-      hostname: str(body.hostname, 253),
-      referrer: str(body.referrer, 300),
+    // Derived from the request, so every event in a batch shares them — one
+    // UA parse and one geo lookup per request rather than per event.
+    const shared = { vh, device, os, browser, country: country(req) };
 
-      clickText: str(body.clickText, 120),
-      clickTag: str(body.clickTag, 20),
-      clickId: str(body.clickId, 120),
-      clickHref: str(body.clickHref, 300),
-      visitorHash: vh,
-      // Identified-tracking fields — absent on anonymous (landing page) events.
-      appUserId: str(body.appUserId, 120),
-      installId: str(body.installId, 120),
-      source: str(body.source, 120),
-      destination: str(body.destination, 120),
-      // Prefer the tracker's session id; fall back to the daily visitor hash.
-      sessionId: str(body.sessionId, 60) || vh,
+    const docs = items
+      .slice(0, MAX_BATCH)
+      .filter((item) => item && typeof item === "object")
+      .map((item) => buildEvent(item, String(siteId), shared));
 
-      device,
-      os,
-      browser,
-      country: country(req),
-      language: str(body.language, 20),
-      timezone: str(body.timezone, 60),
-      screenW: num(body.screenW, 20000),
-      screenH: num(body.screenH, 20000),
-      viewportW: num(body.viewportW, 20000),
-      viewportH: num(body.viewportH, 20000),
+    if (!docs.length) return res.status(204).end();
 
-      isEntry: !!body.isEntry,
-      isExit: !!body.isExit,
-      entryPath: str(body.entryPath, 300),
+    // One round trip for the whole batch. `ordered: false` so a single bad
+    // document does not discard the ones after it — a partial write is the
+    // right outcome for telemetry, where losing the batch loses real traffic.
+    await Event.insertMany(docs, { ordered: false });
 
-      durationMs: num(body.durationMs, MAX_DURATION_MS),
-      bounce: !!body.bounce,
-      scrollDepth: num(body.scrollDepth, 100),
-      vitals: vitals(body.vitals),
-
-      utm: {
-        source: str(body.utm?.source, 80),
-        medium: str(body.utm?.medium, 80),
-        campaign: str(body.utm?.campaign, 80),
-        term: str(body.utm?.term, 120),
-        content: str(body.utm?.content, 120),
-        clickId: str(body.utm?.clickId, 200),
-        landingReferrer: str(body.utm?.landingReferrer, 300),
-      },
-      props: body.props,
-
-      ts: new Date(),
-    });
-
-    // Counted only once the event is actually stored, so a failed write is not
-    // billed. Buffered in memory — see `event-quota.ts` for why this is not a
-    // write of its own.
-    countEvent(workspaceId);
+    // Counted only once the events are actually stored, so a failed write is
+    // not billed. Buffered in memory — see `event-quota.ts` for why this is
+    // not a write of its own.
+    for (let n = 0; n < docs.length; n++) countEvent(workspaceId);
 
     // Before the response, not after. Anything deferred past `res.end()` may
     // never run: a serverless function can be frozen the instant the response

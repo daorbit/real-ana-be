@@ -4,7 +4,7 @@
   // Sent with every event so the dashboard can tell which sites are still on an
   // older script and are therefore missing the metrics it added. Bump this
   // whenever the tracker starts collecting something new.
-  var VERSION = 7;
+  var VERSION = 8;
 
   // Find our own <script> tag.
   // document.currentScript is null when the tag is injected dynamically
@@ -255,9 +255,7 @@
    * which beacons cannot perform — the request is silently dropped.
    * text/plain is CORS-safelisted, so no preflight is needed.
    * ------------------------------------------------------------------ */
-  function post(payload) {
-    payload.v = VERSION;
-    var body = JSON.stringify(payload);
+  function transmit(body) {
     if (navigator.sendBeacon) {
       var ok = navigator.sendBeacon(
         endpoint,
@@ -273,6 +271,68 @@
       mode: "cors",
       credentials: "omit",
     }).catch(function () {});
+  }
+
+  /* ------------------------------------------------------------------
+   * Batching
+   *
+   * A busy page can fire a pageview, several clicks and an engagement record
+   * within a second, and one request each is a request the visitor pays for in
+   * bandwidth and the site owner pays for in ingest. Deferrable events are held
+   * briefly and sent together.
+   *
+   * What is never held: anything reporting the end of a page. A queued event is
+   * lost if the tab closes before the timer runs, so `sendNow` bypasses the
+   * queue entirely — see the exit paths below.
+   *
+   * Each event carries `t`, milliseconds since it was queued, so a batch held
+   * for a second does not report every event as having happened at flush time.
+   * ------------------------------------------------------------------ */
+  var BATCH_MS = 1000;
+  var BATCH_MAX = 10;
+
+  var queue = [];
+  var queueTimer = null;
+
+  function envelope(events) {
+    var now = Date.now();
+    var out = [];
+    for (var n = 0; n < events.length; n++) {
+      var e = events[n].payload;
+      e.t = now - events[n].queuedAt;
+      out.push(e);
+    }
+    return JSON.stringify({ siteId: siteId, v: VERSION, events: out });
+  }
+
+  function sendQueue() {
+    if (queueTimer) {
+      clearTimeout(queueTimer);
+      queueTimer = null;
+    }
+    if (!queue.length) return;
+    var batch = queue;
+    queue = [];
+    transmit(envelope(batch));
+  }
+
+  /** Queue an event for the next flush. */
+  function post(payload) {
+    queue.push({ payload: payload, queuedAt: Date.now() });
+    if (queue.length >= BATCH_MAX) return sendQueue();
+    if (!queueTimer) queueTimer = setTimeout(sendQueue, BATCH_MS);
+  }
+
+  /**
+   * Send this event and everything queued before it, right now.
+   *
+   * For the exit paths, where a timer would never fire. Ordering matters: the
+   * event joins the queue first so a pageview queued moments earlier is not
+   * left behind by its own engagement record.
+   */
+  function sendNow(payload) {
+    queue.push({ payload: payload, queuedAt: Date.now() });
+    sendQueue();
   }
 
   /* ------------------------------------------------------------------
@@ -339,6 +399,10 @@
     } else {
       accumulate();
       flush(); // a hidden tab may never come back — report what we have
+      // `flush` is a no-op once the engagement record has gone out, but events
+      // queued after it are still waiting on a timer this tab may never live to
+      // run. Drain them here too.
+      sendQueue();
     }
   });
 
@@ -437,7 +501,9 @@
     if (!currentView || flushed) return;
     accumulate();
     var s = session();
-    post({
+    // Sent immediately, not queued: this fires as the page goes away, and a
+    // batch waiting on a timer would never be sent.
+    sendNow({
       siteId: siteId,
       type: "engagement",
       path: currentView.path,
@@ -455,8 +521,15 @@
     flushed = true;
   }
 
-  window.addEventListener("pagehide", flush);
-  window.addEventListener("beforeunload", flush);
+  // `flush` reports the engagement record; `sendQueue` covers the case where it
+  // already went out and later events are still queued.
+  function exit() {
+    flush();
+    sendQueue();
+  }
+
+  window.addEventListener("pagehide", exit);
+  window.addEventListener("beforeunload", exit);
 
   /* ------------------------------------------------------------------
    * Pageview
