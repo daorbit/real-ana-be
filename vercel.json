@@ -1,9 +1,5 @@
 {
   "version": 2,
   "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }],
-  "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }],
-  "crons": [
-    { "path": "/api/cron/reports", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/social-stats", "schedule": "0 10 * * *" }
-  ]
+  "routes": [{ "src": "/(.*)", "dest": "api/index.ts" }]
 }

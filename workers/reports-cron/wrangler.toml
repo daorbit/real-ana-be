@@ -15,7 +15,9 @@
 # the trigger interval.
 #
 # Nothing server-side changes: the route authenticates on CRON_SECRET and does
-# not care who calls it. The daily entry in vercel.json stays as the safety net.
+# not care who calls it. These two ticks are the only thing calling it -- the
+# entry this once backed up in vercel.json is gone, since Vercel cron no longer
+# schedules this deployment.
 name = "reports-cron"
 main = "src/index.ts"
 compatibility_date = "2026-08-19"
@@ -26,8 +28,8 @@ account_id = "594bc4ae163c865c9faa90cbb457d30b"
 workers_dev = false
 
 [triggers]
-# 06:00 and 18:00 UTC. Deliberately offset from the 08:00 UTC entry in
-# vercel.json so the two schedulers do not contend for the same cold start.
+# 06:00 and 18:00 UTC. The spacing is what matters here -- see the header for
+# why a daily schedule needs two chances a day rather than one.
 crons = ["0 6,18 * * *"]
 
 [vars]
