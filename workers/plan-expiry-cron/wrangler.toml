@@ -1,0 +1,34 @@
+# Pings the plan-expiry cron route once a day.
+#
+# The route sends the "your plan ends soon" reminder and records the send on the
+# subscription, so it needs to run daily to catch each window as it arrives. It
+# had an entry in vercel.json but nothing else, and Vercel cron is not what
+# schedules this deployment any more -- so nothing was calling it and the
+# reminders never went out. This Worker is the scheduler for the job, not a
+# punctuality upgrade over an existing one.
+#
+# The route is idempotent per subscription: it tracks expiryRemindersSent, so a
+# retry or an overlapping tick will not double-send.
+name = "plan-expiry-cron"
+main = "src/index.ts"
+compatibility_date = "2026-08-19"
+account_id = "594bc4ae163c865c9faa90cbb457d30b"
+
+# Cron-only Worker: no fetch handler, so no HTTP route is served and the
+# workers.dev subdomain is never hit.
+workers_dev = false
+
+[triggers]
+# 03:30 UTC = 09:00 IST daily. Offset an hour from fx-sync so the two do not
+# share a cold start.
+crons = ["30 3 * * *"]
+
+[vars]
+# Public base URL of the backend deployment -- the custom domain in front of
+# Vercel, matching PUBLIC_BASE_URL in .env. Not a secret: CRON_SECRET is the
+# credential, and it is set via `wrangler secret put`, never in this file.
+API_BASE = "https://quantalog-be.daorbit.in"
+
+[observability]
+# Keeps logs queryable in the dashboard rather than only live via `wrangler tail`.
+enabled = true
