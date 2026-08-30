@@ -6,6 +6,7 @@ import {
   spendQuota,
 } from "../../modules/billing/quota.service.js";
 import { generateForm, formsAiReady } from "../../modules/forms-ai/generate.js";
+import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 
 /**
@@ -112,7 +113,17 @@ router.post(
       });
     }
 
-    const result = await generateForm(prompt);
+    /**
+     * The form being refined, on a follow-up.
+     *
+     * Read through the same parser the model's own output goes through. It
+     * arrives from a browser by way of the forms service, so it is no more
+     * trusted than a generation — and a bad field type reaching the model as an
+     * example is how it learns to emit more of them.
+     */
+    const prior = req.body?.previous ? parseGeneratedForm(req.body.previous) : null;
+
+    const result = await generateForm(prompt, prior?.ok ? prior.form : undefined);
     if (!result.ok) {
       return res.status(result.status).json({ error: result.error });
     }

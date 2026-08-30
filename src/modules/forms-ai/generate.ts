@@ -180,7 +180,17 @@ export function formsAiReady(): boolean {
 /** How long a prompt may be. Past this it is a specification, not a request. */
 export const MAX_PROMPT_CHARS = 600;
 
-export async function generateForm(prompt: string): Promise<GenerateResult> {
+export async function generateForm(
+  prompt: string,
+  /**
+   * The form being revised, when this is a follow-up.
+   *
+   * Sent back as the assistant's own previous answer rather than described in
+   * the prompt: the model is then editing something it "said", which is what
+   * keeps "add a phone field" from rewriting the other nine.
+   */
+  previous?: GeneratedForm,
+): Promise<GenerateResult> {
   if (!cloudflareReady()) {
     return { ok: false, status: 503, error: "form generation is not configured" };
   }
@@ -192,7 +202,18 @@ export async function generateForm(prompt: string): Promise<GenerateResult> {
     { role: "system", content: systemPrompt() },
     { role: "user", content: EXAMPLE_USER },
     { role: "assistant", content: EXAMPLE_REPLY },
-    { role: "user", content: asked },
+    ...(previous
+      ? [
+          { role: "user", content: "Here is the form so far." },
+          { role: "assistant", content: JSON.stringify(previous) },
+          {
+            role: "user",
+            content:
+              `Change it: ${asked}\n\n` +
+              "Reply with the whole form again, not just the change. Keep everything the request does not touch exactly as it is.",
+          },
+        ]
+      : [{ role: "user", content: asked }]),
   ];
 
   let lastDetail = "";
