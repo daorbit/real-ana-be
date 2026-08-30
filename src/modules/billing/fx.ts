@@ -146,10 +146,20 @@ export type RepriceResult = {
 export async function repriceAllPlans(): Promise<RepriceResult> {
   const snapshot = await fetchRates();
   const derived = CURRENCIES.filter((c) => c !== FX_BASE);
-  // Both ladders, because both are priced in INR and both are sold in every
-  // currency — an Orbit tier left out here would quietly keep quoting whatever
-  // the rate was on the day someone typed its price in.
-  const plans = [...(await listResolvedPlans()), ...(await listResolvedOrbitPlans())];
+  /**
+   * Both ladders, minus whatever carries no price.
+   *
+   * Orbit tiers are granted by the analytics plan rather than sold on their own,
+   * so their catalogue entries define no price and their rows sit at zero. Put
+   * through the conversion they conveniently produce zero in every currency —
+   * and then appear in the nightly report as real products repriced to nothing,
+   * which is what this filter exists to stop. A tier that ever does get a price
+   * starts being repriced again on its own, with no change here.
+   */
+  const priced = (p: { priceMonthly: Record<string, number>; priceYearly: Record<string, number> }) =>
+    (p.priceMonthly[FX_BASE] ?? 0) > 0 || (p.priceYearly[FX_BASE] ?? 0) > 0;
+
+  const plans = [...(await listResolvedPlans()), ...(await listResolvedOrbitPlans())].filter(priced);
   const repriced: RepricedPlan[] = [];
 
   for (const plan of plans) {
@@ -172,6 +182,9 @@ export async function repriceAllPlans(): Promise<RepriceResult> {
 
   for (const addon of addons) {
     const price = { ...(addon.get("price") as Record<string, number>) };
+    // Same reason as the plans above: nothing to convert, and reporting it as
+    // repriced says a pack changed price when it has none to change.
+    if ((price[FX_BASE] ?? 0) <= 0) continue;
     for (const currency of derived) {
       price[currency] = convertMinor(price[FX_BASE] ?? 0, currency, snapshot);
     }
