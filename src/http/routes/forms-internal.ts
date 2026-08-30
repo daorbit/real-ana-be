@@ -1,5 +1,11 @@
 import { Router, Request, Response } from "express";
-import { formLimits, recordFormSubmission } from "../../modules/billing/quota.service.js";
+import {
+  formLimits,
+  recordFormSubmission,
+  hasQuota,
+  spendQuota,
+} from "../../modules/billing/quota.service.js";
+import { generateForm, formsAiReady } from "../../modules/forms-ai/generate.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 
 /**
@@ -65,6 +71,57 @@ router.post(
     if (!authorize(req, res)) return;
     await recordFormSubmission(req.params.workspaceId);
     res.status(204).end();
+  }),
+);
+
+/**
+ * Draft a form from a sentence.
+ *
+ * Metered as an Orbit question, on the same allowance as the assistant: it is
+ * the same models and the same cost to us, and a workspace that has spent its
+ * month asking Orbit things has spent its month. Two meters over one budget
+ * would only mean explaining to a customer why their AI ran out twice.
+ *
+ * Spent only once a form actually comes back. A refusal, a timeout, or an
+ * answer we could not read costs the customer nothing — they have no way to
+ * tell a bad prompt from a busy model, so charging for it would read as the
+ * product taking their credit and giving nothing.
+ */
+router.post(
+  "/generate/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+
+    const { workspaceId } = req.params;
+
+    if (!formsAiReady()) {
+      return res.status(503).json({ error: "form generation is not configured" });
+    }
+
+    const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+    if (!prompt.trim()) return res.status(400).json({ error: "prompt required" });
+
+    // Checked before the model is called, so a workspace with nothing left
+    // waits on nothing. The spend afterwards is what actually reserves it.
+    if (!(await hasQuota(workspaceId, "orbit"))) {
+      return res.status(402).json({
+        error: "quota_exceeded",
+        code: "quota_exceeded",
+        kind: "orbit_questions",
+        message: "This workspace has used its AI questions for the period.",
+      });
+    }
+
+    const result = await generateForm(prompt);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    // After the work, never before. A spend that precedes a failed generation
+    // bills for nothing delivered.
+    await spendQuota(workspaceId, "orbit");
+
+    res.json({ form: result.form, model: result.model });
   }),
 );
 
