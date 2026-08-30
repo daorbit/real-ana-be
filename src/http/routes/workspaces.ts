@@ -23,6 +23,7 @@ import {
   COMPARABLE_DIMENSION_KEYS,
   EXPORT_COLUMNS,
   TRACKER_VERSION,
+  computeLive,
   type FunnelStep,
   type GoalDef,
 } from "../../modules/analytics/stats.service.js";
@@ -463,6 +464,30 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     // about what is on screen.
     compare: win.compare,
   });
+});
+
+/**
+ * Visitors online right now, and nothing else.
+ *
+ * The same figure is already in the stats payload, but that payload is thirty
+ * aggregations over the selected range — far too heavy to ask for at the rate
+ * a number labelled "online now" should refresh. This is two queries over a
+ * five-minute window, so the dashboard can poll it on a short cycle and leave
+ * the full stats on a slow one.
+ *
+ * Range and comparison are meaningless here: the window is always the last five
+ * minutes. Site selection and filters still apply, so the number matches the
+ * scope the rest of the dashboard is showing.
+ */
+router.get("/:wid/live", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  const sites = await Site.find({ workspaceId: access.workspace.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (ids.length === 0) return res.json({ live: 0, livePages: [] });
+
+  res.json(await computeLive(ids, parseFilters(req.query.filter)));
 });
 
 /**

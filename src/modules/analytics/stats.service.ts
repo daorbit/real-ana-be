@@ -1,6 +1,11 @@
 import { Event } from "./models/Event.js";
 
-export const TRACKER_VERSION = 5;
+/**
+ * The version `public/tracker.js` currently reports, used to flag sites still
+ * serving an older script. Bump this with `VERSION` in the tracker itself —
+ * left behind, every site reads as up to date and the prompt never appears.
+ */
+export const TRACKER_VERSION = 8;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,
@@ -681,6 +686,35 @@ async function livePages(siteIds: string[]) {
   return rows;
 }
 
+
+/**
+ * Just the "online now" figures.
+ *
+ * The dashboard's headline is a five-minute window, but it arrives inside
+ * `computeStats` — thirty-odd aggregations over the whole selected range. That
+ * payload is too expensive to poll at the rate a number labelled "now" wants,
+ * so this is the same two queries on their own, cheap enough to ask for every
+ * few seconds while the heavy stats stay on their slower cycle.
+ *
+ * Deliberately shares `LIVE_WINDOW_MS` and `livePages` with `computeStats`:
+ * two definitions of "live" that could drift apart is exactly the bug this
+ * would otherwise introduce.
+ */
+export async function computeLive(siteIds: string[], filters: StatsFilter = {}) {
+  if (!siteIds.length) return { live: 0, livePages: [] as { key: string; count: number }[] };
+
+  const since = new Date(Date.now() - LIVE_WINDOW_MS);
+  const [visitors, pages] = await Promise.all([
+    Event.distinct("visitorHash", {
+      siteId: { $in: siteIds },
+      ts: { $gte: since },
+      ...filterMatch(filters),
+    }),
+    livePages(siteIds),
+  ]);
+
+  return { live: visitors.length, livePages: pages };
+}
 
 async function channels(match: Match) {
   const referrerSource = {
