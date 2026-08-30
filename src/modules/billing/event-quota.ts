@@ -5,9 +5,6 @@ import { getPlanCatalogEntry } from "./plans.catalog.js";
 
 const DECISION_TTL_MS = 60_000;
 
-/** How often buffered usage is written back. */
-const FLUSH_INTERVAL_MS = 10_000;
-
 type Decision = {
   workspaceId: string | null;
   allowed: boolean;
@@ -15,8 +12,6 @@ type Decision = {
 };
 
 const decisions = new Map<string, Decision>();
-
-const pending = new Map<string, number>();
 
 
 const MAX_DECISIONS = 10_000;
@@ -67,8 +62,10 @@ export async function canIngest(
   }
 
   const workspaceId = String(site.get("workspaceId"));
+  // `eventsUsed` is now current as of the last ingest rather than as of the
+  // last flush, so the allowance needs no in-flight buffer subtracted from it.
   const remaining = (await allowanceFor(workspaceId)) ?? 0;
-  const allowed = remaining - (pending.get(workspaceId) ?? 0) > 0;
+  const allowed = remaining > 0;
 
   remember(siteId, { workspaceId, allowed, checkedAt: now });
 
@@ -85,52 +82,29 @@ function denyWorkspace(workspaceId: string, at: number) {
   }
 }
 
-/** Count one ingested event against its workspace. Buffered; see `flush`. */
-export function countEvent(workspaceId: string) {
-  pending.set(workspaceId, (pending.get(workspaceId) ?? 0) + 1);
-}
-
-export async function flushEventUsage(): Promise<void> {
-  if (pending.size === 0) return;
-
-  const batch = [...pending.entries()];
-  pending.clear();
-
-  await Promise.all(
-    batch.map(async ([workspaceId, count]) => {
-      try {
-        await Subscription.updateOne({ workspaceId }, { $inc: { eventsUsed: count } });
-      } catch {
-        pending.set(workspaceId, (pending.get(workspaceId) ?? 0) + count);
-      }
-    }),
-  );
-}
-
-export function startEventUsageFlush(): NodeJS.Timeout {
-  const timer = setInterval(() => {
-    flushEventUsage().catch((e) => console.error("[event-quota] flush failed:", e));
-  }, FLUSH_INTERVAL_MS);
-  // Do not hold the process open for this alone.
-  timer.unref?.();
-  return timer;
-}
-
-let lastFlush = Date.now();
-
-const MAX_BUFFERED = 200;
-
-function bufferedTotal(): number {
-  let n = 0;
-  for (const c of pending.values()) n += c;
-  return n;
-}
-
-export async function maybeFlush(): Promise<void> {
-  const due = Date.now() - lastFlush >= FLUSH_INTERVAL_MS;
-  if (!due && bufferedTotal() < MAX_BUFFERED) return;
-  lastFlush = Date.now();
-  await flushEventUsage();
+/**
+ * Count ingested events against their workspace.
+ *
+ * Written on the request that ingested them rather than buffered for a later
+ * flush. Buffering assumed a process that stays alive to do the flushing, and
+ * this one does not: each request is a serverless invocation that can be frozen
+ * the moment its response goes out, taking any counts still in memory with it.
+ * Every workspace was under-billed as a result, by whatever share of its traffic
+ * happened to arrive on instances that never reached a flush threshold.
+ *
+ * One `$inc` per request, not per event — the collector counts a whole batch at
+ * once — so this costs a fraction of a write per beacon, not one each.
+ */
+export async function countEvents(workspaceId: string, n = 1): Promise<void> {
+  if (n <= 0) return;
+  try {
+    await Subscription.updateOne({ workspaceId }, { $inc: { eventsUsed: n } });
+  } catch (e) {
+    // Usage is not worth failing an ingest over: the events are already stored,
+    // and refusing the beacon would have the tracker drop them for a billing
+    // problem the visitor's browser cannot do anything about.
+    console.error("[event-quota] usage increment failed:", (e as Error).message);
+  }
 }
 
 export function invalidateSite(siteId: string) {

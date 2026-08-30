@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Event } from "../../modules/analytics/models/Event.js";
-import { canIngest, countEvent, maybeFlush } from "../../modules/billing/event-quota.js";
+import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
 
 const router = Router();
 
@@ -44,8 +44,9 @@ router.post("/", async (req, res) => {
       ts: new Date(),
     });
 
-    countEvent(workspaceId);
-    await maybeFlush();
+    // Awaited before the response: this invocation can be frozen the moment
+    // the response goes out, and a count left buffered would go with it.
+    await countEvents(workspaceId);
 
     res.status(204).end();
   } catch {

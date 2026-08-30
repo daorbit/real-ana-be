@@ -2,7 +2,7 @@ import { Router } from "express";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { visitorHash, clientIp, country, parseUA } from "../../modules/analytics/enrich.js";
-import { canIngest, countEvent, maybeFlush } from "../../modules/billing/event-quota.js";
+import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
 
 const router = Router();
 
@@ -226,17 +226,10 @@ router.post("/", async (req, res) => {
     await Event.insertMany(docs, { ordered: false });
 
     // Counted only once the events are actually stored, so a failed write is
-    // not billed. Buffered in memory — see `event-quota.ts` for why this is
-    // not a write of its own.
-    for (let n = 0; n < docs.length; n++) countEvent(workspaceId);
-
-    // Before the response, not after. Anything deferred past `res.end()` may
-    // never run: a serverless function can be frozen the instant the response
-    // goes out, and a long-running process can be restarted or killed with
-    // buffered counts still in memory. This only does real work once the buffer
-    // is old or large enough (see `maybeFlush`), so the overwhelming majority of
-    // beacons still return without an extra write.
-    await maybeFlush();
+    // not billed. Awaited before the response: a serverless invocation can be
+    // frozen the instant the response goes out, and anything left to do after
+    // that may never happen.
+    await countEvents(workspaceId, docs.length);
 
     // 204 keeps the beacon lightweight
     res.status(204).end();
