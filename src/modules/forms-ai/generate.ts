@@ -8,6 +8,7 @@ import {
   parseGeneratedForm,
   type GeneratedForm,
 } from "./form-schema.js";
+import { reconcileRevision } from "./reconcile.js";
 
 /**
  * Turn a sentence into a starting-point form.
@@ -210,7 +211,9 @@ export async function generateForm(
             role: "user",
             content:
               `Change it: ${asked}\n\n` +
-              "Reply with the whole form again, not just the change. Keep everything the request does not touch exactly as it is.",
+              "Reply with the whole form again as one JSON object, not just the change.\n" +
+              "Every field that is already there must still be there, in the same order, with the same wording — unless this request is explicitly about that field. Do not drop fields.\n" +
+              "Leave \"theme\" exactly as it is unless the request is about colours, fonts or styling.",
           },
         ]
       : [{ role: "user", content: asked }]),
@@ -235,7 +238,15 @@ export async function generateForm(
     }
 
     const parsed = parseGeneratedForm(extractJson(res.text));
-    if (parsed.ok) return { ok: true, form: parsed.form, model };
+    if (parsed.ok) {
+      // On a revision, pull the answer back toward the form it was editing —
+      // the small models drop fields and restyle without being asked, both
+      // silently. A first generation has nothing to reconcile against.
+      const form = previous
+        ? reconcileRevision(previous, parsed.form, asked)
+        : parsed.form;
+      return { ok: true, form, model };
+    }
 
     // A model that answered but not usably. Worth trying the next one: the
     // failure is usually a truncated object rather than a refusal.
