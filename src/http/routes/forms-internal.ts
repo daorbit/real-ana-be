@@ -123,7 +123,18 @@ router.post(
      */
     const prior = req.body?.previous ? parseGeneratedForm(req.body.previous) : null;
 
-    const result = await generateForm(prompt, prior?.ok ? prior.form : undefined);
+    // "edit" is a change to a form that already exists in the builder, where a
+    // dropped field or an unasked-for restyle is real damage. "create" (the
+    // default) is a still-in-progress draft in the generator modal, where the
+    // model is meant to have a free hand. Only "edit" gets the conservative
+    // reconciliation pass.
+    const mode = req.body?.mode === "edit" ? "edit" : "create";
+
+    const result = await generateForm(
+      prompt,
+      prior?.ok ? prior.form : undefined,
+      mode,
+    );
     if (!result.ok) {
       return res.status(result.status).json({ error: result.error });
     }

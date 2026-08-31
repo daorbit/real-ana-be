@@ -181,6 +181,8 @@ export function formsAiReady(): boolean {
 /** How long a prompt may be. Past this it is a specification, not a request. */
 export const MAX_PROMPT_CHARS = 600;
 
+export type GenerateMode = "create" | "edit";
+
 export async function generateForm(
   prompt: string,
   /**
@@ -191,6 +193,13 @@ export async function generateForm(
    * keeps "add a phone field" from rewriting the other nine.
    */
   previous?: GeneratedForm,
+  /**
+   * "edit" — a change to a form already live in the builder; fields must not
+   * vanish and the theme must not move unless the prompt says so.
+   * "create" (default) — a draft still being shaped in the generator modal,
+   * where the model has a free hand.
+   */
+  mode: GenerateMode = "create",
 ): Promise<GenerateResult> {
   if (!cloudflareReady()) {
     return { ok: false, status: 503, error: "form generation is not configured" };
@@ -210,10 +219,13 @@ export async function generateForm(
           {
             role: "user",
             content:
-              `Change it: ${asked}\n\n` +
-              "Reply with the whole form again as one JSON object, not just the change.\n" +
-              "Every field that is already there must still be there, in the same order, with the same wording — unless this request is explicitly about that field. Do not drop fields.\n" +
-              "Leave \"theme\" exactly as it is unless the request is about colours, fonts or styling.",
+              mode === "edit"
+                ? `Change it: ${asked}\n\n` +
+                  "This form is already in use. Reply with the whole form again as one JSON object, not just the change.\n" +
+                  "Every field already there must still be there, in the same order, with the same wording — unless this request is explicitly about that field. Do not drop fields, do not rename them, do not reorder them.\n" +
+                  'Leave "theme" exactly as it is unless the request is about colours, fonts or styling.'
+                : `Change it: ${asked}\n\n` +
+                  "Reply with the whole form again, not just the change. Keep everything the request does not touch exactly as it is.",
           },
         ]
       : [{ role: "user", content: asked }]),
@@ -239,12 +251,14 @@ export async function generateForm(
 
     const parsed = parseGeneratedForm(extractJson(res.text));
     if (parsed.ok) {
-      // On a revision, pull the answer back toward the form it was editing —
-      // the small models drop fields and restyle without being asked, both
-      // silently. A first generation has nothing to reconcile against.
-      const form = previous
-        ? reconcileRevision(previous, parsed.form, asked)
-        : parsed.form;
+      // Only an "edit" gets pulled back toward the form it was changing — a
+      // live form must not lose fields or get restyled unasked. A "create"
+      // draft is still being shaped and the model is meant to have a free
+      // hand, so its reply is used as-is.
+      const form =
+        previous && mode === "edit"
+          ? reconcileRevision(previous, parsed.form, asked)
+          : parsed.form;
       return { ok: true, form, model };
     }
 
