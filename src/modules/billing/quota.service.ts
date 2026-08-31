@@ -70,18 +70,21 @@ export async function renewalWouldExceedCap(
  * too. `userId` is still passed to the write paths because a new subscription
  * row needs an owner, but it is never what a limit is counted against.
  *
- * Two shapes of activation land here:
+ * There is no scheduled monthly rollover in this system — a period is exactly
+ * one purchase, and this function is the only thing that ever resets the
+ * cycle's usage counters. So every activation, renewal included, resets them:
+ * a renewal buys a fresh allowance, and if it did not reset the counters the
+ * buyer would pay for a month with nothing left in it.
+ *
+ * What a renewal changes is only the *start point* of the new period:
  *
  *  - **Fresh period** — a first purchase, a tier change, a cycle switch, or a
- *    renewal after the previous period already lapsed. The period runs from
- *    now, and the cycle's usage counters reset to zero.
+ *    renewal after the previous period already lapsed. Runs from now.
  *
  *  - **Stacked renewal** — the same plan and cycle bought again while the
  *    current period is still live. The new cycle is added onto the existing
- *    end date rather than starting now, so the buyer keeps the days they had
- *    already paid for. Usage counters are left alone: the extra time was
- *    bought, not a second helping of this cycle's quota, and resetting here
- *    would let a workspace near its cap renew to wipe it early.
+ *    end date, so the buyer keeps the days they had already paid for rather
+ *    than forfeiting the remainder.
  *
  * Which of the two it is is decided here, from the stored subscription, not by
  * the caller — so the webhook and the client-side verify call cannot disagree,
@@ -98,31 +101,29 @@ export async function activatePlanPeriod(
   const existing = await Subscription.findOne({ workspaceId });
   const stacking = isSamePlanRenewal(existing, planSlug, cycle);
 
+  // A stacked renewal pushes the expiry out from the current end date; every
+  // other activation dates it from now. The fresh allowance itself begins now
+  // in both cases, which is what `currentPeriodStart` records.
   const base = stacking ? existing!.currentPeriodEnd! : now;
   const periodEnd = new Date(base.getTime() + CYCLE_DAYS[cycle] * DAY_MS);
 
-  const set: Record<string, unknown> = {
-    userId,
-    planSlug,
-    cycle,
-    status: "active",
-    currentPeriodEnd: periodEnd,
-    expiryRemindersSent: [],
-  };
-
-  // A stacked renewal keeps the period it is extending and this cycle's usage;
-  // a fresh period restarts both.
-  if (!stacking) {
-    set.currentPeriodStart = now;
-    set.auditsUsed = 0;
-    set.crawlsUsed = 0;
-    set.eventsUsed = 0;
-    set.formSubmissionsUsed = 0;
-  }
-
   await Subscription.findOneAndUpdate(
     { workspaceId },
-    { $set: set },
+    {
+      $set: {
+        userId,
+        planSlug,
+        cycle,
+        status: "active",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        auditsUsed: 0,
+        crawlsUsed: 0,
+        eventsUsed: 0,
+        formSubmissionsUsed: 0,
+        expiryRemindersSent: [],
+      },
+    },
     { upsert: true }
   );
 
