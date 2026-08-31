@@ -6,7 +6,13 @@ import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../../infra/payments/razorpay.js";
-import { activateOrbitPeriod, activatePlanPeriod, paidPlan } from "../../modules/billing/quota.service.js";
+import {
+  activateOrbitPeriod,
+  activatePlanPeriod,
+  paidPlan,
+  renewalWouldExceedCap,
+  MAX_PREPAID_CYCLES,
+} from "../../modules/billing/quota.service.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import {
@@ -121,6 +127,16 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     return res.status(409).json({
       error: `this workspace is on ${active.name} until its period ends — a lower plan cannot be bought before then`,
       code: "downgrade_blocked",
+    });
+  }
+
+  // Renewing the same plan early stacks another cycle onto the current period.
+  // Cap the runway so a workspace cannot prepay indefinitely and then seek a
+  // full refund of time it has not used.
+  if (await renewalWouldExceedCap(workspace.id, plan.slug, cycle)) {
+    return res.status(409).json({
+      error: `this plan is already paid up ${MAX_PREPAID_CYCLES} cycles ahead — renew again closer to the renewal date`,
+      code: "renewal_cap_reached",
     });
   }
 

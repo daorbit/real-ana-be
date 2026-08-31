@@ -28,12 +28,65 @@ const QUOTA_FIELDS: Record<QuotaKind, { used: string; credits: string }> = {
 };
 
 const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How far ahead a workspace may stack renewals. Renewing the same plan while
+ * the current period is still live extends it; this caps that at two cycles of
+ * runway so nobody prepays years and then asks for it all back.
+ */
+export const MAX_PREPAID_CYCLES = 2;
+
+/** A renewal stacks only when the plan *and* the cycle are unchanged. */
+function isSamePlanRenewal(
+  sub: { planSlug?: unknown; cycle?: unknown; currentPeriodEnd?: Date | null } | null,
+  planSlug: string,
+  cycle: BillingCycle,
+): boolean {
+  if (!sub || isExpired(sub)) return false;
+  if (planSlug === "free") return false; // Free has no period to extend.
+  return sub.planSlug === planSlug && sub.cycle === cycle;
+}
+
+/**
+ * Whether this workspace is already carrying its maximum prepaid runway, so a
+ * further same-plan renewal must be refused. Checked at checkout time, before
+ * any money moves.
+ */
+export async function renewalWouldExceedCap(
+  workspaceId: string,
+  planSlug: string,
+  cycle: BillingCycle,
+): Promise<boolean> {
+  const sub = await Subscription.findOne({ workspaceId });
+  if (!isSamePlanRenewal(sub, planSlug, cycle)) return false;
+  const remainingMs = sub!.currentPeriodEnd!.getTime() - Date.now();
+  return remainingMs >= MAX_PREPAID_CYCLES * CYCLE_DAYS[cycle] * DAY_MS;
+}
 
 /**
  * Everything in this module is scoped to a *workspace*, not an account: a plan
  * is bought per workspace, so quota, limits, and expiry are all per workspace
  * too. `userId` is still passed to the write paths because a new subscription
  * row needs an owner, but it is never what a limit is counted against.
+ *
+ * Two shapes of activation land here:
+ *
+ *  - **Fresh period** — a first purchase, a tier change, a cycle switch, or a
+ *    renewal after the previous period already lapsed. The period runs from
+ *    now, and the cycle's usage counters reset to zero.
+ *
+ *  - **Stacked renewal** — the same plan and cycle bought again while the
+ *    current period is still live. The new cycle is added onto the existing
+ *    end date rather than starting now, so the buyer keeps the days they had
+ *    already paid for. Usage counters are left alone: the extra time was
+ *    bought, not a second helping of this cycle's quota, and resetting here
+ *    would let a workspace near its cap renew to wipe it early.
+ *
+ * Which of the two it is is decided here, from the stored subscription, not by
+ * the caller — so the webhook and the client-side verify call cannot disagree,
+ * and a renewal whose payment only lands after the period expires correctly
+ * degrades to a fresh period.
  */
 export async function activatePlanPeriod(
   workspaceId: string,
@@ -42,24 +95,34 @@ export async function activatePlanPeriod(
   cycle: BillingCycle,
 ) {
   const now = new Date();
-  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
+  const existing = await Subscription.findOne({ workspaceId });
+  const stacking = isSamePlanRenewal(existing, planSlug, cycle);
+
+  const base = stacking ? existing!.currentPeriodEnd! : now;
+  const periodEnd = new Date(base.getTime() + CYCLE_DAYS[cycle] * DAY_MS);
+
+  const set: Record<string, unknown> = {
+    userId,
+    planSlug,
+    cycle,
+    status: "active",
+    currentPeriodEnd: periodEnd,
+    expiryRemindersSent: [],
+  };
+
+  // A stacked renewal keeps the period it is extending and this cycle's usage;
+  // a fresh period restarts both.
+  if (!stacking) {
+    set.currentPeriodStart = now;
+    set.auditsUsed = 0;
+    set.crawlsUsed = 0;
+    set.eventsUsed = 0;
+    set.formSubmissionsUsed = 0;
+  }
+
   await Subscription.findOneAndUpdate(
     { workspaceId },
-    {
-      $set: {
-        userId,
-        planSlug,
-        cycle,
-        status: "active",
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
-        auditsUsed: 0,
-        crawlsUsed: 0,
-        eventsUsed: 0,
-        formSubmissionsUsed: 0,
-        expiryRemindersSent: [],
-      },
-    },
+    { $set: set },
     { upsert: true }
   );
 
