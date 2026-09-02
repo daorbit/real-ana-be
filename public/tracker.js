@@ -1,14 +1,10 @@
 (function () {
   "use strict";
 
-  // Sent with every event so the dashboard can tell which sites are still on an
-  // older script and are therefore missing the metrics it added. Bump this
-  // whenever the tracker starts collecting something new.
+
   var VERSION = 8;
 
-  // Find our own <script> tag.
-  // document.currentScript is null when the tag is injected dynamically
-  // (next/script, React-rendered <script>, async loaders), so fall back to a query.
+
   function findScript() {
     var s = document.currentScript;
     if (s && s.getAttribute("data-site")) return s;
@@ -26,42 +22,29 @@
   var origin = i > -1 ? src.slice(0, i) : "";
   var endpoint = origin + "/api/collect";
 
-  /* ------------------------------------------------------------------
-   * Script options, all set as data-* attributes on the <script> tag.
-   * Every one is opt-in or opt-out against the current behaviour, so an
-   * existing snippet keeps working unchanged.
-   * ------------------------------------------------------------------ */
+
   function opt(name) {
     return script.getAttribute("data-" + name);
   }
 
-  /** Comma-separated attribute -> trimmed, non-empty list. */
   function optList(name) {
     var raw = opt(name);
     if (!raw) return [];
     return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
-  // Honour the browser's Do Not Track signal. Off by default: DNT is advisory,
-  // and this tracker stores no personal data either way — but sites with a
-  // stricter policy need the switch.
+ 
   if (opt("dnt") === "on") {
     var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
     if (dnt === "1" || dnt === "yes") return;
   }
 
-  // Hash routing: sites that navigate with `#/path` report the same pathname on
-  // every view, so their whole site collapses into one row without this.
   var hashMode = opt("hash") === "on";
 
-  // Report a different hostname than the one being browsed — for staging or
-  // preview deploys that should land in the production site's numbers.
+
   var domainOverwrite = opt("domain") || "";
 
-  /**
-   * Pages to leave out entirely, as comma-separated globs: "/admin/*,/preview".
-   * A `*` matches any run of characters; everything else is literal.
-   */
+ 
   var ignoreRules = optList("ignore-pages").map(function (pattern) {
     var escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
     return new RegExp("^" + escaped + "$");
@@ -74,21 +57,11 @@
     return false;
   }
 
-  /**
-   * Query parameters worth keeping on the reported path.
-   *
-   * Full query strings are a personal-data risk (emails and tokens end up in
-   * them) and they shatter one page into thousands of rows, so the default is
-   * to drop them. Naming params here opts them back in.
-   */
-  var allowedParams = optList("allow-params");
-
-  /** The path we report: ignore rules and param policy applied. */
+ 
   function currentPath() {
     var path = location.pathname;
 
     if (hashMode && location.hash) {
-      // "#/pricing" -> "/pricing"; "#pricing" -> "/pricing"
       path = "/" + location.hash.replace(/^#\/?/, "");
     }
 
@@ -105,10 +78,7 @@
     return path;
   }
 
-  /* ------------------------------------------------------------------
-   * Session: a 30-minute sliding window, kept in sessionStorage so it
-   * survives SPA navigation and reloads within the same tab.
-   * ------------------------------------------------------------------ */
+
   var SESSION_TTL = 30 * 60 * 1000;
   var SKEY = "_va_sess_" + siteId;
 
@@ -163,18 +133,7 @@
     };
   }
 
-  /* ------------------------------------------------------------------
-   * Attribution: first-touch, sticky for the session.
-   *
-   * Reading location.search on every event only works for the landing hit —
-   * one SPA route change or internal click drops the query string and every
-   * later event reports empty UTM. So the campaign is captured once, on the
-   * first hit of a session, and replayed on everything that follows.
-   *
-   * Ad platforms and mail clients often send no utm_* at all, so the click id
-   * (gclid/fbclid/msclkid/li_fat_id) and the landing referrer are stored
-   * alongside it — those are what let the server classify the visit.
-   * ------------------------------------------------------------------ */
+ 
   var AKEY = "_va_attr_" + siteId;
 
   /** Ad click ids, in the order we prefer them when several are present. */
