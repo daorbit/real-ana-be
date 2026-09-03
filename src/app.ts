@@ -19,6 +19,7 @@ import seoPublicRoutes from "./http/routes/seo-public.js";
 import plansPublicRoutes from "./http/routes/plans-public.js";
 import seoRoutes from "./http/routes/seo.js";
 import competitorRoutes from "./http/routes/competitors.js";
+import competitorBriefRoutes from "./http/routes/competitor-brief.js";
 import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
@@ -240,6 +241,10 @@ app.use("/api/workspaces", dashboardCors, seoRoutes);
 // router: it is the only place the server fetches a host the user typed, and
 // that is worth being able to read in one file.
 app.use("/api/workspaces", dashboardCors, competitorRoutes);
+// The AI reading of a comparison, kept separate: it is the only competitor
+// endpoint that costs a model call, carries its own rate limit, and disappears
+// entirely when the Cloudflare credentials are unset.
+app.use("/api/workspaces", dashboardCors, competitorBriefRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.

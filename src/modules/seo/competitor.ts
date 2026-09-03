@@ -226,7 +226,20 @@ export async function snapshotPage(rawUrl: string): Promise<CompareSnapshot> {
 
   const title = $("title").first().text().trim();
   const description = $('meta[name="description"]').attr("content") ?? "";
-  const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+  // `.text()` on the body concatenates the contents of every descendant,
+  // `<script>` and `<style>` included — which is how "wp-content", "png" and
+  // "assets" ended up presented to a customer as terms prominent on a
+  // competitor's page. They are asset paths inside inline JavaScript, not copy
+  // anyone wrote. Cloned first so the removal does not mutate the document the
+  // rest of the snapshot is still reading.
+  const bodyText = $("body")
+    .clone()
+    .find("script, style, noscript, template, svg")
+    .remove()
+    .end()
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
   const totalImages = $("img").length;
   const canonical = $('link[rel="canonical"]').attr("href") ?? "";
   const pageBytes = Buffer.byteLength(res.body);

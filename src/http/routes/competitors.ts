@@ -8,7 +8,7 @@ import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.
 import {
   snapshotPage, snapshotFromReport, type CompareSnapshot,
 } from "../../modules/seo/competitor.js";
-import { compareSnapshots } from "../../modules/seo/competitor-analysis.js";
+import { compareSnapshots, computePosition } from "../../modules/seo/competitor-analysis.js";
 import { SeoReport } from "../../modules/seo/models/SeoReport.js";
 
 /**
@@ -166,6 +166,10 @@ router.get(
       // Ranked so the page can lead with whoever is furthest ahead — that is
       // the one worth reading first.
       toughest: [...comparisons].sort((a, b) => b.gap.scoreGap - a.gap.scoreGap)[0]?.competitorId ?? null,
+      // Where you sit in the field as a whole. A per-competitor delta cannot
+      // answer "am I winning overall", which is the first thing anyone tracking
+      // more than one rival wants to know.
+      position: computePosition(mine.score, comparisons),
     });
   }
 );
