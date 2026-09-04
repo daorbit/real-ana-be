@@ -95,7 +95,14 @@ export type Frequency = "daily" | "weekly" | "monthly";
 
 const ALL_RANGES: RangeKey[] = ["1h", "24h", "7d", "30d", "custom"];
 
-export const PLAN_CATALOG: PlanCatalogEntry[] = [
+/**
+ * Each tier lists only what it *adds* over the one below it. `PLAN_CATALOG`
+ * below rolls these up, so consumers always see the full set a plan includes.
+ * Authoring them incrementally keeps the diff between tiers obvious here;
+ * shipping them incrementally made Pro look like it had lost the features
+ * Starter introduced.
+ */
+const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
   {
     slug: "free",
     name: "Free",
@@ -192,6 +199,38 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = [
     formFileUploads: true,
   },
 ];
+
+/**
+ * Features a higher tier replaces rather than adds to, keyed by the feature
+ * that supersedes them. Without this, Pro would advertise both "Email support"
+ * and "Priority support".
+ */
+const SUPERSEDES: Record<string, string[]> = {
+  "Priority support": ["Email support"],
+  "Daily reports + WhatsApp alerts": ["Scheduled reports by email"],
+  "Year-over-year comparison": ["Custom comparison periods"],
+  "Unlimited scheduled social posts": ["Scheduled LinkedIn posts, including repeating"],
+  "Lead capture forms with file uploads": ["Lead capture forms with email notifications"],
+};
+
+/**
+ * The catalogue as the rest of the app sees it: every plan carries the full
+ * list of what it includes, inherited from the tiers below it.
+ */
+export const PLAN_CATALOG: PlanCatalogEntry[] = (() => {
+  const ordered = PLAN_CATALOG_INCREMENTAL.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  let inherited: string[] = [];
+
+  return ordered.map((entry) => {
+    const replaced = new Set(entry.features.flatMap((f) => SUPERSEDES[f] ?? []));
+    const features = [
+      ...inherited.filter((f) => !replaced.has(f)),
+      ...entry.features.filter((f) => !inherited.includes(f)),
+    ];
+    inherited = features;
+    return { ...entry, features };
+  });
+})();
 
 export function getPlanCatalogEntry(slug: string): PlanCatalogEntry | undefined {
   return PLAN_CATALOG.find((p) => p.slug === slug);
