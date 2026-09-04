@@ -45,6 +45,11 @@
   var domainOverwrite = opt("domain") || "";
 
  
+  // Query params kept on the reported path — everything else is stripped so
+  // URLs with tokens or session ids don't fragment the page list. Opt in with
+  // data-allowed-params="ref,plan" on the script tag.
+  var allowedParams = optList("allowed-params");
+
   var ignoreRules = optList("ignore-pages").map(function (pattern) {
     var escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
     return new RegExp("^" + escaped + "$");
