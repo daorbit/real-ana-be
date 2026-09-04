@@ -1,13 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 
-/**
- * A tiny key/value store for settings an admin can change at runtime.
- *
- * Deliberately generic and deliberately small: things that belong in the
- * environment (secrets, connection strings) stay there. This is for operational
- * knobs the person running the product should be able to turn without a deploy
- * — currently just the per-IP demo limit.
- */
+ 
 const appSettingSchema = new Schema(
   {
     key: { type: String, required: true, unique: true, index: true },
