@@ -31,45 +31,19 @@ import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../mo
 import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, contactReplyHtml, type BodyLayout } from "../../infra/mail/mailer.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
+import { workersAiUsage } from "../../modules/orbit/cloudflare-ai.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 
-/**
- * The platform console is `super_admin` only.
- *
- * Nothing in this file is routine operation: impersonating a customer, mailing
- * every user, and repricing the plan catalogue are all acts that should trace
- * back to the one account that cannot be granted through the API.
- *
- * The plain `admin` role no longer opens any of it. It was a second key to the
- * whole console that could be handed out from inside the console, and with
- * customer access now managed per workspace there is nothing left that a
- * platform-wide `admin` needs it for.
- *
- * Gated on the router rather than per-route so a new endpoint added here is
- * locked down by default, instead of being open until someone remembers.
- */
+ 
 const router = Router();
 router.use(requireAuth, requireSuperAdmin);
 
 const PAGE_SIZE = 20;
 
-/**
- * Accounts per page in the user list.
- *
- * Smaller than the inbox's page: each row carries workspace, site and event
- * counts that are aggregated per page, and the table is scanned rather than
- * read straight through — ten keeps the pager useful instead of hiding it
- * behind a single long page.
- */
+ 
 const USERS_PAGE_SIZE = 10;
 
-/**
- * Every account, for the admin's user switcher.
- *
- * `q` matches email or name, `role` narrows to admins or plain users, and the
- * result is paged. The match is a case-insensitive regex rather than a text
- * index — the list is small, and a partial "goswa" needs to hit mid-word.
- */
+ 
 router.get("/users", async (req: AuthedRequest, res: Response) => {
   const q = String(req.query.q ?? "").trim();
   const role = String(req.query.role ?? "").trim();
@@ -104,9 +78,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
   for (const owner of ownerByWorkspace.values())
     wsByUser.set(owner, (wsByUser.get(owner) ?? 0) + 1);
 
-  // Sites resolve through the workspace, not `Site.userId` — platform-created
-  // sites have no dashboard user, so keying off the workspace is what makes
-  // their traffic show up under the account that actually owns them.
+ 
   const pageSites = await Site.find({
     workspaceId: { $in: [...ownerByWorkspace.keys()] },
   }).select("siteId workspaceId");
@@ -119,9 +91,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     ownerBySiteId.set(String(s.siteId), owner);
     sitesByUser.set(owner, (sitesByUser.get(owner) ?? 0) + 1);
   }
-
-  // Events key off `siteId` (the public nanoid), not the owner, so the sites
-  // above are the bridge back to a user.
+ 
   const eventCounts = await Event.aggregate<{ _id: string; n: number; last: Date }>([
     { $match: { siteId: { $in: [...ownerBySiteId.keys()] } } },
     { $group: { _id: "$siteId", n: { $sum: 1 }, last: { $max: "$ts" } } },
@@ -136,11 +106,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     eventsByUser.set(owner, acc);
   }
 
-  // An account holds one subscription per workspace, so the list column shows
-  // its best *live* tier rather than a single plan: that is what answers "is
-  // this a paying customer", which is the question the table is scanned for.
-  // Expired rows are still considered, so a lapsed Pro reads as Pro-expired
-  // instead of silently dropping to whatever else they happen to run.
+ 
   const subs = await Subscription.find({ userId: { $in: ids } }).select(
     "userId planSlug status currentPeriodEnd",
   );
@@ -183,26 +149,16 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
   });
 });
 
-/** A user's plan, cycle, and quota usage — same shape the dashboard shows the user themselves. */
 router.get("/users/:userId/billing", async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId).select("_id");
   if (!target) return res.status(404).json({ error: "user not found" });
 
-  // One row per workspace: an account no longer has a single plan, so this
-  // reports each workspace's own. `subscribed` stays in the response for the
-  // dialog's empty state — false now means "owns no billable workspace".
+ 
   const workspaces = await accountBillingSummary(String(req.params.userId));
   res.json({ subscribed: workspaces.some((w) => w.billing), workspaces });
 });
 
-/**
- * Mint a token that acts as the target user.
- *
- * The token carries the admin's id as `impersonatorId`, so the act stays
- * attributable, and every existing route keeps its normal `userId` guard —
- * nothing is relaxed for admins, which is what keeps one bad id parameter from
- * turning into a cross-tenant leak.
- */
+ 
 router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId).select("email name role");
   if (!target) return res.status(404).json({ error: "user not found" });
@@ -325,10 +281,18 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
   }
   const db = conn.db;
  
-  const cloudinary = await cloudinaryUsage().catch((e) => {
-    console.error("[admin] cloudinary usage failed:", e instanceof Error ? e.message : e);
-    return null;
-  });
+  // Both are external services and slow to answer; neither must delay the
+  // database figures, which are the point of the page.
+  const [cloudinary, workersAi] = await Promise.all([
+    cloudinaryUsage().catch((e) => {
+      console.error("[admin] cloudinary usage failed:", e instanceof Error ? e.message : e);
+      return null;
+    }),
+    workersAiUsage().catch((e) => {
+      console.error("[admin] workers-ai usage failed:", e instanceof Error ? e.message : e);
+      return null;
+    }),
+  ]);
 
   const stats = await db.command({ dbStats: 1 });
   const cols = await db.listCollections().toArray();
@@ -368,6 +332,7 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     limit: DB_PLAN_LIMIT_BYTES,
     collectionStats: collections,
     cloudinary,
+    workersAi,
   });
 });
 
