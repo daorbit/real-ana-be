@@ -1,4 +1,5 @@
 import { Router, Response } from "express";
+import mongoose from "mongoose";
 import { User } from "../../modules/identity/models/User.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
@@ -338,6 +339,69 @@ router.put("/demo/limit", async (req: AuthedRequest, res: Response) => {
   }
   const limit = await setDemoDailyLimit(requested);
   res.json({ limit });
+});
+
+/* ------------------------------- database -------------------------------- */
+
+/**
+ * Storage the database is using, and where it is going.
+ *
+ * `dbStats` gives the whole-database totals; `collStats` per collection breaks
+ * down which ones carry the weight. Sizes are bytes as the server reports them
+ * — `dataSize` is the uncompressed documents, `storageSize` is what they take
+ * on disk after WiredTiger compression, `indexSize` the indexes on top.
+ *
+ * The plan ceiling is the Atlas M0 free-tier limit of 512 MB (storage plus
+ * indexes). It is a fixed constant, not something the server exposes, so it is
+ * stated here and the page shows headroom against it.
+ */
+const DB_PLAN_LIMIT_BYTES = 512 * 1024 * 1024;
+
+router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
+  const conn = mongoose.connection;
+  if (conn.readyState !== 1 || !conn.db) {
+    return res.status(503).json({ error: "database not connected" });
+  }
+  const db = conn.db;
+
+  const stats = await db.command({ dbStats: 1 });
+  const cols = await db.listCollections().toArray();
+
+  const collections = await Promise.all(
+    cols.map(async (c) => {
+      try {
+        const cs = await db.command({ collStats: c.name });
+        return {
+          name: c.name,
+          count: cs.count ?? 0,
+          dataSize: cs.size ?? 0,
+          storageSize: cs.storageSize ?? 0,
+          indexSize: cs.totalIndexSize ?? 0,
+        };
+      } catch {
+        return { name: c.name, count: 0, dataSize: 0, storageSize: 0, indexSize: 0 };
+      }
+    })
+  );
+  collections.sort(
+    (a, b) => b.storageSize + b.indexSize - (a.storageSize + a.indexSize)
+  );
+
+  const storageSize = stats.storageSize ?? 0;
+  const indexSize = stats.indexSize ?? 0;
+  const used = stats.totalSize ?? storageSize + indexSize;
+
+  res.json({
+    name: stats.db,
+    collections: stats.collections ?? collections.length,
+    objects: stats.objects ?? 0,
+    dataSize: stats.dataSize ?? 0,
+    storageSize,
+    indexSize,
+    used,
+    limit: DB_PLAN_LIMIT_BYTES,
+    collectionStats: collections,
+  });
 });
 
 /* --------------------------------- email ---------------------------------- */

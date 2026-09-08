@@ -301,11 +301,7 @@
     }
   }
 
-  /* ------------------------------------------------------------------
-   * Scroll depth: the furthest point of the page the visitor reached.
-   * Sampled on scroll (throttled by rAF) and reported with the engagement
-   * record, since it is only final once they leave.
-   * ------------------------------------------------------------------ */
+ 
   var maxScroll = 0;
   var scrollQueued = false;
   // Elements already counted as seen on this page — see the impression block.
