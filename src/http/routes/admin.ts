@@ -30,6 +30,7 @@ import { CURRENCIES } from "../../modules/billing/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../modules/billing/fx.js";
 import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, contactReplyHtml, type BodyLayout } from "../../infra/mail/mailer.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
+import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 
 /**
@@ -251,17 +252,7 @@ router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, re
   res.json({ workspaceId: ws.id, addonSiteSlots: sub.get("addonSiteSlots") });
 });
 
-/**
- * Delete an account and everything it owns. Superadmin-only, same reasoning
- * as the role route above — an irreversible action on another account isn't
- * something every admin should be able to do.
- *
- * The cascade mirrors workspace deletion, one tenant at a time: a user's
- * workspaces take their sites, and each site takes its events. Api keys hang
- * off the user directly, so they go in one sweep. The user row is last, so a
- * mid-cascade failure leaves the account still present and retryable rather
- * than an orphaned pile of data pointing at nothing.
- */
+ 
 router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId).select("email role");
   if (!target) return res.status(404).json({ error: "user not found" });
@@ -281,26 +272,19 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
 
   await Event.deleteMany({ siteId: { $in: siteIds } });
   await Site.deleteMany({ workspaceId: { $in: wsIds } });
-  // Keys are scoped to the workspace as well as the user — platform keys
-  // created under a workspace would otherwise survive the account.
+
   await ApiKey.deleteMany({
     $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }],
   });
   await Goal.deleteMany({ workspaceId: { $in: wsIds } });
   await Project.deleteMany({ workspaceId: { $in: wsIds } });
-  // The same cascade the workspace delete route performs. Left behind, a
-  // subscription holds the unique index on a dead workspaceId (so the id can
-  // never be reused) and still counts as an active plan carrying its own
-  // event usage; a stale membership or invite would grant access to a
-  // workspace that no longer exists.
+
   await Subscription.deleteMany({ workspaceId: { $in: wsIds } });
   await Membership.deleteMany({ $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }] });
   await WorkspaceInvite.deleteMany({ workspaceId: { $in: wsIds } });
   await Workspace.deleteMany({ userId: target.id });
   await target.deleteOne();
-  // Ingest caches its allow decision per site, so without this the deleted
-  // account's sites keep collecting for up to a minute after the account is
-  // gone — writing events that belong to nothing.
+
   for (const id of siteIds) invalidateSite(id as string);
 
   console.log(`[admin] ${req.userId} deleted user ${target.id} (${target.email})`);
@@ -308,21 +292,11 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   res.json({ ok: true });
 });
 
-/** Characters that would otherwise be read as regex syntax in a search box. */
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/* ------------------------------- demo usage ------------------------------- */
-
-/**
- * How the public demo is being used.
- *
- * A rolling 24-hour picture, which is the whole window the throttle keeps:
- * rows older than that expire themselves, so there is no history behind these
- * figures and deliberately no audit trail. No visitor address is stored — only
- * a keyed hash used to count repeat starts.
- */
+ 
 router.get("/demo/usage", async (_req: AuthedRequest, res: Response) => {
   const [limit, snapshot] = await Promise.all([
     getDemoDailyLimit(),
@@ -341,20 +315,7 @@ router.put("/demo/limit", async (req: AuthedRequest, res: Response) => {
   res.json({ limit });
 });
 
-/* ------------------------------- database -------------------------------- */
-
-/**
- * Storage the database is using, and where it is going.
- *
- * `dbStats` gives the whole-database totals; `collStats` per collection breaks
- * down which ones carry the weight. Sizes are bytes as the server reports them
- * — `dataSize` is the uncompressed documents, `storageSize` is what they take
- * on disk after WiredTiger compression, `indexSize` the indexes on top.
- *
- * The plan ceiling is the Atlas M0 free-tier limit of 512 MB (storage plus
- * indexes). It is a fixed constant, not something the server exposes, so it is
- * stated here and the page shows headroom against it.
- */
+ 
 const DB_PLAN_LIMIT_BYTES = 512 * 1024 * 1024;
 
 router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
@@ -363,6 +324,11 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     return res.status(503).json({ error: "database not connected" });
   }
   const db = conn.db;
+ 
+  const cloudinary = await cloudinaryUsage().catch((e) => {
+    console.error("[admin] cloudinary usage failed:", e instanceof Error ? e.message : e);
+    return null;
+  });
 
   const stats = await db.command({ dbStats: 1 });
   const cols = await db.listCollections().toArray();
@@ -401,6 +367,7 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     used,
     limit: DB_PLAN_LIMIT_BYTES,
     collectionStats: collections,
+    cloudinary,
   });
 });
 

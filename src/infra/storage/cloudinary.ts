@@ -34,6 +34,55 @@ function sign(params: Record<string, string>): string {
   return createHash("sha1").update(base + API_SECRET()).digest("hex");
 }
 
+/**
+ * Account usage, straight from Cloudinary's `usage` endpoint.
+ *
+ * Authenticated with the api key and secret as HTTP Basic — the same secret
+ * used for signing, no separate token. Every figure is "used" plus, on paid
+ * plans, a "limit"; the free plan reports usage against a monthly credit pool
+ * instead, so `limit` may be absent and the caller shows what it has.
+ */
+export type CloudinaryUsage = {
+  plan: string;
+  /** Stored bytes. */
+  storageUsed: number;
+  storageLimit?: number;
+  /** Bytes delivered this cycle. */
+  bandwidthUsed: number;
+  bandwidthLimit?: number;
+  /** Number of stored derived + original assets. */
+  resources: number;
+  /** Credit pool, when the plan is metered that way. */
+  creditsUsed?: number;
+  creditsLimit?: number;
+};
+
+export async function cloudinaryUsage(): Promise<CloudinaryUsage | null> {
+  if (!cloudinaryConfigured()) return null;
+
+  const auth = Buffer.from(`${API_KEY()}:${API_SECRET()}`).toString("base64");
+  const { data } = await axios.get(
+    `https://api.cloudinary.com/v1_1/${CLOUD_NAME()}/usage`,
+    { headers: { Authorization: `Basic ${auth}` }, timeout: 10_000 }
+  );
+
+  return {
+    plan: String(data?.plan ?? "unknown"),
+    storageUsed: Number(data?.storage?.usage ?? 0),
+    storageLimit: num(data?.storage?.limit),
+    bandwidthUsed: Number(data?.bandwidth?.usage ?? 0),
+    bandwidthLimit: num(data?.bandwidth?.limit),
+    resources: Number(data?.resources ?? 0),
+    creditsUsed: num(data?.credits?.usage),
+    creditsLimit: num(data?.credits?.limit),
+  };
+}
+
+function num(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 export type UploadResult = {
   url: string;
   /** Cloudinary's handle for the asset, needed to delete it later. */
