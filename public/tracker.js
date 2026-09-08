@@ -237,21 +237,7 @@
     }).catch(function () {});
   }
 
-  /* ------------------------------------------------------------------
-   * Batching
-   *
-   * A busy page can fire a pageview, several clicks and an engagement record
-   * within a second, and one request each is a request the visitor pays for in
-   * bandwidth and the site owner pays for in ingest. Deferrable events are held
-   * briefly and sent together.
-   *
-   * What is never held: anything reporting the end of a page. A queued event is
-   * lost if the tab closes before the timer runs, so `sendNow` bypasses the
-   * queue entirely — see the exit paths below.
-   *
-   * Each event carries `t`, milliseconds since it was queued, so a batch held
-   * for a second does not report every event as having happened at flush time.
-   * ------------------------------------------------------------------ */
+ 
   var BATCH_MS = 1000;
   var BATCH_MAX = 10;
 
@@ -370,18 +356,7 @@
     }
   });
 
-  /* ------------------------------------------------------------------
-   * Core Web Vitals
-   *
-   * Lighthouse measures a simulated load on synthetic hardware. Google ranks
-   * on *field* data — what real visitors on real devices experienced — and the
-   * two routinely disagree. These are the field numbers.
-   *
-   * Everything here is feature-detected and wrapped: an unsupported entry type
-   * throws on observe() in some browsers, and a tracker must never break the
-   * page it is measuring. A browser missing an API simply reports the metrics
-   * it does have.
-   * ------------------------------------------------------------------ */
+ 
   var vitals = {};
 
   function observeVital(type, handler, opts) {
@@ -400,15 +375,12 @@
     }
   }
 
-  // LCP: the largest element painted. The last reported entry wins, because
-  // the candidate changes as bigger content arrives.
+ 
   observeVital("largest-contentful-paint", function (entries) {
     var last = entries[entries.length - 1];
     if (last) vitals.lcp = Math.round(last.startTime);
   });
-
-  // CLS: summed layout shift, excluding shifts within 500ms of an interaction
-  // (those are the user's own doing and do not count against the score).
+ 
   var clsValue = 0;
   observeVital("layout-shift", function (entries) {
     for (var i = 0; i < entries.length; i++) {
