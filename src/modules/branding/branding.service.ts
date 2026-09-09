@@ -3,23 +3,17 @@ import { Branding } from "./models/Branding.js";
 import { currentPlan } from "../billing/quota.service.js";
 import { getPlanCatalogEntry } from "../billing/plans.catalog.js";
 
-/**
- * What we put on anything a workspace has not branded itself.
- *
- * Read from the environment rather than hard-coded so a self-hosted install is
- * not made to advertise us on its own customers' payment windows.
- */
+ 
 export const DEFAULT_BRAND_NAME = process.env.BRAND_NAME?.trim() || "Quantalog";
-export const DEFAULT_BRAND_LOGO = process.env.BRAND_LOGO_URL?.trim() || undefined;
+
+ 
+export const DEFAULT_BRAND_LOGO =
+  process.env.BRAND_LOGO_URL?.trim() ||
+  "https://studio-quantalog.daorbit.in/favicon.png";
 export const POWERED_BY_LABEL =
   process.env.BRAND_POWERED_BY?.trim() || "Powered by Quantalog Forms";
 
-/**
- * The branding to actually render, after the workspace's plan has had its say.
- *
- * `editable` is what the settings screen needs: it decides whether the fields
- * are inputs or an upgrade prompt. The renderers only care about the rest.
- */
+ 
 export interface ResolvedBranding {
   name: string;
   logoUrl?: string;
@@ -39,14 +33,7 @@ export interface ResolvedBranding {
   };
 }
 
-/**
- * Resolve one workspace's branding.
- *
- * A plan that does not include branding falls back to ours field by field
- * rather than wholesale: the check belongs here, at the point of use, so that
- * a downgrade takes the customisation off every surface at once and an upgrade
- * puts it back without anyone re-typing it.
- */
+ 
 export async function resolveBranding(workspaceId: string): Promise<ResolvedBranding> {
   const [stored, plan] = await Promise.all([
     mongoose.isValidObjectId(workspaceId)
