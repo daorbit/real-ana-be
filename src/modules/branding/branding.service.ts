@@ -24,6 +24,8 @@ export interface ResolvedBranding {
   poweredByLabel: string;
   /** Whether this plan may override any of the above. */
   editable: boolean;
+ 
+  defaults: { name: string; logoUrl?: string };
   /** What the workspace stored, regardless of whether its plan honours it. */
   stored: {
     name?: string;
@@ -64,6 +66,7 @@ export async function resolveBranding(workspaceId: string): Promise<ResolvedBran
     showPoweredBy: !(editable && storedView.hidePoweredBy),
     poweredByLabel: POWERED_BY_LABEL,
     editable,
+    defaults: { name: DEFAULT_BRAND_NAME, logoUrl: DEFAULT_BRAND_LOGO },
     stored: storedView,
   };
 }
