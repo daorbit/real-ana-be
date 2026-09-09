@@ -7,6 +7,7 @@ import {
 } from "../../modules/billing/quota.service.js";
 import { generateForm, formsAiReady } from "../../modules/forms-ai/generate.js";
 import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
+import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 
 /**
@@ -144,6 +145,29 @@ router.post(
     await spendQuota(workspaceId, "orbit");
 
     res.json({ form: result.form, model: result.model });
+  }),
+);
+
+/**
+ * The branding one workspace's forms should carry.
+ *
+ * Resolved here rather than shipped raw: whether a workspace's own name is
+ * honoured depends on its plan, and the forms service has no way to know that.
+ * It receives the finished answer and renders it.
+ */
+router.get(
+  "/branding/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    const brand = await resolveBranding(req.params.workspaceId);
+    res.json({
+      name: brand.name,
+      logoUrl: brand.logoUrl,
+      accentColor: brand.accentColor,
+      showPoweredBy: brand.showPoweredBy,
+      poweredByLabel: brand.poweredByLabel,
+      editable: brand.editable,
+    });
   }),
 );
 

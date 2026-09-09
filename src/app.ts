@@ -26,6 +26,7 @@ import cronRoutes from "./http/routes/cron.js";
 import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import segmentRoutes from "./http/routes/segments.js";
+import brandingRoutes from "./http/routes/branding.js";
 import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
 import inviteRoutes from "./http/routes/invites.js";
@@ -249,6 +250,7 @@ app.use("/api/workspaces", dashboardCors, competitorBriefRoutes);
 app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
+app.use("/api/workspaces/:wid/branding", dashboardCors, brandingRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);

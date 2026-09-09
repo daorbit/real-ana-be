@@ -34,6 +34,13 @@ export type PlanCatalogEntry = {
   formNotificationEmails: boolean;
   /** Whether a form may collect file and image uploads, which we then store. */
   formFileUploads: boolean;
+  /**
+   * Whether the workspace may put its own name and logo on forms, payment
+   * windows and notification emails — and take ours off. Free workspaces are
+   * where the product is seen by people who have never heard of it, so the
+   * caption stays there until someone is paying.
+   */
+  formBranding: boolean;
 };
 
 export type Frequency = "daily" | "weekly" | "monthly";
@@ -71,6 +78,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     monthlySubmissionQuota: 100,
     formNotificationEmails: false,
     formFileUploads: false,
+    formBranding: false,
   },
   {
     slug: "starter",
@@ -99,6 +107,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     monthlySubmissionQuota: 2_000,
     formNotificationEmails: true,
     formFileUploads: true,
+    formBranding: false,
   },
   {
     slug: "pro",
@@ -128,6 +137,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     monthlySubmissionQuota: 25_000,
     formNotificationEmails: true,
     formFileUploads: true,
+    formBranding: true,
   },
 ];
 

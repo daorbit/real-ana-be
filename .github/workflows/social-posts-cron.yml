@@ -4,7 +4,6 @@ name: social-posts cron
 on:
   schedule:
     - cron: "*/25 * * * *"
-  # Lets a person run it now from the Actions tab when catching up a missed window.
   workflow_dispatch:
 
 concurrency:
