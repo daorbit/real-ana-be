@@ -27,6 +27,7 @@ import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import segmentRoutes from "./http/routes/segments.js";
 import brandingRoutes from "./http/routes/branding.js";
+import mediaRoutes from "./http/routes/media.js";
 import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
 import inviteRoutes from "./http/routes/invites.js";
@@ -58,6 +59,10 @@ app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
 // And for a scheduled post, whose image arrives the same way before being
 // uploaded to Cloudinary.
 app.use("/api/social/posts", express.json({ limit: "12mb" }));
+// A library upload carries whole files in the body — video included — so it
+// needs its own ceiling, and it has to be registered before the global parser
+// below or the default 100kb limit wins.
+app.use("/api/workspaces/:wid/media", express.json({ limit: "40mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.
@@ -251,6 +256,7 @@ app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
 app.use("/api/workspaces/:wid/branding", dashboardCors, brandingRoutes);
+app.use("/api/workspaces/:wid/media", dashboardCors, mediaRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);
