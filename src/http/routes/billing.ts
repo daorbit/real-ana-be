@@ -42,34 +42,12 @@ import {
 } from "../../modules/billing/invoice.js";
 import { sendInvoiceEmail, mailConfigured } from "../../infra/mail/mailer.js";
 
-/**
- * Subscription plans, addon packs, and the checkout flow that sells both
- * through Razorpay. Mounted at `/api/billing`.
- *
- * The catalogue reads (`/plans`, `/addons`) are open to any signed-in user;
- * everything that starts money moving requires auth, and writes are blocked
- * in demo mode like the rest of the dashboard API.
- *
- * Everything sold here is sold *to a workspace*: a plan period and any addon
- * credits attach to one workspace's subscription, so every purchase route
- * takes a `workspaceId` and refuses one the caller does not own.
- */
+ 
 const router = Router();
 router.use(requireAuth);
 router.use(blockDemoWrites);
 
-/**
- * Resolve the target workspace of a purchase, scoped to the caller's access.
- *
- * Membership is the boundary that decides whose subscription gets upgraded — an
- * unscoped lookup would let any signed-in account pay to upgrade (or, with a
- * crafted id, examine) a workspace they have nothing to do with.
- *
- * Any member may buy, including a viewer: paying for a workspace only ever adds
- * capacity to it, so there is nothing to protect against here that refusing
- * would not simply make worse. Who is *charged* is never in doubt — the order
- * is created against the caller's own account, and the receipt is theirs.
- */
+ 
 async function resolveAccessibleWorkspace(
   req: AuthedRequest,
   raw: unknown,
@@ -114,14 +92,7 @@ async function resolveCashfreePhone(
   };
 }
 
-/**
- * Open a one-time order at the chosen gateway.
- *
- * Normalises the two APIs to one shape: `amountMinor` is the smallest unit
- * (paise/cents), which Razorpay takes directly and Cashfree gets as a major
- * amount. `orderIdField` / `orderId` are what the caller writes onto the
- * purchase row so the webhook can find it later.
- */
+ 
 async function openOrder(params: {
   gateway: Gateway;
   amountMinor: number;
@@ -146,16 +117,13 @@ async function openOrder(params: {
     if (gateway === "cashfree") {
       // Cashfree order ids must be unique and are ours to choose.
       const orderId = `cf_${crypto.randomUUID()}`;
-      // Where Cashfree returns the browser once payment finishes. Falls back to
-      // the known dashboard origin when the env var is unset.
-      const base = (process.env.CASHFREE_RETURN_BASE || "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
+
       const order = await createCashfreeOrder({
         orderId,
         amountMajor: amountMinor / 100,
         currency,
         customer: { id: buyer.id, email: buyer.email, name: buyer.name, phone: buyer.phone },
         notes,
-        returnUrl: `${base}/app/billing?cf_order_id=${orderId}`,
       });
       return {
         ok: true,
@@ -503,7 +471,6 @@ async function confirmFromClient(
   res.json({ ok: true });
 }
 
-/** Confirm a plan purchase client-side; the webhook also activates it independently and idempotently. */
 router.post("/subscribe/verify", (req: AuthedRequest, res: Response) =>
   confirmFromClient(
     req,
@@ -513,9 +480,31 @@ router.post("/subscribe/verify", (req: AuthedRequest, res: Response) =>
   ),
 );
 
-/* ---------------------------------- addons ----------------------------------- */
+ 
+router.post("/cashfree/confirm", async (req: AuthedRequest, res: Response) => {
+  const orderId = String(req.body?.cf_order_id ?? "");
+  if (!orderId) return res.status(400).json({ error: "missing order id" });
 
-/** Start checkout for a one-time addon credit pack. */
+  const plan = await PlanPurchase.findOne({ cashfreeOrderId: orderId });
+  const addon = plan ? null : await AddonPurchase.findOne({ cashfreeOrderId: orderId });
+  if (!plan && !addon) return res.status(404).json({ error: "purchase not found" });
+
+  let order;
+  try {
+    order = await fetchCashfreeOrder(orderId);
+  } catch (e) {
+    return res.status(502).json({ error: (e as Error).message });
+  }
+  if (order.status !== "PAID")
+    return res.status(409).json({ error: "payment not completed", status: order.status });
+
+  if (plan) await creditPlanPurchase(plan.id, order.paymentId);
+  else if (addon) await creditAddonPurchase(addon.id, order.paymentId);
+
+  res.json({ ok: true, kind: plan ? "plan" : "addon" });
+});
+
+ 
 router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) => {
   const gateway = resolveGateway(req.body?.gateway);
   if (!gatewayConfigured(gateway))
@@ -605,16 +594,7 @@ router.post("/addons/verify", (req: AuthedRequest, res: Response) =>
   ),
 );
 
-/**
- * Which workspace a purchase applies to.
- *
- * Normally just the id stored on the row. The fallback covers orders placed
- * before billing moved to workspaces, and orders whose webhook arrives after
- * the workspace was deleted: an in-flight legacy order must still land
- * somewhere, and the account's oldest workspace is where the migration put
- * that account's plan, so the two agree. Null when the account has no
- * workspaces at all, which the callers treat as nothing to credit.
- */
+ 
 async function purchaseWorkspaceId(stored: unknown, userId: unknown): Promise<string | null> {
   if (stored) return String(stored);
   const oldest = await Workspace.findOne({ userId: String(userId) })
@@ -623,21 +603,9 @@ async function purchaseWorkspaceId(stored: unknown, userId: unknown): Promise<st
   return oldest ? String(oldest._id) : null;
 }
 
-/**
- * Credit an addon purchase's pack quantity onto the workspace's subscription.
- * Idempotent on `purchase.status`, so the client-side verify call and the
- * webhook racing each other credits the user exactly once.
- *
- * Exported for the webhook route, which credits the same purchase on
- * `order.paid` independently of this router's own verify endpoint.
- */
+ 
 export async function creditAddonPurchase(purchaseId: string, paymentId: string) {
-  // Atomically claim the purchase before crediting anything — the
-  // client-side verify call and the webhook can call this for the same
-  // order at nearly the same instant, and a plain find-then-check-then-save
-  // lets both pass the "not yet paid" check before either writes, crediting
-  // the user twice. Only the caller whose update actually flips the status
-  // proceeds to credit.
+ 
   const purchase = await AddonPurchase.findOneAndUpdate(
     { _id: purchaseId, status: { $ne: "paid" } },
     { $set: { status: "paid", razorpayPaymentId: paymentId } },
@@ -663,14 +631,7 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   await issueReceipt("addon", purchase.id, String(purchase.userId));
 }
 
-/**
- * Activate the plan period a `PlanPurchase` paid for. Idempotent on
- * `purchase.status`, same guard as `creditAddonPurchase` — the client-side
- * verify call and the webhook can both race to call this for the same order.
- *
- * Exported for the webhook route, which activates the same purchase on
- * `order.paid` independently of this router's own verify endpoint.
- */
+ 
 export async function creditPlanPurchase(purchaseId: string, paymentId: string) {
   // Same atomic-claim pattern as `creditAddonPurchase` — see its comment.
   const purchase = await PlanPurchase.findOneAndUpdate(
@@ -680,15 +641,10 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   if (!purchase) return;
 
   const workspaceId = await purchaseWorkspaceId(purchase.workspaceId, purchase.userId);
-  // Nothing to activate against. Only reachable if the buyer deleted the
-  // workspace between paying and the webhook landing; the purchase stays marked
-  // paid so it still appears in their receipts and can be refunded by hand.
+ 
   if (!workspaceId) return;
 
-  // An Orbit purchase moves the AI tier and resets its question count, and must
-  // leave the analytics period and its audit/crawl usage completely alone —
-  // buying Orbit Pro mid-cycle should not restart someone's analytics month or
-  // refund the audits they have already spent.
+ 
   if (purchase.ladder === "orbit") {
     await activateOrbitPeriod(
       workspaceId,
@@ -704,11 +660,7 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
       purchase.cycle as BillingCycle
     );
   }
-
-  // Packs bought in the same checkout. Credited after the period is activated,
-  // because activation resets the cycle's usage counters — crediting first
-  // would be undone by it. Addon credits themselves survive the reset; they
-  // live in separate fields precisely so a new period can't clear them.
+ 
   const addons = (purchase.addons ?? []) as unknown as {
     type: string;
     quantity: number;
@@ -719,9 +671,7 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
     const increments: Record<string, number> = {};
     for (const addon of addons) {
       const field = ADDON_CREDIT_FIELD[addon.type as AddonType];
-      // An unrecognised type is skipped rather than defaulted onto some other
-      // credit field: crediting the wrong quota is worse than crediting none,
-      // because it is silent and the receipt still says it was paid for.
+ 
       if (!field) continue;
       increments[field] = (increments[field] ?? 0) + addon.quantity * addon.packs;
     }
@@ -731,34 +681,16 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   await issueReceipt("plan", purchase.id, String(purchase.userId));
 }
 
-/* -------------------------------- receipts ---------------------------------- */
-
-/**
- * Assign a receipt number to a freshly credited purchase and email the PDF.
- *
- * Called from inside the credit functions, after the credit itself has landed,
- * and swallows every failure: the money has already moved and the account has
- * already been upgraded by this point, so a bounced email or a PDF that failed
- * to render must not propagate into the webhook or the verify response and
- * suggest the purchase didn't work. The receipt is regenerable from the
- * dashboard, an unactivated paid plan is not.
- *
- * Reached only through the credit path's atomic status claim, so it runs once
- * per purchase even when the webhook and the client-side verify call race.
- */
+ 
 async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: string) {
   try {
     const issuedAt = new Date();
     const number = await nextInvoiceNumber(issuedAt);
-
-    // Guard on the number being unset so a re-credit attempt can't renumber a
-    // receipt the buyer already has in their inbox.
+ 
     const filter = { _id: purchaseId, $or: [{ invoiceNumber: "" }, { invoiceNumber: null }] };
     const update = { $set: { invoiceNumber: number, invoicedAt: issuedAt } };
 
-    // Branching on the model rather than holding one in a variable: the two
-    // schemas give `findOneAndUpdate` incompatible signatures, so a union-typed
-    // handle isn't callable.
+ 
     const claimed =
       kind === "plan"
         ? await PlanPurchase.findOneAndUpdate(filter, update)
@@ -799,14 +731,7 @@ async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: strin
   }
 }
 
-/**
- * The buyer's own receipts, newest first.
- *
- * Plans and addons live in separate collections but are one history to the
- * person reading it, so they're merged here rather than exposed as two lists
- * the client would have to interleave itself. Only paid rows with a number
- * appear — an abandoned checkout is not a purchase.
- */
+ 
 router.get("/invoices", async (req: AuthedRequest, res: Response) => {
 
   const rawWorkspaceId = String(req.query.workspaceId ?? "").trim();
@@ -876,15 +801,7 @@ router.get("/invoices", async (req: AuthedRequest, res: Response) => {
 
   res.json(items);
 });
-
-/**
- * Download one receipt as a PDF.
- *
- * Regenerated on each request rather than stored: the document is a pure
- * function of a row that never changes after it is paid, so there is nothing
- * to keep in sync and no blob storage to pay for. `buildInvoice` scopes the
- * lookup by `userId`, so one account cannot fetch another's receipt by id.
- */
+ 
 router.get("/invoices/:kind/:id/pdf", async (req: AuthedRequest, res: Response) => {
   const kind = req.params.kind === "plan" ? "plan" : req.params.kind === "addon" ? "addon" : null;
   if (!kind) return res.status(400).json({ error: "unknown receipt type" });
