@@ -61,15 +61,24 @@ export async function createCashfreeOrder(params: {
         },
         order_note: params.notes ? JSON.stringify(params.notes).slice(0, 200) : undefined,
         order_meta: params.returnUrl ? { return_url: params.returnUrl } : undefined,
-        order_tags: params.notes,
+        // Tags must be a flat string->string map, at most 10 keys, values ≤256.
+        order_tags: params.notes
+          ? Object.fromEntries(
+              Object.entries(params.notes)
+                .slice(0, 10)
+                .map(([k, v]) => [k, String(v).slice(0, 256)]),
+            )
+          : undefined,
       },
       { headers: authHeaders(), timeout: 15000 },
     );
 
     return { orderId: data.order_id, paymentSessionId: data.payment_session_id };
   } catch (e) {
-    const err = e as AxiosError<{ message?: string }>;
-    const msg = err.response?.data?.message ?? err.message;
+    const err = e as AxiosError<{ message?: string; type?: string; code?: string }>;
+    const body = err.response?.data;
+    const msg = body?.message ?? err.message;
+    console.error("[cashfree] order create rejected:", err.response?.status, JSON.stringify(body));
     throw new Error(`Cashfree order creation failed: ${msg}`);
   }
 }

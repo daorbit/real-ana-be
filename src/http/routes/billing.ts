@@ -127,12 +127,16 @@ async function openOrder(params: {
     if (gateway === "cashfree") {
       // Cashfree order ids must be unique and are ours to choose.
       const orderId = `cf_${crypto.randomUUID()}`;
+      // Where Cashfree returns the browser once payment finishes. Falls back to
+      // the known dashboard origin when the env var is unset.
+      const base = (process.env.CASHFREE_RETURN_BASE || "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
       const order = await createCashfreeOrder({
         orderId,
         amountMajor: amountMinor / 100,
         currency,
         customer: { id: buyer.id, email: buyer.email, name: buyer.name },
         notes,
+        returnUrl: `${base}/billing?cf_order_id=${orderId}`,
       });
       return {
         ok: true,
@@ -161,8 +165,10 @@ async function openOrder(params: {
       },
     };
   } catch (e) {
-    console.error(`${gateway} order failed:`, (e as Error).message);
-    return { ok: false, error: `could not start checkout with ${gateway}` };
+    const msg = (e as Error).message;
+    console.error(`${gateway} order failed:`, msg);
+
+    return { ok: false, error: msg || `could not start checkout with ${gateway}` };
   }
 }
 
