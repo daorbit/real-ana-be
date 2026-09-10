@@ -2,7 +2,19 @@ import crypto from "crypto";
 import axios, { AxiosError } from "axios";
 
  
-const API_VERSION = "2023-08-01";
+const API_VERSION = "2025-01-01";
+
+/** Cashfree order tags accept `[a-zA-Z0-9-_]` only, ≤255 each — everything else is dropped. */
+function cleanTags(notes?: Record<string, string>): Record<string, string> | undefined {
+  if (!notes) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(notes).slice(0, 10)) {
+    const key = k.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 255);
+    const val = String(v).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 255);
+    if (key && val) out[key] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 function baseUrl(): string {
  
@@ -51,24 +63,24 @@ export async function createCashfreeOrder(params: {
         order_amount: Number(params.amountMajor.toFixed(2)),
         order_currency: params.currency,
         customer_details: {
-          customer_id: params.customer.id,
+          // Must be 3–50 chars. A Mongo id is 24 hex chars, so it fits as-is;
+          // pad a short one just in case.
+          customer_id: params.customer.id.padEnd(3, "0").slice(0, 50),
           customer_email: params.customer.email,
-          // Cashfree requires a phone; a synthetic value is accepted for
-          // card/UPI web checkout and keeps a missing profile from blocking a
-          // sale.
-          customer_phone: params.customer.phone || "9999999999",
-          ...(params.customer.name ? { customer_name: params.customer.name } : {}),
+          // Cashfree requires exactly 10 digits. A synthetic number is accepted
+          // for card/UPI web checkout and keeps a missing profile from blocking
+          // a sale.
+          customer_phone: /^\d{10}$/.test(params.customer.phone ?? "")
+            ? (params.customer.phone as string)
+            : "9999999999",
+          ...(params.customer.name
+            ? { customer_name: params.customer.name.slice(0, 100) }
+            : {}),
         },
-        order_note: params.notes ? JSON.stringify(params.notes).slice(0, 200) : undefined,
+        // No order_note: Cashfree rejects the JSON punctuation it would carry.
+        // The same data rides in order_tags below, sanitised.
         order_meta: params.returnUrl ? { return_url: params.returnUrl } : undefined,
-        // Tags must be a flat string->string map, at most 10 keys, values ≤256.
-        order_tags: params.notes
-          ? Object.fromEntries(
-              Object.entries(params.notes)
-                .slice(0, 10)
-                .map(([k, v]) => [k, String(v).slice(0, 256)]),
-            )
-          : undefined,
+        order_tags: cleanTags(params.notes),
       },
       { headers: authHeaders(), timeout: 15000 },
     );
