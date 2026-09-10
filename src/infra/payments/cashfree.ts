@@ -3,6 +3,12 @@ import axios, { AxiosError } from "axios";
 
  
 const API_VERSION = "2025-01-01";
+ 
+export function toCashfreePhone(raw?: string): string | null {
+  const digits = String(raw ?? "").replace(/\D/g, "");
+  const local = digits.replace(/^(0|91)(?=\d{10}$)/, "");
+  return /^\d{10}$/.test(local) ? local : null;
+}
 
 /** Cashfree order tags accept `[a-zA-Z0-9-_]` only, ≤255 each — everything else is dropped. */
 function cleanTags(notes?: Record<string, string>): Record<string, string> | undefined {
@@ -67,12 +73,8 @@ export async function createCashfreeOrder(params: {
           // pad a short one just in case.
           customer_id: params.customer.id.padEnd(3, "0").slice(0, 50),
           customer_email: params.customer.email,
-          // Cashfree requires exactly 10 digits. A synthetic number is accepted
-          // for card/UPI web checkout and keeps a missing profile from blocking
-          // a sale.
-          customer_phone: /^\d{10}$/.test(params.customer.phone ?? "")
-            ? (params.customer.phone as string)
-            : "9999999999",
+ 
+          customer_phone: toCashfreePhone(params.customer.phone) ?? "9999999999",
           ...(params.customer.name
             ? { customer_name: params.customer.name.slice(0, 100) }
             : {}),

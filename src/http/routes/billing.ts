@@ -10,6 +10,7 @@ import {
   cashfreeConfigured,
   createCashfreeOrder,
   fetchCashfreeOrder,
+  toCashfreePhone,
 } from "../../infra/payments/cashfree.js";
 import crypto from "crypto";
 import {
@@ -95,6 +96,24 @@ function gatewayConfigured(gateway: Gateway): boolean {
   return gateway === "cashfree" ? cashfreeConfigured() : razorpayConfigured();
 }
 
+ 
+async function resolveCashfreePhone(
+  bodyPhone: unknown,
+  userId: unknown,
+): Promise<{ phone: string } | { error: string }> {
+  const fromForm = toCashfreePhone(typeof bodyPhone === "string" ? bodyPhone : "");
+  if (fromForm) return { phone: fromForm };
+
+  const user = await User.findById(String(userId)).select("mobile");
+  const fromProfile = toCashfreePhone(user?.mobile as string | undefined);
+  if (fromProfile) return { phone: fromProfile };
+
+  return {
+    error:
+      "Cashfree needs a 10-digit mobile number. Add one in the checkout form or save it to your profile.",
+  };
+}
+
 /**
  * Open a one-time order at the chosen gateway.
  *
@@ -108,7 +127,7 @@ async function openOrder(params: {
   amountMinor: number;
   currency: string;
   notes: Record<string, string>;
-  buyer: { id: string; email: string; name?: string };
+  buyer: { id: string; email: string; name?: string; phone?: string };
 }): Promise<
   | {
       ok: true;
@@ -134,7 +153,7 @@ async function openOrder(params: {
         orderId,
         amountMajor: amountMinor / 100,
         currency,
-        customer: { id: buyer.id, email: buyer.email, name: buyer.name },
+        customer: { id: buyer.id, email: buyer.email, name: buyer.name, phone: buyer.phone },
         notes,
         returnUrl: `${base}/app/billing?cf_order_id=${orderId}`,
       });
@@ -271,6 +290,13 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const buyer = await User.findById(req.userId).select("name email");
   if (!buyer?.email) return res.status(400).json({ error: "your account has no email on file" });
 
+  let phone: string | undefined;
+  if (gateway === "cashfree") {
+    const resolved = await resolveCashfreePhone(req.body?.phone, req.userId);
+    if ("error" in resolved) return res.status(400).json({ error: resolved.error, code: "phone_required" });
+    phone = resolved.phone;
+  }
+
   const opened = await openOrder({
     gateway,
     amountMinor: chargeable,
@@ -282,7 +308,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       cycle,
       addonPacks: String(resolvedAddons.items.length),
     },
-    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? "") },
+    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? ""), phone },
   });
   if (!opened.ok) return res.status(502).json({ error: opened.error });
 
@@ -523,6 +549,13 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   const buyer = await User.findById(req.userId).select("name email");
   if (!buyer?.email) return res.status(400).json({ error: "your account has no email on file" });
 
+  let phone: string | undefined;
+  if (gateway === "cashfree") {
+    const resolved = await resolveCashfreePhone(req.body?.phone, req.userId);
+    if ("error" in resolved) return res.status(400).json({ error: resolved.error, code: "phone_required" });
+    phone = resolved.phone;
+  }
+
   const opened = await openOrder({
     gateway,
     amountMinor: amount,
@@ -533,7 +566,7 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
       addonPackId: String(pack.id),
       packs: String(packs),
     },
-    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? "") },
+    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? ""), phone },
   });
   if (!opened.ok) return res.status(502).json({ error: opened.error });
 
