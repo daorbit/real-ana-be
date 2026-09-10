@@ -12,6 +12,13 @@ import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { quotaSummary } from "../../modules/billing/quota.service.js";
 import { effectiveOrbitPlan, quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
+import {
+  recordExchange,
+  listConversations,
+  readConversation,
+  deleteConversation,
+  renameConversation,
+} from "../../modules/orbit-history/index.js";
 import { planLimit } from "../plan-limit.js";
 
 /**
@@ -21,11 +28,18 @@ import { planLimit } from "../plan-limit.js";
  * than from anything account-specific, but a model call costs money on every
  * request, and an open endpoint is a bill someone else gets to run up.
  *
- * Nothing is stored. The conversation lives in the browser and is posted back
- * with each question, which keeps the server stateless and means there is no
- * transcript to retain, expire, or hand over. If reviewing what people actually
- * ask becomes worth having — it is the best docs backlog there is — that is a
- * deliberate addition with a retention policy, not a side effect of chatting.
+ * Conversations are stored, per workspace, in `modules/orbit-history` — the
+ * deliberate addition this comment used to describe as a future one. Reviewing
+ * what people actually ask is the best docs backlog there is, and losing a
+ * thread to a refresh was the complaint that made it worth the retention
+ * question.
+ *
+ * Two things keep that honest. The transcript still arrives from the browser on
+ * every question, so storage is a record rather than the source of truth and a
+ * database problem cannot stop an answer — the write is best-effort and never
+ * fails the request. And it is only this route: the public assistant on the
+ * marketing site stays in memory, because it is unauthenticated and there is no
+ * one to show a transcript to or ask about it.
  *
  * Metered against the workspace, not the account: the Orbit tier and its
  * question quota are bought per workspace like everything else, so the routes
@@ -178,6 +192,14 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // browser that may have been open since before a model was retired.
   const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
 
+  // The thread this question continues, when the browser is carrying on a
+  // saved one. Validated against the workspace inside the history module — an
+  // id from a stale tab starts a new thread rather than failing the question.
+  const conversationId =
+    typeof req.body?.conversationId === "string" ? req.body.conversationId : undefined;
+
+  const startedAt = Date.now();
+
   // The quota check and the spend both happen inside `askOrbit`, against the
   // host — that is what keeps "never charge for an unanswered question" true
   // for every embedder rather than depending on each route remembering it. A
@@ -199,8 +221,48 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
         quota: plan.monthlyQuota,
       });
     }
+
+    // Store the failure too, but only inside an existing thread. A question
+    // that could not be answered is the most useful row in the collection —
+    // it is a gap in the knowledge base or a bug, and keeping only successes
+    // hides both. Starting a brand new conversation from a failure is the one
+    // case worth skipping: it would fill the sidebar with threads that have
+    // nothing in them but an error.
+    if (conversationId) {
+      void recordExchange({
+        workspaceId: ws.id,
+        userId: req.userId!,
+        conversationId,
+        question,
+        turn: {
+          reply: result.error,
+          failed: true,
+          latencyMs: Date.now() - startedAt,
+        },
+      });
+    }
+
     return res.status(result.status).json({ error: result.error });
   }
+
+  // Awaited, unlike the failure path, because the response carries the id back
+  // — the browser needs it to put the next question in the same thread. It
+  // never throws: `recordExchange` returns null on any storage problem and the
+  // answer goes out regardless, leaving the conversation in memory only, which
+  // is exactly how this route behaved before it stored anything.
+  const savedId = await recordExchange({
+    workspaceId: ws.id,
+    userId: req.userId!,
+    conversationId,
+    question,
+    turn: {
+      reply: result.reply,
+      suggestions: result.suggestions,
+      model: result.model,
+      modelLabel: result.modelLabel,
+      latencyMs: Date.now() - startedAt,
+    },
+  });
 
   // `model` comes back because it may not be the one that was asked for — the
   // chain falls through on a rate limit, and the UI says which one answered.
@@ -209,10 +271,79 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     suggestions: result.suggestions,
     model: result.model,
     modelLabel: result.modelLabel,
+    /** The thread this landed in. Null when it could not be stored. */
+    conversationId: savedId,
     // Sent back so the panel can count down without a second round trip. Read
     // after the spend, so it is the figure the next question will face.
     remaining: await remainingQuestions(ws.id, plan),
   });
+});
+
+/**
+ * The workspace's saved conversations, most recently active first.
+ *
+ * Scoped to the workspace rather than the asker: Orbit is metered per
+ * workspace, so the transcript belongs to the thing that paid for it, and a
+ * colleague who can already read the workspace's analytics can read its Orbit
+ * history. Each row carries the id of whoever started it so the list can say
+ * so.
+ */
+router.get("/conversations", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const limit = Number(req.query.limit);
+  res.json({
+    conversations: await listConversations(ws.id, Number.isFinite(limit) ? limit : undefined),
+  });
+});
+
+/** One conversation with its turns, for restoring it into the panel. */
+router.get("/conversations/:id", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const convo = await readConversation(ws.id, String(req.params.id));
+  // Missing, another workspace's, and deleted are one answer on purpose — the
+  // endpoint must not be usable to find out whether an id is real.
+  if (!convo) return res.status(404).json({ error: "Conversation not found." });
+
+  res.json(convo);
+});
+
+/**
+ * Rename a conversation.
+ *
+ * The generated title is the first question, which is frequently not what the
+ * thread turned out to be about.
+ */
+router.patch("/conversations/:id", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
+
+  const title = String(req.body?.title ?? "").trim();
+  if (!title) return res.status(400).json({ error: "Give it a title." });
+
+  const renamed = await renameConversation(ws.id, String(req.params.id), title);
+  if (!renamed) return res.status(404).json({ error: "Conversation not found." });
+
+  res.json({ ok: true });
+});
+
+/**
+ * Remove a conversation from the list.
+ *
+ * A soft delete — the turns stay so a complaint about a bad answer can still be
+ * looked at, and the sweep that removes them for real is a separate job.
+ */
+router.delete("/conversations/:id", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
+
+  const removed = await deleteConversation(ws.id, String(req.params.id));
+  if (!removed) return res.status(404).json({ error: "Conversation not found." });
+
+  res.json({ ok: true });
 });
 
 export default router;
