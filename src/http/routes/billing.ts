@@ -7,6 +7,12 @@ import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { razorpay, razorpayConfigured, verifyOrderPayment } from "../../infra/payments/razorpay.js";
 import {
+  cashfreeConfigured,
+  createCashfreeOrder,
+  fetchCashfreeOrder,
+} from "../../infra/payments/cashfree.js";
+import crypto from "crypto";
+import {
   activateOrbitPeriod,
   activatePlanPeriod,
   paidPlan,
@@ -74,6 +80,90 @@ async function resolveAccessibleWorkspace(
   const access = await resolveAccess(req, "viewer", workspaceId);
   if (isDenied(access)) return { error: access.error };
   return { id: access.workspace.id };
+}
+
+/* -------------------------------- gateways --------------------------------- */
+
+export type Gateway = "razorpay" | "cashfree";
+
+/** The client picks a gateway per checkout; anything unrecognised falls back to Razorpay. */
+function resolveGateway(raw: unknown): Gateway {
+  return raw === "cashfree" ? "cashfree" : "razorpay";
+}
+
+function gatewayConfigured(gateway: Gateway): boolean {
+  return gateway === "cashfree" ? cashfreeConfigured() : razorpayConfigured();
+}
+
+/**
+ * Open a one-time order at the chosen gateway.
+ *
+ * Normalises the two APIs to one shape: `amountMinor` is the smallest unit
+ * (paise/cents), which Razorpay takes directly and Cashfree gets as a major
+ * amount. `orderIdField` / `orderId` are what the caller writes onto the
+ * purchase row so the webhook can find it later.
+ */
+async function openOrder(params: {
+  gateway: Gateway;
+  amountMinor: number;
+  currency: string;
+  notes: Record<string, string>;
+  buyer: { id: string; email: string; name?: string };
+}): Promise<
+  | {
+      ok: true;
+      orderIdField: "razorpayOrderId" | "cashfreeOrderId";
+      orderId: string;
+      /** What the client needs to launch checkout. */
+      client:
+        | { gateway: "razorpay"; orderId: string; amount: number; currency: string; razorpayKeyId?: string }
+        | { gateway: "cashfree"; orderId: string; paymentSessionId: string; cashfreeMode: string };
+    }
+  | { ok: false; error: string }
+> {
+  const { gateway, amountMinor, currency, notes, buyer } = params;
+
+  try {
+    if (gateway === "cashfree") {
+      // Cashfree order ids must be unique and are ours to choose.
+      const orderId = `cf_${crypto.randomUUID()}`;
+      const order = await createCashfreeOrder({
+        orderId,
+        amountMajor: amountMinor / 100,
+        currency,
+        customer: { id: buyer.id, email: buyer.email, name: buyer.name },
+        notes,
+      });
+      return {
+        ok: true,
+        orderIdField: "cashfreeOrderId",
+        orderId: order.orderId,
+        client: {
+          gateway: "cashfree",
+          orderId: order.orderId,
+          paymentSessionId: order.paymentSessionId,
+          cashfreeMode: process.env.CASHFREE_ENV === "sandbox" ? "sandbox" : "production",
+        },
+      };
+    }
+
+    const order = await razorpay().orders.create({ amount: amountMinor, currency, notes });
+    return {
+      ok: true,
+      orderIdField: "razorpayOrderId",
+      orderId: order.id,
+      client: {
+        gateway: "razorpay",
+        orderId: order.id,
+        amount: Number(order.amount),
+        currency: String(order.currency),
+        razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+      },
+    };
+  } catch (e) {
+    console.error(`${gateway} order failed:`, (e as Error).message);
+    return { ok: false, error: `could not start checkout with ${gateway}` };
+  }
 }
 
 /* --------------------------------- catalogue -------------------------------- */
@@ -164,58 +254,57 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     return res.json({ free: true, plan: { name: plan.name, cycle } });
   }
 
-  if (!razorpayConfigured())
-    return res.status(503).json({ error: "payments are not configured" });
+  const gateway = resolveGateway(req.body?.gateway);
+  if (!gatewayConfigured(gateway))
+    return res.status(503).json({ error: `${gateway} payments are not configured` });
 
-  try {
-    // Razorpay rejects a zero-amount order, so a coupon generous enough to
-    // wipe out a plan-plus-addons total still has to charge something. Same
-    // floor the standalone addon route uses.
-    const chargeable = Math.max(amount, 100);
+  // Neither gateway accepts a zero-amount order, so a coupon generous enough to
+  // wipe out a plan-plus-addons total still has to charge something.
+  const chargeable = Math.max(amount, 100);
 
-    const order = await razorpay().orders.create({
-      amount: chargeable,
-      currency,
-      notes: {
-        userId: String(req.userId),
-        workspaceId: workspace.id,
-        planSlug: plan.slug,
-        cycle,
-        addonPacks: String(resolvedAddons.items.length),
-      },
-    });
+  const buyer = await User.findById(req.userId).select("name email");
+  if (!buyer?.email) return res.status(400).json({ error: "your account has no email on file" });
 
-    await PlanPurchase.create({
-      userId: req.userId,
+  const opened = await openOrder({
+    gateway,
+    amountMinor: chargeable,
+    currency,
+    notes: {
+      userId: String(req.userId),
       workspaceId: workspace.id,
       planSlug: plan.slug,
       cycle,
-      addons: resolvedAddons.items,
-      planAmount,
-      razorpayOrderId: order.id,
-      amount: chargeable,
-      currency,
-      couponCode: discounted.coupon?.code ?? "",
-      status: "created",
-    });
+      addonPacks: String(resolvedAddons.items.length),
+    },
+    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? "") },
+  });
+  if (!opened.ok) return res.status(502).json({ error: opened.error });
 
-    res.json({
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-      plan: { name: plan.name, cycle },
-      addons: resolvedAddons.items.map((a) => ({
-        name: a.name,
-        type: a.type,
-        packs: a.packs,
-        credits: a.quantity * a.packs,
-      })),
-    });
-  } catch (e) {
-    console.error("Razorpay order failed:", (e as Error).message);
-    res.status(502).json({ error: "could not start checkout with Razorpay" });
-  }
+  await PlanPurchase.create({
+    userId: req.userId,
+    workspaceId: workspace.id,
+    planSlug: plan.slug,
+    cycle,
+    addons: resolvedAddons.items,
+    planAmount,
+    gateway,
+    [opened.orderIdField]: opened.orderId,
+    amount: chargeable,
+    currency,
+    couponCode: discounted.coupon?.code ?? "",
+    status: "created",
+  });
+
+  res.json({
+    ...opened.client,
+    plan: { name: plan.name, cycle },
+    addons: resolvedAddons.items.map((a) => ({
+      name: a.name,
+      type: a.type,
+      packs: a.packs,
+      credits: a.quantity * a.packs,
+    })),
+  });
 });
 
 /**
@@ -323,9 +412,48 @@ async function resolveAddonSelection(
   return { items, total };
 }
 
-/** Confirm a plan purchase client-side; the webhook also activates it independently and idempotently. */
-router.post("/subscribe/verify", async (req: AuthedRequest, res: Response) => {
-  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body ?? {};
+/**
+ * Confirm a purchase from the browser, for either gateway.
+ *
+ * Razorpay hands back a signed `order_id|payment_id` the client forwards, which
+ * we check locally. Cashfree's browser return carries nothing signed, so
+ * "confirmation" there is a server-to-server read of the order status. Both
+ * paths end at the same idempotent credit function; the webhook is still the
+ * source of truth and races this safely.
+ *
+ * `finder` locates the purchase row by whichever order id is set; `credit`
+ * applies it.
+ */
+async function confirmFromClient(
+  req: AuthedRequest,
+  res: Response,
+  finder: (q: Record<string, unknown>) => Promise<{ id: string; gateway?: string } | null>,
+  credit: (purchaseId: string, paymentId: string) => Promise<void>,
+) {
+  const b = req.body ?? {};
+  const gateway = resolveGateway(b.gateway);
+
+  if (gateway === "cashfree") {
+    const orderId = String(b.cashfree_order_id ?? b.order_id ?? "");
+    if (!orderId) return res.status(400).json({ error: "missing order id" });
+
+    const purchase = await finder({ userId: req.userId, cashfreeOrderId: orderId });
+    if (!purchase) return res.status(404).json({ error: "purchase not found" });
+
+    let order;
+    try {
+      order = await fetchCashfreeOrder(orderId);
+    } catch (e) {
+      return res.status(502).json({ error: (e as Error).message });
+    }
+    if (order.status !== "PAID")
+      return res.status(409).json({ error: "payment not completed", status: order.status });
+
+    await credit(purchase.id, order.paymentId);
+    return res.json({ ok: true });
+  }
+
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = b;
   if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature)
     return res.status(400).json({ error: "missing verification fields" });
 
@@ -336,22 +464,30 @@ router.post("/subscribe/verify", async (req: AuthedRequest, res: Response) => {
   });
   if (!ok) return res.status(400).json({ error: "signature mismatch" });
 
-  const purchase = await PlanPurchase.findOne({
-    userId: req.userId,
-    razorpayOrderId: razorpay_order_id,
-  });
+  const purchase = await finder({ userId: req.userId, razorpayOrderId: razorpay_order_id });
   if (!purchase) return res.status(404).json({ error: "purchase not found" });
 
-  await creditPlanPurchase(purchase.id, String(razorpay_payment_id));
+  await credit(purchase.id, String(razorpay_payment_id));
   res.json({ ok: true });
-});
+}
+
+/** Confirm a plan purchase client-side; the webhook also activates it independently and idempotently. */
+router.post("/subscribe/verify", (req: AuthedRequest, res: Response) =>
+  confirmFromClient(
+    req,
+    res,
+    (q) => PlanPurchase.findOne(q) as Promise<{ id: string } | null>,
+    creditPlanPurchase,
+  ),
+);
 
 /* ---------------------------------- addons ----------------------------------- */
 
 /** Start checkout for a one-time addon credit pack. */
 router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) => {
-  if (!razorpayConfigured())
-    return res.status(503).json({ error: "payments are not configured" });
+  const gateway = resolveGateway(req.body?.gateway);
+  if (!gatewayConfigured(gateway))
+    return res.status(503).json({ error: `${gateway} payments are not configured` });
 
   const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
   if ("error" in workspace) return res.status(404).json({ error: workspace.error });
@@ -373,79 +509,62 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   const discounted = await applyCoupon(price, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
 
-  if (!razorpayConfigured())
-    return res.status(503).json({ error: "payments are not configured" });
+  // Neither gateway accepts a 0 amount — a coupon big enough to zero out an
+  // addon still needs a real (if tiny) charge; there is no "just activate it"
+  // path for credits the way there is for a free plan.
+  const amount = Math.max(discounted.amount, 100);
 
-  try {
-    // Razorpay Orders don't accept a 0 amount — a coupon big enough to zero
-    // out an addon still needs a real (if tiny) charge, unlike a free plan
-    // there's no "just activate it" path for credits.
-    const amount = Math.max(discounted.amount, 100);
+  const buyer = await User.findById(req.userId).select("name email");
+  if (!buyer?.email) return res.status(400).json({ error: "your account has no email on file" });
 
-    const order = await razorpay().orders.create({
-      amount,
-      currency,
-      notes: {
-        userId: String(req.userId),
-        workspaceId: workspace.id,
-        addonPackId: String(pack.id),
-        packs: String(packs),
-      },
-    });
-
-    await AddonPurchase.create({
-      userId: req.userId,
+  const opened = await openOrder({
+    gateway,
+    amountMinor: amount,
+    currency,
+    notes: {
+      userId: String(req.userId),
       workspaceId: workspace.id,
-      addonPackId: pack.id,
-      packs,
-      razorpayOrderId: order.id,
-      amount,
-      currency,
-      couponCode: discounted.coupon?.code ?? "",
-      status: "created",
-    });
+      addonPackId: String(pack.id),
+      packs: String(packs),
+    },
+    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? "") },
+  });
+  if (!opened.ok) return res.status(502).json({ error: opened.error });
 
-    res.json({
-      orderId: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
-      addon: {
-        name: pack.name,
-        type: pack.type,
-        quantity: pack.quantity,
-        packs,
-        credits: (pack.quantity as number) * packs,
-      },
-    });
-  } catch (e) {
-    console.error("Razorpay order failed:", (e as Error).message);
-    res.status(502).json({ error: "could not start checkout with Razorpay" });
-  }
+  await AddonPurchase.create({
+    userId: req.userId,
+    workspaceId: workspace.id,
+    addonPackId: pack.id,
+    packs,
+    gateway,
+    [opened.orderIdField]: opened.orderId,
+    amount,
+    currency,
+    couponCode: discounted.coupon?.code ?? "",
+    status: "created",
+  });
+
+  res.json({
+    ...opened.client,
+    addon: {
+      name: pack.name,
+      type: pack.type,
+      quantity: pack.quantity,
+      packs,
+      credits: (pack.quantity as number) * packs,
+    },
+  });
 });
 
 /** Confirm an addon purchase client-side; the webhook also credits it independently and idempotently. */
-router.post("/addons/verify", async (req: AuthedRequest, res: Response) => {
-  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body ?? {};
-  if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature)
-    return res.status(400).json({ error: "missing verification fields" });
-
-  const ok = verifyOrderPayment({
-    orderId: String(razorpay_order_id),
-    paymentId: String(razorpay_payment_id),
-    signature: String(razorpay_signature),
-  });
-  if (!ok) return res.status(400).json({ error: "signature mismatch" });
-
-  const purchase = await AddonPurchase.findOne({
-    userId: req.userId,
-    razorpayOrderId: razorpay_order_id,
-  });
-  if (!purchase) return res.status(404).json({ error: "purchase not found" });
-
-  await creditAddonPurchase(purchase.id, String(razorpay_payment_id));
-  res.json({ ok: true });
-});
+router.post("/addons/verify", (req: AuthedRequest, res: Response) =>
+  confirmFromClient(
+    req,
+    res,
+    (q) => AddonPurchase.findOne(q) as Promise<{ id: string } | null>,
+    creditAddonPurchase,
+  ),
+);
 
 /**
  * Which workspace a purchase applies to.

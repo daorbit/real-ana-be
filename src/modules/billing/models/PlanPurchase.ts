@@ -71,7 +71,18 @@ const planPurchaseSchema = new Schema(
     addons: { type: [purchasedPackSchema], default: [] },
     /** The plan's own share of `amount`, before any coupon. Kept so a receipt can itemise. */
     planAmount: { type: Number, default: 0 },
-    razorpayOrderId: { type: String, required: true, unique: true },
+    /**
+     * Which gateway this order was opened with. Existing rows predate the
+     * choice and were all Razorpay, so that is the default.
+     */
+    gateway: { type: String, enum: ["razorpay", "cashfree"], default: "razorpay", index: true },
+    /**
+     * Gateway order ids. Exactly one is set per row. `sparse` so the unique
+     * index ignores the rows where the other gateway's field is empty.
+     */
+    razorpayOrderId: { type: String, unique: true, sparse: true },
+    cashfreeOrderId: { type: String, unique: true, sparse: true },
+    /** The successful payment's id at whichever gateway. Keeps the Razorpay-era name; the invoice reads it as "paymentId". */
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */
     amount: { type: Number, required: true },

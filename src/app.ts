@@ -67,6 +67,9 @@ app.use("/api/workspaces/:wid/media", express.json({ limit: "40mb" }));
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.
 app.use("/api/webhooks/razorpay", express.raw({ type: "application/json" }));
+// Cashfree webhook signatures are over `timestamp + raw body`, so this route
+// needs the exact bytes too — registered before the global json parser.
+app.use("/api/webhooks/cashfree", express.raw({ type: "application/json" }));
 app.use(express.json());
 // The tracker sends beacons as text/plain (an application/json beacon would
 // trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.

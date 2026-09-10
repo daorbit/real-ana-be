@@ -22,7 +22,11 @@ const addonPurchaseSchema = new Schema(
      * multi-pack checkout existed still credit correctly.
      */
     packs: { type: Number, default: 1, min: 1 },
-    razorpayOrderId: { type: String, required: true, unique: true },
+    /** Which gateway this order was opened with. Existing rows were all Razorpay. */
+    gateway: { type: String, enum: ["razorpay", "cashfree"], default: "razorpay", index: true },
+    /** Gateway order ids. Exactly one is set per row; `sparse` keeps the unique index off the empty one. */
+    razorpayOrderId: { type: String, unique: true, sparse: true },
+    cashfreeOrderId: { type: String, unique: true, sparse: true },
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */
     amount: { type: Number, required: true },
