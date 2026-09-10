@@ -1,4 +1,4 @@
-import { Router, Response } from "express";
+import { Router, Response, type RequestHandler } from "express";
 import mongoose from "mongoose";
 import { AddonPack, type AddonType } from "../../modules/billing/models/AddonPack.js";
 import { Subscription, type BillingCycle } from "../../modules/billing/models/Subscription.js";
@@ -170,11 +170,7 @@ router.get("/addons", async (_req: AuthedRequest, res: Response) => {
   res.json(addons);
 });
 
-/**
- * Preview a coupon against a known amount before checkout starts — lets the
- * client show "20% off — ₹799" as someone types a code, rather than only
- * finding out it's invalid after Razorpay Checkout has already opened.
- */
+ 
 router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
   const amount = Number(req.body?.amount);
   if (!Number.isFinite(amount) || amount < 0)
@@ -185,15 +181,7 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
   res.json(result);
 });
 
-/* -------------------------------- subscribe --------------------------------- */
-
-/**
- * Start checkout for a plan period: a one-time Razorpay Order, not a
- * recurring Subscription — there is no auto-charge on renewal. The client
- * completes payment with Razorpay Checkout using the returned `orderId`, then
- * calls `/subscribe/verify`. Buying again after the period ends (or early, to
- * switch plans) is how renewal works.
- */
+ 
 router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const workspace = await resolveAccessibleWorkspace(req, req.body?.workspaceId);
   if ("error" in workspace) return res.status(404).json({ error: workspace.error });
@@ -213,9 +201,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     });
   }
 
-  // Renewing the same plan early stacks another cycle onto the current period.
-  // Cap the runway so a workspace cannot prepay indefinitely and then seek a
-  // full refund of time it has not used.
+ 
   if (await renewalWouldExceedCap(workspace.id, plan.slug, cycle)) {
     return res.status(409).json({
       error: `this plan is already paid up ${MAX_PREPAID_CYCLES} cycles ahead — renew again closer to the renewal date`,
@@ -224,10 +210,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   }
 
   const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
-
-  // Addon packs bought in the same checkout. Priced server-side from the
-  // catalogue — the client sends slugs and counts, never amounts, so a tampered
-  // request can't buy credits at a price of its own choosing.
+ 
   const resolvedAddons = await resolveAddonSelection(req.body?.addons, currency);
   if ("error" in resolvedAddons) return res.status(400).json({ error: resolvedAddons.error });
 
@@ -236,12 +219,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   if (discounted.error) return res.status(400).json({ error: discounted.error });
   const amount = discounted.amount;
 
-  // Free has no charge to make — assign it directly rather than round-tripping
-  // through Razorpay for a ₹0/$0/€0 order. A coupon can also discount a paid
-  // plan to 0, which takes the same free path.
-  //
-  // Only when nothing else is being bought: a free plan with paid addons is a
-  // real charge, and must go through checkout like any other.
+ 
   if (amount === 0 && !resolvedAddons.items.length) {
     await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
@@ -250,9 +228,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const gateway = resolveGateway(req.body?.gateway);
   if (!gatewayConfigured(gateway))
     return res.status(503).json({ error: `${gateway} payments are not configured` });
-
-  // Neither gateway accepts a zero-amount order, so a coupon generous enough to
-  // wipe out a plan-plus-addons total still has to charge something.
+ 
   const chargeable = Math.max(amount, 100);
 
   const buyer = await User.findById(req.userId).select("name email");
@@ -307,14 +283,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   });
 });
 
-/**
- * What a pack's credits are called on a receipt.
- *
- * A lookup rather than a ternary for the same reason as `ADDON_CREDIT_FIELD`
- * below: a chain of `audit ? … : …` labels every type it does not name as
- * whatever sits in the final branch — and on a receipt, which is a financial
- * document, that states something that was never sold.
- */
+ 
 const CREDIT_NOUN: Record<AddonType, string> = {
   audit: "audit",
   crawl: "crawl",
@@ -328,21 +297,12 @@ function creditNoun(type: AddonType, count: number): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/**
- * Which subscription field each kind of pack credits.
- *
- * A lookup rather than a ternary because there are now three kinds: a
- * two-branch `audit ? … : …` would silently credit Orbit questions as crawls,
- * and a purchase credited to the wrong quota still issues a correct-looking
- * receipt, so the mistake would surface as a support ticket rather than an
- * error. An unmapped type credits nothing.
- */
+ 
 const ADDON_CREDIT_FIELD: Record<AddonType, string> = {
   audit: "addonAuditCredits",
   crawl: "addonCrawlCredits",
   orbit: "addonOrbitCredits",
-  // Not a credit balance: this raises the cap on how many posts may be queued
-  // at once, and is never spent down. Incremented the same way regardless.
+ 
   "post-slots": "addonPostSlots",
   "form-submissions": "addonFormSubmissionCredits",
 };
@@ -360,14 +320,7 @@ type ResolvedAddon = {
 /** How many of one pack a single checkout may include. */
 const MAX_PACKS_PER_ADDON = 50;
 
-/**
- * Turn a client's `[{slug, packs}]` selection into priced line items.
- *
- * Every figure comes from the catalogue, not the request: the client chooses
- * *what* and *how many*, never *for how much*. Bounded per line because an
- * unbounded quantity is an integer-overflow-shaped hole in the order total, and
- * nobody legitimately buys fifty-one packs in one go.
- */
+ 
 async function resolveAddonSelection(
   input: unknown,
   currency: ReturnType<typeof resolveCurrency>,
@@ -387,9 +340,7 @@ async function resolveAddonSelection(
       return { error: `addon "${slug}": packs must be a whole number of at least 1` };
     if (packs > MAX_PACKS_PER_ADDON)
       return { error: `addon "${slug}": at most ${MAX_PACKS_PER_ADDON} packs per purchase` };
-    // A repeated slug would be credited twice while showing as one line on the
-    // receipt — reject it rather than silently merging, since the client should
-    // not be sending it and quietly "fixing" it hides a bug there.
+ 
     if (seen.has(slug)) return { error: `addon "${slug}" listed more than once` };
     seen.add(slug);
 
@@ -412,32 +363,29 @@ async function resolveAddonSelection(
   return { items, total };
 }
 
-/**
- * Confirm a purchase from the browser, for either gateway.
- *
- * Razorpay hands back a signed `order_id|payment_id` the client forwards, which
- * we check locally. Cashfree's browser return carries nothing signed, so
- * "confirmation" there is a server-to-server read of the order status. Both
- * paths end at the same idempotent credit function; the webhook is still the
- * source of truth and races this safely.
- *
- * `finder` locates the purchase row by whichever order id is set; `credit`
- * applies it.
- */
-async function confirmFromClient(
-  req: AuthedRequest,
-  res: Response,
-  finder: (q: Record<string, unknown>) => Promise<{ id: string; gateway?: string } | null>,
-  credit: (purchaseId: string, paymentId: string) => Promise<void>,
-) {
-  const b = req.body ?? {};
+/** Find a purchase by whichever gateway order id it carries, in either collection. */
+async function findPurchaseByOrder(field: "razorpayOrderId" | "cashfreeOrderId", orderId: string) {
+  const plan = await PlanPurchase.findOne({ [field]: orderId });
+  if (plan) return { kind: "plan" as const, id: String(plan._id) };
+  const addon = await AddonPurchase.findOne({ [field]: orderId });
+  if (addon) return { kind: "addon" as const, id: String(addon._id) };
+  return null;
+}
+
+function creditFor(kind: "plan" | "addon") {
+  return kind === "plan" ? creditPlanPurchase : creditAddonPurchase;
+}
+
+ 
+const confirmPurchase: RequestHandler = async (req, res) => {
+  const b = (req as AuthedRequest).body ?? {};
   const gateway = resolveGateway(b.gateway);
 
   if (gateway === "cashfree") {
-    const orderId = String(b.cashfree_order_id ?? b.order_id ?? "");
+    const orderId = String(b.cashfree_order_id ?? b.cf_order_id ?? b.order_id ?? "");
     if (!orderId) return res.status(400).json({ error: "missing order id" });
 
-    const purchase = await finder({ userId: req.userId, cashfreeOrderId: orderId });
+    const purchase = await findPurchaseByOrder("cashfreeOrderId", orderId);
     if (!purchase) return res.status(404).json({ error: "purchase not found" });
 
     let order;
@@ -449,8 +397,8 @@ async function confirmFromClient(
     if (order.status !== "PAID")
       return res.status(409).json({ error: "payment not completed", status: order.status });
 
-    await credit(purchase.id, order.paymentId);
-    return res.json({ ok: true });
+    await creditFor(purchase.kind)(purchase.id, order.paymentId);
+    return res.json({ ok: true, kind: purchase.kind });
   }
 
   const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = b;
@@ -464,44 +412,21 @@ async function confirmFromClient(
   });
   if (!ok) return res.status(400).json({ error: "signature mismatch" });
 
-  const purchase = await finder({ userId: req.userId, razorpayOrderId: razorpay_order_id });
+  const purchase = await findPurchaseByOrder("razorpayOrderId", String(razorpay_order_id));
   if (!purchase) return res.status(404).json({ error: "purchase not found" });
 
-  await credit(purchase.id, String(razorpay_payment_id));
-  res.json({ ok: true });
-}
+  await creditFor(purchase.kind)(purchase.id, String(razorpay_payment_id));
+  res.json({ ok: true, kind: purchase.kind });
+};
 
-router.post("/subscribe/verify", (req: AuthedRequest, res: Response) =>
-  confirmFromClient(
-    req,
-    res,
-    (q) => PlanPurchase.findOne(q) as Promise<{ id: string } | null>,
-    creditPlanPurchase,
-  ),
-);
+router.post("/confirm", confirmPurchase);
 
  
-router.post("/cashfree/confirm", async (req: AuthedRequest, res: Response) => {
-  const orderId = String(req.body?.cf_order_id ?? "");
-  if (!orderId) return res.status(400).json({ error: "missing order id" });
-
-  const plan = await PlanPurchase.findOne({ cashfreeOrderId: orderId });
-  const addon = plan ? null : await AddonPurchase.findOne({ cashfreeOrderId: orderId });
-  if (!plan && !addon) return res.status(404).json({ error: "purchase not found" });
-
-  let order;
-  try {
-    order = await fetchCashfreeOrder(orderId);
-  } catch (e) {
-    return res.status(502).json({ error: (e as Error).message });
-  }
-  if (order.status !== "PAID")
-    return res.status(409).json({ error: "payment not completed", status: order.status });
-
-  if (plan) await creditPlanPurchase(plan.id, order.paymentId);
-  else if (addon) await creditAddonPurchase(addon.id, order.paymentId);
-
-  res.json({ ok: true, kind: plan ? "plan" : "addon" });
+router.post("/subscribe/verify", confirmPurchase);
+router.post("/addons/verify", confirmPurchase);
+router.post("/cashfree/confirm", (req, res, next) => {
+  req.body = { ...req.body, gateway: "cashfree" };
+  confirmPurchase(req, res, next);
 });
 
  
@@ -524,15 +449,12 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   if (packs > MAX_PACKS_PER_ADDON)
     return res.status(400).json({ error: `at most ${MAX_PACKS_PER_ADDON} packs per purchase` });
 
-  // Priced from the catalogue and multiplied here — the client sends a count,
-  // never an amount.
+ 
   const price = ((pack.price as unknown as Record<string, number>)[currency] ?? 0) * packs;
   const discounted = await applyCoupon(price, req.body?.couponCode);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
 
-  // Neither gateway accepts a 0 amount — a coupon big enough to zero out an
-  // addon still needs a real (if tiny) charge; there is no "just activate it"
-  // path for credits the way there is for a free plan.
+ 
   const amount = Math.max(discounted.amount, 100);
 
   const buyer = await User.findById(req.userId).select("name email");
@@ -584,17 +506,6 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   });
 });
 
-/** Confirm an addon purchase client-side; the webhook also credits it independently and idempotently. */
-router.post("/addons/verify", (req: AuthedRequest, res: Response) =>
-  confirmFromClient(
-    req,
-    res,
-    (q) => AddonPurchase.findOne(q) as Promise<{ id: string } | null>,
-    creditAddonPurchase,
-  ),
-);
-
- 
 async function purchaseWorkspaceId(stored: unknown, userId: unknown): Promise<string | null> {
   if (stored) return String(stored);
   const oldest = await Workspace.findOne({ userId: String(userId) })
@@ -620,8 +531,7 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
 
   const field = ADDON_CREDIT_FIELD[pack.type as AddonType];
   if (!field) return;
-  // `packs` defaults to 1, so rows written before multi-pack checkout credit
-  // exactly as they always did.
+ 
   const packs = (purchase.packs as number) ?? 1;
   await Subscription.updateOne(
     { workspaceId },
@@ -633,7 +543,6 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
 
  
 export async function creditPlanPurchase(purchaseId: string, paymentId: string) {
-  // Same atomic-claim pattern as `creditAddonPurchase` — see its comment.
   const purchase = await PlanPurchase.findOneAndUpdate(
     { _id: purchaseId, status: { $ne: "paid" } },
     { $set: { status: "paid", razorpayPaymentId: paymentId } },
