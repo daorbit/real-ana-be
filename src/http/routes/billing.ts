@@ -136,7 +136,7 @@ async function openOrder(params: {
         currency,
         customer: { id: buyer.id, email: buyer.email, name: buyer.name },
         notes,
-        returnUrl: `${base}/billing?cf_order_id=${orderId}`,
+        returnUrl: `${base}/app/billing?cf_order_id=${orderId}`,
       });
       return {
         ok: true,
