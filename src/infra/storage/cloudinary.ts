@@ -368,6 +368,26 @@ const ALLOWED_ASSET_MIME = new Set([
   "application/pdf",
   "text/plain",
   "text/csv",
+  "text/tab-separated-values",
+  "application/json",
+  "application/xml",
+  "text/xml",
+  "application/zip",
+  "application/x-zip-compressed",
+  // Word
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  // Excel
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  // PowerPoint
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  // Open Document formats
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "application/vnd.oasis.opendocument.presentation",
+  "application/rtf",
 ]);
 
 /** `checkImageDataUrl`, widened to everything the library takes. */
