@@ -154,6 +154,7 @@ router.post(
             publicId: assetId(),
             kind,
             mime: checked.mime,
+            originalName: name,
           });
 
           const doc = await Media.create({
@@ -270,8 +271,7 @@ router.delete(
     }).lean();
     if (!doc) return res.status(404).json({ error: "no such file" });
 
-    // The row is what the library reads; the stored file is orphaned storage
-    // at worst. Do not hold the response on Cloudinary.
+ 
     const asset = doc as MediaShape;
     void deleteAsset(asset.publicId, (asset.pipeline ?? asset.kind) as ResourceKind);
     res.status(204).end();

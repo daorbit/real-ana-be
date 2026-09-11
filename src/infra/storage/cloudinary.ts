@@ -89,13 +89,7 @@ export type UploadResult = {
   publicId: string;
 };
 
-/**
- * Upload an image and return its delivery URL.
- *
- * `file` is a data URL. `transformation` is applied at upload time rather than
- * on delivery so the stored asset is already the size we serve — an avatar has
- * exactly one shape, and there is no reason to keep the original around.
- */
+ 
 export async function uploadImage(opts: {
   file: string;
   folder: string;
@@ -123,11 +117,9 @@ export async function uploadImage(opts: {
     form,
     {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      // Generous: this carries the whole image in the body, and a slow upstream
-      // shouldn't turn a working upload into a failed one.
+ 
       timeout: 30_000,
-      // The image itself is already capped by the caller; this only stops a
-      // surprising response body from being buffered without limit.
+ 
       maxBodyLength: 12 * 1024 * 1024,
     }
   );
@@ -226,13 +218,7 @@ export type AssetUploadResult = {
   thumbnailUrl?: string;
 };
 
-/**
- * A preview of an asset, produced at delivery time.
- *
- * A transformation on the same URL rather than a second upload: the thumbnail
- * can never drift from the file it represents, and nothing extra is stored.
- * A video's first frame is asked for as a `.jpg`; `raw` has nothing to show.
- */
+ 
 export function thumbnailFor(url: string, kind: ResourceKind, pipeline: ResourceKind = kind): string | undefined {
   if (pipeline === "raw") return undefined;
 
@@ -243,18 +229,17 @@ export function thumbnailFor(url: string, kind: ResourceKind, pipeline: Resource
   const transform = "c_fill,w_640,h_480,q_auto,f_auto/";
   const base = url.slice(0, at + marker.length) + transform + url.slice(at + marker.length);
 
-  // A pdf's page still needs turning into a raster image, same as a video's
-  // first frame — everything else in the image pipeline already is one.
+ 
   return kind === "video" || kind === "raw" ? base.replace(/\.[^./]+$/, ".jpg") : base;
 }
 
-/** Upload one library asset, of any kind. */
 export async function uploadAsset(opts: {
   file: string;
   folder: string;
   publicId: string;
   kind: ResourceKind;
   mime: string;
+  originalName: string;
 }): Promise<AssetUploadResult> {
   if (!cloudinaryConfigured()) throw new Error("cloudinary is not configured");
 
@@ -265,6 +250,13 @@ export async function uploadAsset(opts: {
     public_id: opts.publicId,
     timestamp: String(Math.floor(Date.now() / 1000)),
   };
+
+ 
+  if (pipeline === "raw") {
+    signed.use_filename = "true";
+    signed.unique_filename = "true";
+    signed.filename_override = opts.originalName;
+  }
 
   const form = new URLSearchParams({
     ...signed,
