@@ -26,8 +26,15 @@ const mediaSchema = new Schema(
     url: { type: String, required: true },
     /** Cloudinary's handle, needed to delete the asset. */
     publicId: { type: String, required: true },
-    /** Which Cloudinary pipeline holds it — needed to address it again. */
+    /** The app-level category — drives filtering and the grid's icon/badge. */
     kind: { type: String, enum: ["image", "video", "raw"], required: true },
+    /**
+     * Which Cloudinary pipeline actually holds it — needed to address it
+     * again on delete. Usually equal to `kind`, but a pdf uploads through the
+     * `image` pipeline (for inline preview and a thumbnail) while still being
+     * shown to users as `raw`.
+     */
+    pipeline: { type: String, enum: ["image", "video", "raw"], required: true },
 
     mime: { type: String, required: true },
     format: { type: String, default: "" },

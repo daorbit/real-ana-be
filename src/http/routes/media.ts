@@ -34,6 +34,7 @@ interface MediaShape {
   url: string;
   publicId: string;
   kind: string;
+  pipeline?: string;
   mime: string;
   format?: string;
   bytes?: number;
@@ -152,6 +153,7 @@ router.post(
             folder: `quantalog/${String(ws.id)}`,
             publicId: assetId(),
             kind,
+            mime: checked.mime,
           });
 
           const doc = await Media.create({
@@ -161,6 +163,7 @@ router.post(
             url: uploaded.url,
             publicId: uploaded.publicId,
             kind: uploaded.kind,
+            pipeline: uploaded.pipeline,
             mime: checked.mime,
             format: uploaded.format,
             bytes: uploaded.bytes || checked.bytes,
@@ -215,7 +218,7 @@ router.post(
     // Cloudinary addresses assets per pipeline, so group before deleting.
     const byKind: Record<ResourceKind, string[]> = { image: [], video: [], raw: [] };
     for (const doc of docs as MediaShape[]) {
-      byKind[doc.kind as ResourceKind]?.push(doc.publicId);
+      byKind[(doc.pipeline ?? doc.kind) as ResourceKind]?.push(doc.publicId);
     }
 
     // After the response: the library already no longer lists these, and an
@@ -270,7 +273,7 @@ router.delete(
     // The row is what the library reads; the stored file is orphaned storage
     // at worst. Do not hold the response on Cloudinary.
     const asset = doc as MediaShape;
-    void deleteAsset(asset.publicId, asset.kind as ResourceKind);
+    void deleteAsset(asset.publicId, (asset.pipeline ?? asset.kind) as ResourceKind);
     res.status(204).end();
   }),
 );

@@ -138,11 +138,7 @@ export async function uploadImage(opts: {
   return { url, publicId: String(data?.public_id ?? "") };
 }
 
-/**
- * Delete an asset. Best-effort by design: the caller has usually already
- * replaced the reference, so a failure here leaves an orphaned file rather than
- * a broken profile, and is not worth failing the request over.
- */
+ 
 export async function deleteImage(publicId: string): Promise<void> {
   if (!cloudinaryConfigured() || !publicId) return;
 
@@ -168,7 +164,6 @@ export async function deleteImage(publicId: string): Promise<void> {
   }
 }
 
-/** Formats Cloudinary accepts and browsers render. SVG is excluded: it can carry script. */
 const ALLOWED_MIME = new Set([
   "image/png",
   "image/jpeg",
@@ -179,13 +174,7 @@ const ALLOWED_MIME = new Set([
 
 export type ParsedDataUrl = { mime: string; bytes: number };
 
-/**
- * Validate a base64 image data URL without decoding the whole thing twice.
- *
- * Returns a string describing the problem, or the parsed metadata. Size is
- * checked from the base64 length rather than by allocating the buffer, so an
- * oversized payload is refused before it costs memory.
- */
+ 
 export function checkImageDataUrl(
   dataUrl: string,
   maxBytes: number
@@ -209,27 +198,27 @@ export function checkImageDataUrl(
   return { mime, bytes };
 }
 
-/* ---------------------------------------------------------------------------
-   The media library
-
-   Everything above handles one image at a known size — an avatar, a post
-   picture. The library holds whatever a workspace has put in it, so it needs
-   the other two Cloudinary pipelines and a thumbnail it can show for each.
-   --------------------------------------------------------------------------- */
+ 
 
 export type ResourceKind = "image" | "video" | "raw";
 
-/** Which Cloudinary pipeline a file belongs in. Audio rides the video one. */
 export function resourceKind(mime: string): ResourceKind {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("video/") || mime.startsWith("audio/")) return "video";
   return "raw";
 }
 
+ 
+export function cloudinaryPipelineFor(mime: string, kind: ResourceKind): ResourceKind {
+  if (mime === "application/pdf") return "image";
+  return kind;
+}
+
 export type AssetUploadResult = {
   url: string;
   publicId: string;
   kind: ResourceKind;
+  pipeline: ResourceKind;
   bytes: number;
   format: string;
   width?: number;
@@ -244,8 +233,8 @@ export type AssetUploadResult = {
  * can never drift from the file it represents, and nothing extra is stored.
  * A video's first frame is asked for as a `.jpg`; `raw` has nothing to show.
  */
-export function thumbnailFor(url: string, kind: ResourceKind): string | undefined {
-  if (kind === "raw") return undefined;
+export function thumbnailFor(url: string, kind: ResourceKind, pipeline: ResourceKind = kind): string | undefined {
+  if (pipeline === "raw") return undefined;
 
   const marker = "/upload/";
   const at = url.indexOf(marker);
@@ -254,7 +243,9 @@ export function thumbnailFor(url: string, kind: ResourceKind): string | undefine
   const transform = "c_fill,w_640,h_480,q_auto,f_auto/";
   const base = url.slice(0, at + marker.length) + transform + url.slice(at + marker.length);
 
-  return kind === "video" ? base.replace(/\.[^./]+$/, ".jpg") : base;
+  // A pdf's page still needs turning into a raster image, same as a video's
+  // first frame — everything else in the image pipeline already is one.
+  return kind === "video" || kind === "raw" ? base.replace(/\.[^./]+$/, ".jpg") : base;
 }
 
 /** Upload one library asset, of any kind. */
@@ -263,8 +254,11 @@ export async function uploadAsset(opts: {
   folder: string;
   publicId: string;
   kind: ResourceKind;
+  mime: string;
 }): Promise<AssetUploadResult> {
   if (!cloudinaryConfigured()) throw new Error("cloudinary is not configured");
+
+  const pipeline = cloudinaryPipelineFor(opts.mime, opts.kind);
 
   const signed: Record<string, string> = {
     folder: opts.folder,
@@ -280,7 +274,7 @@ export async function uploadAsset(opts: {
   });
 
   const { data } = await axios.post(
-    `https://api.cloudinary.com/v1_1/${CLOUD_NAME()}/${opts.kind}/upload`,
+    `https://api.cloudinary.com/v1_1/${CLOUD_NAME()}/${pipeline}/upload`,
     form,
     {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -297,15 +291,16 @@ export async function uploadAsset(opts: {
     url,
     publicId: String(data?.public_id ?? ""),
     kind: opts.kind,
+    pipeline,
     bytes: Number(data?.bytes ?? 0),
     format: String(data?.format ?? ""),
     width: typeof data?.width === "number" ? data.width : undefined,
     height: typeof data?.height === "number" ? data.height : undefined,
-    thumbnailUrl: thumbnailFor(url, opts.kind),
+    thumbnailUrl: thumbnailFor(url, opts.kind, pipeline),
   };
 }
 
-/** Delete one asset from its own pipeline. Best-effort, like `deleteImage`. */
+/** Delete one asset from its own pipeline. Best-effort, like `deleteImage`. Pass the Cloudinary pipeline it was uploaded through, not its app-level kind. */
 export async function deleteAsset(publicId: string, kind: ResourceKind): Promise<void> {
   if (!cloudinaryConfigured() || !publicId) return;
 
@@ -331,12 +326,7 @@ export async function deleteAsset(publicId: string, kind: ResourceKind): Promise
   }
 }
 
-/**
- * Delete many assets of one kind.
- *
- * The Admin API rather than the upload API — it takes up to 100 ids per call
- * and uses Basic auth instead of a per-request signature.
- */
+ 
 export async function deleteAssets(publicIds: string[], kind: ResourceKind): Promise<void> {
   if (!cloudinaryConfigured()) return;
 
@@ -360,14 +350,8 @@ export async function deleteAssets(publicIds: string[], kind: ResourceKind): Pro
   }
 }
 
-/** Ceiling on one library upload. Video is why this is not smaller. */
 export const MAX_ASSET_BYTES = 25 * 1024 * 1024;
-
-/**
- * What the library accepts. Wider than `ALLOWED_MIME` above, which guards the
- * avatar path and stays image-only. SVG is excluded from both: it can carry
- * script, and these URLs are served to other people's browsers.
- */
+ 
 const ALLOWED_ASSET_MIME = new Set([
   "image/png",
   "image/jpeg",
