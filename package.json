@@ -9,7 +9,8 @@
     "build": "tsc",
     "start": "npm run build && node dist/index.js",
     "start:dist": "node dist/index.js",
-    "backfill:events": "tsx scripts/backfill-event-usage.ts"
+    "backfill:events": "tsx scripts/backfill-event-usage.ts",
+    "report:media-over-cap": "tsx scripts/report-media-over-cap.ts"
   },
   "dependencies": {
     "@types/node-cron": "^3.0.11",

@@ -13,6 +13,8 @@ import {
   uploadAsset,
   type ResourceKind,
 } from "../../infra/storage/cloudinary.js";
+import { canUploadMedia } from "../../modules/billing/quota.service.js";
+import { planLimit } from "../plan-limit.js";
 
 /**
  * A workspace's media library.
@@ -139,6 +141,9 @@ router.post(
     if (files.some((f: { file: string }) => !f.file)) {
       return res.status(400).json({ error: "every file must carry its data" });
     }
+
+    const allowed = await canUploadMedia(String(ws.id), files.length);
+    if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
     const results = await Promise.all(
       files.map(async ({ file, name, alt }: { file: string; name: string; alt: string }) => {

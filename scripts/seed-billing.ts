@@ -4,6 +4,7 @@ import { Plan } from "../src/modules/billing/models/Plan.js";
 import { Subscription } from "../src/modules/billing/models/Subscription.js";
 import { User } from "../src/modules/identity/models/User.js";
 import { PLAN_CATALOG } from "../src/modules/billing/plans.catalog.js";
+import { AddonPack } from "../src/modules/billing/models/AddonPack.js";
 import mongoose from "mongoose";
 
 /**
@@ -58,6 +59,23 @@ async function main() {
     );
   } else {
     console.log("\nEvery user already has a subscription row — nothing to migrate.");
+  }
+
+  console.log("\nEnsuring the media-slots addon pack exists...");
+  const existingMediaAddon = await AddonPack.findOne({ slug: "media-slots-10" });
+  if (existingMediaAddon) {
+    console.log("  media-slots-10: already exists, leaving it alone");
+  } else {
+    await AddonPack.create({
+      name: "10 extra media slots",
+      slug: "media-slots-10",
+      type: "media-slots",
+      quantity: 10,
+      price: { INR: 49900, USD: 599 }, // ₹499, $5.99, one-time
+      active: true,
+      sortOrder: 100,
+    });
+    console.log("  media-slots-10: seeded at ₹499 / $5.99 for 10 slots");
   }
 
   console.log("\nDone.");

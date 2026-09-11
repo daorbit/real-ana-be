@@ -290,6 +290,7 @@ const CREDIT_NOUN: Record<AddonType, string> = {
   orbit: "Orbit question",
   "post-slots": "scheduled post slot",
   "form-submissions": "form response",
+  "media-slots": "media library slot",
 };
 
 function creditNoun(type: AddonType, count: number): string {
@@ -302,9 +303,10 @@ const ADDON_CREDIT_FIELD: Record<AddonType, string> = {
   audit: "addonAuditCredits",
   crawl: "addonCrawlCredits",
   orbit: "addonOrbitCredits",
- 
+
   "post-slots": "addonPostSlots",
   "form-submissions": "addonFormSubmissionCredits",
+  "media-slots": "addonMediaSlots",
 };
 
 /** One addon line as it is stored on a purchase and credited on payment. */

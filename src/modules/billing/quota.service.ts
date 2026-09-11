@@ -10,6 +10,7 @@ import {
 } from "./plans.catalog.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
+import { Media } from "../media/models/Media.js";
 import { invalidateSite } from "./event-quota.js";
 import type { PlanLimitInfo } from "../../http/plan-limit.js";
 import {
@@ -247,6 +248,33 @@ export async function canCreateSite(
       ok: false,
       error: `a workspace holds up to ${cap} sites — create another workspace to track more`,
       limit: { kind: "sites", label: "Sites", used: count, quota: cap, plan: plan.name },
+    };
+  return { ok: true };
+}
+
+/**
+ * Whether a workspace's media library has room for `count` more files.
+ *
+ * The cap is the plan's `maxMediaAssets` plus any addon slots bought on top —
+ * same additive shape as `addonPostSlots`, since deleting a file frees its
+ * slot back up rather than drawing down a balance.
+ */
+export async function canUploadMedia(
+  workspaceId: string,
+  count: number,
+): Promise<QuotaCheck> {
+  const plan = await currentPlan(workspaceId);
+  if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to upload files" };
+
+  const sub = await Subscription.findOne({ workspaceId }).select("addonMediaSlots");
+  const cap = plan.maxMediaAssets + ((sub?.get("addonMediaSlots") as number) ?? 0);
+
+  const used = await Media.countDocuments({ workspaceId });
+  if (used + count > cap)
+    return {
+      ok: false,
+      error: `the ${plan.name} plan holds up to ${cap} files in the media library`,
+      limit: { kind: "media", label: "Media library", used, quota: cap, plan: plan.name },
     };
   return { ok: true };
 }

@@ -34,6 +34,8 @@ export type PlanCatalogEntry = {
   formNotificationEmails: boolean;
   /** Whether a form may collect file and image uploads, which we then store. */
   formFileUploads: boolean;
+  /** How many files a workspace may keep in its media library at once. */
+  maxMediaAssets: number;
   /**
    * Whether the workspace may put its own name and logo on forms, payment
    * windows and notification emails — and take ours off. Free workspaces are
@@ -79,6 +81,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formNotificationEmails: false,
     formFileUploads: false,
     formBranding: false,
+    maxMediaAssets: 10,
   },
   {
     slug: "starter",
@@ -108,6 +111,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formNotificationEmails: true,
     formFileUploads: true,
     formBranding: false,
+    maxMediaAssets: 50,
   },
   {
     slug: "pro",
@@ -138,6 +142,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formNotificationEmails: true,
     formFileUploads: true,
     formBranding: true,
+    maxMediaAssets: 500,
   },
 ];
 

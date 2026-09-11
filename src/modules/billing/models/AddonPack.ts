@@ -16,8 +16,19 @@ import { CURRENCIES } from "../currency.js";
  * `form-submissions` is a consumable like the first three — a workspace that
  * runs out of its monthly responses buys more rather than waiting for the
  * cycle, and unspent ones carry over.
+ *
+ * `media-slots` behaves like `post-slots`: a file holds its slot in the
+ * library until deleted, freeing it back up, so buying it raises the
+ * workspace's cap permanently rather than adding a balance to draw down.
  */
-export const ADDON_TYPES = ["audit", "crawl", "orbit", "post-slots", "form-submissions"] as const;
+export const ADDON_TYPES = [
+  "audit",
+  "crawl",
+  "orbit",
+  "post-slots",
+  "form-submissions",
+  "media-slots",
+] as const;
 export type AddonType = (typeof ADDON_TYPES)[number];
 
 const priceFields = Object.fromEntries(

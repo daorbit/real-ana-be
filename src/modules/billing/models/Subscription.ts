@@ -134,6 +134,14 @@ const subscriptionSchema = new Schema(
      * where the superadmin grants an exception directly.
      */
     addonSiteSlots: { type: Number, default: 0 },
+    /**
+     * Extra media library slots, on top of the plan's `maxMediaAssets`.
+     *
+     * Not a credit: nothing is drawn down. Deleting a file frees its slot
+     * back up, so this is a permanent addition to the cap rather than a
+     * balance that runs out, same as `addonPostSlots`.
+     */
+    addonMediaSlots: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
