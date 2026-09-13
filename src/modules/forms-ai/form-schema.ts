@@ -271,6 +271,42 @@ export type ParseResult =
   | { ok: true; form: GeneratedForm }
   | { ok: false; reason: string };
 
+export type ParseThemeResult =
+  | { ok: true; theme: GeneratedTheme }
+  | { ok: false; reason: string };
+
+/**
+ * Read a theme-only answer — a restyle, with no fields in sight.
+ *
+ * The whole point of the theme path is that the model is never handed the
+ * fields and so cannot damage them. This parser is the other half of that
+ * promise: it reads `theme` and nothing else, so even a model that ignores its
+ * instructions and returns a full form has its fields discarded here rather
+ * than reaching the canvas.
+ *
+ * A bare theme object is accepted as readily as one wrapped in `{ theme: … }`.
+ * The small models produce both and the difference is not worth a retry.
+ */
+export function parseGeneratedTheme(raw: unknown): ParseThemeResult {
+  if (!raw || typeof raw !== "object") return { ok: false, reason: "not an object" };
+  const r = raw as Record<string, unknown>;
+
+  // The wrapped shape wins; a bare theme object is the fallback. Reading the
+  // wrapper as a theme is safe — it has no colour keys of its own — but only
+  // useful when the model skipped the wrapper entirely.
+  const theme = readTheme(r.theme) ?? readTheme(r);
+
+  // An empty result is a failure, not a success with nothing in it. `readTheme`
+  // drops every value it cannot use, so a model that answered with malformed
+  // colours lands here — and merging {} onto the current theme would change
+  // nothing while telling the author their form had been restyled.
+  if (!theme || !Object.keys(theme).length) {
+    return { ok: false, reason: "no usable theme" };
+  }
+
+  return { ok: true, theme };
+}
+
 /** How many fields one generated form may carry. */
 export const MAX_FIELDS = 25;
 

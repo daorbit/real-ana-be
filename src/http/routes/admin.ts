@@ -185,14 +185,7 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
   });
 });
 
-/**
- * Grant one extra site slot to a workspace, on top of the flat
- * `MAX_SITES_PER_WORKSPACE` cap every plan shares.
- *
- * Support-only exception, not a purchase: there is no customer-facing way to
- * raise this cap, since the product steers growth into another workspace
- * instead. Whole-router `requireSuperAdmin` covers the auth here.
- */
+
 router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, res: Response) => {
   const ws = await Workspace.findById(req.params.workspaceId).select("_id");
   if (!ws) return res.status(404).json({ error: "workspace not found" });
@@ -336,18 +329,10 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
   });
 });
 
-/* --------------------------------- email ---------------------------------- */
 
-/** Hard ceiling on one send, well under Gmail's daily cap for a free account. */
 const MAX_RECIPIENTS = 200;
 
-/**
- * Whether email can be sent at all, and from where.
- *
- * The composer asks before it opens so it can explain a missing app password
- * up front, rather than letting an admin write a message and only then
- * discover it can't go anywhere.
- */
+
 router.get("/email/status", async (_req: AuthedRequest, res: Response) => {
   res.json({ configured: mailConfigured(), from: mailFrom() });
 });
@@ -357,25 +342,12 @@ router.get("/email/templates", async (_req: AuthedRequest, res: Response) => {
   res.json({ templates: MAIL_TEMPLATES });
 });
 
-/**
- * Render a draft exactly as it will arrive.
- *
- * The same `broadcastHtml` and `personalize` the send path uses, so the preview
- * cannot drift from the real thing — an admin writing `{{name}}` sees a name,
- * not a placeholder, which is the difference between proofreading a message and
- * guessing at one.
- */
+
 router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
   const subject = String(req.body?.subject ?? "");
   const body = String(req.body?.body ?? "");
 
-  // Preview against a real recipient when one is named, so the personalisation
-  // is checked against the name that will actually be substituted.
-  //
-  // `anonymous` previews the other case: a bare address with no name, which is
-  // what most invitations go to. Without it an admin would only ever see the
-  // flattering version and never notice that their opening line reads badly
-  // when there is no name to drop into it.
+
   let sample: { email: string; name: string } =
     req.body?.anonymous === true
       ? { email: "someone@example.com", name: "" }
@@ -389,38 +361,24 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
 
   const cta = readCta(req.body?.cta);
   const text = personalize(body, sample);
-  // Same dispatcher the real send uses, so the preview cannot drift from what
-  // actually goes out.
+
   const html = renderBody(readLayout(req.body?.layout), text, cta);
 
   res.json({
     subject: personalize(subject, sample),
     html: forBrowser(html),
-    // Empty when previewing the no-name case; the composer says "someone with no
-    // name on file" rather than leaving a gap in its caption.
+
     sampleName: sample.name,
   });
 });
 
-/** Only the layouts the renderer knows. Anything else falls back to plain text. */
+
 function readLayout(raw: unknown): BodyLayout {
   const known: BodyLayout[] = ["plain", "invite", "install", "welcome", "feature"];
   return known.includes(raw as BodyLayout) ? (raw as BodyLayout) : "plain";
 }
 
-/**
- * Parse hand-entered recipients.
- *
- * Accepts either a bare address or `Name <address>`, so an admin can paste from
- * a contact list and still get `{{name}}` filled in. A bare address gets no name
- * at all rather than one invented from the local part: templates use
- * `{{greeting}}`, which reads as a plain "Hello" when nothing is known, instead
- * of greeting a stranger as "alex".
- *
- * Deliberately strict about the address and permissive about everything else:
- * an unparseable address is a bounce and a small hit to sender reputation, which
- * is worth one clear error before the send rather than a silent failure after.
- */
+
 function parseAddresses(raw: unknown[]): {
   valid: { email: string; name: string }[];
   invalid: string[];
@@ -437,15 +395,12 @@ function parseAddresses(raw: unknown[]): {
     const name = angled ? angled[1].trim().replace(/^["']|["']$/g, "") : "";
     const email = (angled ? angled[2] : text).trim().toLowerCase();
 
-    // Same deliberately-permissive shape the signup path uses: the only real
-    // authority on an address is a delivered message.
+
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 254) {
       invalid.push(text.slice(0, 80));
       continue;
     }
 
-    // Sending the same person two copies of an invitation is worse than sending
-    // none, so duplicates are collapsed rather than rejected.
     if (seen.has(email)) continue;
     seen.add(email);
 
@@ -461,21 +416,11 @@ function readCta(raw: unknown): { label: string; href: string } | undefined {
   const { label, href } = raw as { label?: unknown; href?: unknown };
   const l = String(label ?? "").trim().slice(0, 40);
   const h = String(href ?? "").trim();
-  // The renderer refuses non-http(s) too; rejecting here keeps a bad value from
-  // silently becoming a message with no button and no explanation.
+
   if (!l || !/^https?:\/\//i.test(h)) return undefined;
   return { label: l, href: h };
 }
 
-/**
- * The audiences an admin can send to, with a count for each.
- *
- * "Not installed" is the one that motivated this: an account that signed up,
- * has a site, and has never sent an event is someone who stopped at the
- * snippet. Installation isn't a stored flag anywhere — it's inferred from
- * whether any event has ever arrived for the account's sites — so the segments
- * are computed here rather than read off a column.
- */
 router.get("/email/segments", async (_req: AuthedRequest, res: Response) => {
   const segments = await Promise.all(
     (["all", "not-installed", "no-sites", "installed"] as const).map(async (id) => ({
@@ -488,29 +433,14 @@ router.get("/email/segments", async (_req: AuthedRequest, res: Response) => {
   res.json({ segments });
 });
 
-/**
- * Who a segment resolves to, so the composer can show the actual list before
- * anything is sent. Sending to people is not undoable; seeing the names first
- * is what makes a wrong pick recoverable.
- */
+
 router.get("/email/recipients", async (req: AuthedRequest, res: Response) => {
   const segment = String(req.query.segment ?? "all");
   if (!isSegment(segment)) return res.status(400).json({ error: "unknown segment" });
   res.json({ recipients: await resolveSegment(segment) });
 });
 
-/**
- * Send a message to a segment, or to a hand-picked set of user ids.
- *
- * Explicit `userIds` win over the segment: the composer lets an admin start
- * from a segment and then untick individuals, and the resulting list is what
- * gets sent — not the segment re-resolved server-side, which could have
- * shifted between preview and send.
- *
- * Sending is sequential and can take a while for a large list, so the response
- * is a per-recipient tally rather than a bare ok — a partial failure is normal
- * with SMTP and the admin needs to see which addresses bounced.
- */
+
 router.post("/email/send", async (req: AuthedRequest, res: Response) => {
   if (!mailConfigured()) {
     return res.status(503).json({
@@ -572,18 +502,12 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
   res.json({
     sent,
     failed: results.length - sent,
-    // Only failures carry detail worth returning; a list of successful
-    // addresses is just the recipient list echoed back.
+
     failures: results.filter((r) => !r.ok),
   });
 });
 
-/**
- * Send one message to the admin themselves, ignoring segments.
- *
- * A template with a broken `{{name}}` or a wrong tone is much cheaper to catch
- * in your own inbox than in two hundred other people's.
- */
+
 router.post("/email/test", async (req: AuthedRequest, res: Response) => {
   if (!mailConfigured()) {
     return res.status(503).json({
@@ -614,14 +538,7 @@ router.post("/email/test", async (req: AuthedRequest, res: Response) => {
 
 type SegmentId = "all" | "not-installed" | "no-sites" | "installed";
 
-/**
- * Named for the person, not the query that finds them.
- *
- * "Signed up, script not installed" describes a database condition; "Stuck on
- * install" describes someone you might write to. The admin picking a segment is
- * deciding who to talk to, and the label should be the thing they are deciding.
- * The precise condition still matters — it is in the description below.
- */
+
 const SEGMENT_LABELS: Record<SegmentId, string> = {
   all: "Everyone",
   "not-installed": "Stuck on install",
@@ -640,14 +557,7 @@ function isSegment(v: string): v is SegmentId {
   return v === "all" || v === "not-installed" || v === "no-sites" || v === "installed";
 }
 
-/**
- * Turn a segment into the accounts it covers.
- *
- * Admins are excluded from every segment — these are customer messages, and an
- * admin receiving their own "you haven't installed the script yet" nudge is
- * noise. The site and event lookups mirror the user-list route: sites resolve
- * through the workspace, and events key off the public `siteId`.
- */
+
 async function resolveSegment(
   segment: SegmentId,
 ): Promise<{ id: string; email: string; name: string }[]> {
@@ -676,9 +586,7 @@ async function resolveSegment(
     usersWithSites.add(owner);
   }
 
-  // Only which sites have ever reported matters here, not how much — so this
-  // asks for the distinct siteIds present in the events collection rather than
-  // counting rows.
+
   const reporting = await Event.distinct("siteId", {
     siteId: { $in: [...ownerBySiteId.keys()] },
   });
@@ -699,25 +607,12 @@ async function resolveSegment(
     .map((u) => ({ id: u.id, email: u.email, name: u.name }));
 }
 
-/* ------------------------------- billing plans ----------------------------- */
 
-/**
- * The plan catalogue is fixed in code (`src/plans.ts`) — name, quotas,
- * workspace/site limits and Razorpay ids for each tier are not admin-editable.
- * The only thing an admin can change here is price, which is why there's no
- * create or delete route: adding or retiring a tier is a code change.
- */
 router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
 });
 
-/**
- * The Orbit AI tiers and their prices.
- *
- * A separate pair of routes from the analytics plans above, because they are a
- * separate ladder sold separately — but they share the `Plan` collection, so
- * the FX reprice job needs no second implementation.
- */
+
 router.get("/billing/orbit-plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedOrbitPlans());
 });
@@ -756,29 +651,17 @@ router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => 
   res.json(await getResolvedPlan(slug));
 });
 
-/* ------------------------------ currency sync ------------------------------ */
 
-/**
- * The exchange rate the USD column was last computed from, so the admin can
- * see its age before deciding whether re-syncing is worth it. Never fetches —
- * that's the button's job.
- */
 router.get("/billing/fx", async (_req: AuthedRequest, res: Response) => {
   res.json({ configured: fxConfigured(), base: FX_BASE, snapshot: await getCachedRates() });
 });
 
-/**
- * Recompute every plan's USD price from its INR price at the current rate, now,
- * rather than waiting for tonight's job (`lib/fx-cron.ts`).
- *
- * Same code path as the scheduled run — see `repriceAllPlans`.
- */
+
 router.post("/billing/plans/sync-currency", async (_req: AuthedRequest, res: Response) => {
   try {
     res.json(await repriceAllPlans());
   } catch (e) {
     // A rate provider being down is not the admin's fault and not a 500 on our
-    // side — it just means the prices stay exactly as they were.
     res.status(502).json({ error: (e as Error).message });
   }
 });
@@ -847,7 +730,6 @@ function readAddonBody(body: Record<string, unknown>) {
   };
 }
 
-/* --------------------------------- coupons ------------------------------------ */
 
 router.get("/billing/coupons", async (_req: AuthedRequest, res: Response) => {
   const coupons = await Coupon.find().sort({ createdAt: -1 });
@@ -892,26 +774,13 @@ function readCouponBody(body: Record<string, unknown>) {
   };
 }
 
-/** A duplicate code hits Mongo's unique index — surface that as a plain message instead of a raw driver error. */
 function couponErrorMessage(e: unknown): string {
   const message = (e as Error)?.message ?? "";
   if (message.includes("E11000")) return "a coupon with that code already exists";
   return message || "could not save the coupon";
 }
 
-/* ------------------------------ contact inbox ----------------------------- */
 
-/**
- * Messages from the marketing site's contact form.
- *
- * Admin-only, like everything else on this router — the form is open to anyone
- * but what it collects is correspondence, and the sender's address is personal
- * data that has no business on a public surface.
- *
- * `ipHash` is never returned. It exists to rate-limit a flood, not to be looked
- * at, and shipping it to a browser would be leaking a stable per-person
- * identifier for no operational gain.
- */
 const CONTACT_STATUSES = ["new", "read", "replied", "spam"] as const;
 type ContactStatus = (typeof CONTACT_STATUSES)[number];
 
@@ -991,17 +860,7 @@ router.patch("/contact/:id", async (req: AuthedRequest, res: Response) => {
   res.json(message);
 });
 
-/**
- * Reply to a message, from the dashboard.
- *
- * The reply is sent and then recorded on the message, in that order: a stored
- * reply that never left would tell the next admin the sender had been answered
- * when they had not, which is worse than no record at all.
- *
- * The body is sent as plain text through the standard branded shell. Admins do
- * not write HTML here — the sender is a member of the public, and an admin-
- * authored HTML body is an injection surface with no upside.
- */
+
 router.post("/contact/:id/reply", async (req: AuthedRequest, res: Response) => {
   if (!mailConfigured()) {
     return res.status(503).json({ error: "email is not configured on the server" });

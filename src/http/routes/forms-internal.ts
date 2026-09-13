@@ -5,8 +5,9 @@ import {
   hasQuota,
   spendQuota,
 } from "../../modules/billing/quota.service.js";
-import { generateForm, formsAiReady } from "../../modules/forms-ai/generate.js";
+import { generateForm, generateTheme, formsAiReady } from "../../modules/forms-ai/generate.js";
 import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
+import { classifyEditIntent } from "../../modules/forms-ai/intent.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 
@@ -130,6 +131,39 @@ router.post(
     // model is meant to have a free hand. Only "edit" gets the conservative
     // reconciliation pass.
     const mode = req.body?.mode === "edit" ? "edit" : "create";
+
+    /**
+     * A restyle of a live form is answered by a model that never sees the
+     * fields.
+     *
+     * The reconciliation pass below can put back a field the model dropped, but
+     * it matches on type and label — so a field the model kept and quietly
+     * reworded reads as a new one, and the old one is restored alongside it. An
+     * author who asked for different colours gets a longer form. Routing the
+     * appearance-only prompts away from the field-generating path is what makes
+     * that unreachable rather than merely unlikely.
+     *
+     * Only on "edit", and only with a form to restyle: a first draft has no
+     * theme to change and no fields to protect.
+     */
+    if (mode === "edit" && prior?.ok && classifyEditIntent(prompt) === "theme") {
+      const themed = await generateTheme(prompt, prior.form.theme);
+      if (!themed.ok) {
+        return res.status(themed.status).json({ error: themed.error });
+      }
+
+      await spendQuota(workspaceId, "orbit");
+
+      // The same shape every other answer has. The caller applies a form, and
+      // this is that form with one thing different. `intent` is advisory — a
+      // caller that ignores it still applies a correct form; one that reads it
+      // can say "restyled" rather than counting fields that did not change.
+      return res.json({
+        form: { ...prior.form, theme: themed.theme },
+        model: themed.model,
+        intent: "theme",
+      });
+    }
 
     const result = await generateForm(
       prompt,

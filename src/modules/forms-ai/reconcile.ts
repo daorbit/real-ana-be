@@ -38,9 +38,19 @@ const REMOVAL_WORDS = [
   "don't need", "dont need", "cut",
 ];
 
+/**
+ * Whole words, not substrings.
+ *
+ * A plain `includes` reads "darker deadline" as a styling request and "without
+ * fail" as a removal — the first silently discards a theme the author wanted,
+ * the second switches off the field restore that is the whole point of this
+ * pass. Both failures are invisible in the reply.
+ */
 function mentions(prompt: string, words: string[]): boolean {
   const p = prompt.toLowerCase();
-  return words.some((w) => p.includes(w));
+  return words.some((w) =>
+    w.includes(" ") ? p.includes(w) : new RegExp(`\\b${w}\\b`).test(p),
+  );
 }
 
 /** A stable key for matching a field across the two versions. */

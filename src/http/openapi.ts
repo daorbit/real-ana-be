@@ -1,18 +1,4 @@
-/**
- * The OpenAPI description of the platform API.
- *
- * Hand-written rather than generated from decorators or JSDoc scanning: the
- * surface is one router (`/v1`), it changes rarely, and a spec kept beside the
- * routes it describes is easier to read — and to review in a diff — than the
- * annotations needed to produce the same document. The one rule is that this
- * file and `routes/v1.ts` are edited together.
- *
- * Served as interactive documentation at `/docs`, where a customer can paste a
- * key they just created and call their own workspace — which is the point:
- * a key that cannot be tried is a key nobody trusts.
- */
 
-/** Where the API answers. Read at call time so a preview deploy documents itself. */
 function servers() {
   const configured = process.env.PUBLIC_API_URL || process.env.PUBLIC_BASE_URL;
   const list: { url: string; description: string }[] = [];
@@ -23,14 +9,12 @@ function servers() {
     { url: "https://quantalog-be.daorbit.in", description: "Production" },
     { url: "http://localhost:4000", description: "Local development" },
   );
-  // A configured origin that already matches one of the defaults would list twice.
+
   return list.filter((s, i) => list.findIndex((o) => o.url === s.url) === i);
 }
 
-/** `$ref` shorthand, so the paths below stay readable. */
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
-/** A JSON response body of one schema. */
 const json = (description: string, schema: object) => ({
   description,
   content: { "application/json": { schema } },

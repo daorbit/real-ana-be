@@ -128,7 +128,7 @@ router.post("/ask", async (req: Request, res: Response) => {
   if (rateLimited(ip)) {
     return res.status(429).json({
       error:
-        "That is a lot of questions. For anything more, email daorbit2k25@gmail.com — a person will answer.",
+        "That is a lot of questions. For anything more, email goswamiajay526@gmail.com — a person will answer.",
     });
   }
 
