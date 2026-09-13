@@ -1,4 +1,3 @@
-
 export const GENERATABLE_FIELD_TYPES = [
   "name",
   "email",
@@ -35,7 +34,6 @@ export const GENERATABLE_FIELD_TYPES = [
 
 export type GeneratableFieldType = (typeof GENERATABLE_FIELD_TYPES)[number];
 
-/** Types whose `options` list is the field — one with none renders empty. */
 export const OPTION_FIELD_TYPES = new Set<string>([
   "select",
   "radio",
@@ -45,7 +43,6 @@ export const OPTION_FIELD_TYPES = new Set<string>([
   "matrix",
 ]);
 
-/** Theme keys the generator may set, each a hex colour unless noted. */
 export const THEME_COLOR_KEYS = [
   "pageBg",
   "cardBg",
@@ -100,7 +97,6 @@ export interface GeneratedForm {
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
-/** Trimmed to a sane length, or undefined when there is nothing worth keeping. */
 function text(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -125,13 +121,6 @@ function bounded(value: unknown, lo: number, hi: number): number | undefined {
 
 const TYPES = new Set<string>(GENERATABLE_FIELD_TYPES);
 
-/**
- * One field, or null when it cannot be rendered.
- *
- * Dropping a bad field rather than failing the form is deliberate: nine good
- * fields and one missing is something the editor fixes in a moment, where a
- * refusal leaves the person with nothing and no idea which part offended.
- */
 function readField(raw: unknown): GeneratedField | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -140,8 +129,7 @@ function readField(raw: unknown): GeneratedField | null {
   if (!TYPES.has(type)) return null;
 
   const label = text(r.label, 120);
-  // Headings and descriptions carry their text in `content`; everything else is
-  // unusable without a label, since that is what the respondent reads.
+
   const content = text(r.content, 2000);
   if (!label && !content) return null;
 
@@ -162,8 +150,6 @@ function readField(raw: unknown): GeneratedField | null {
   const options = stringList(r.options, 40);
   if (options) field.options = options;
 
-  // A choice field with no options renders as an empty control, which reads as
-  // a broken form rather than an unfinished one. Give it something to show.
   if (OPTION_FIELD_TYPES.has(type) && !field.options) {
     field.options = ["Option 1", "Option 2", "Option 3"];
   }
@@ -186,7 +172,6 @@ function readField(raw: unknown): GeneratedField | null {
   return field;
 }
 
-/** Relative luminance, for deciding whether text on a background is readable. */
 function luminance(hex: string): number {
   const channel = (h: string) => {
     const v = parseInt(h, 16) / 255;
@@ -198,31 +183,21 @@ function luminance(hex: string): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** WCAG contrast ratio between two hex colours, 1 (identical) to 21. */
 function contrast(a: string, b: string): number {
   const la = luminance(a);
   const lb = luminance(b);
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
-/**
- * Text that would be unreadable on its own background, replaced.
- *
- * The models pick a palette by mood and regularly land on white labels over a
- * pale card — it looks deliberate in the JSON and is invisible on the page. The
- * form is a draft the person edits, but a draft they cannot read is not one
- * they can edit, so this is corrected rather than left for them to notice.
- *
- * 4.5:1 is the WCAG AA threshold for body text. Below it, the colour is swapped
- * for near-black or near-white against the same background, whichever passes.
- */
-function readable(color: string | undefined, background: string | undefined): string | undefined {
+function readable(
+  color: string | undefined,
+  background: string | undefined,
+): string | undefined {
   if (!color || !background) return color;
   if (contrast(color, background) >= 4.5) return color;
   return luminance(background) > 0.4 ? "#1f2937" : "#f8fafc";
 }
 
-/** Only the theme keys we know, only where the value is actually usable. */
 function readTheme(raw: unknown): GeneratedTheme | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
@@ -235,7 +210,10 @@ function readTheme(raw: unknown): GeneratedTheme | undefined {
     }
   }
 
-  if (typeof r.textMode === "string" && (TEXT_MODES as readonly string[]).includes(r.textMode)) {
+  if (
+    typeof r.textMode === "string" &&
+    (TEXT_MODES as readonly string[]).includes(r.textMode)
+  ) {
     theme.textMode = r.textMode as GeneratedTheme["textMode"];
   }
   if (
@@ -254,12 +232,9 @@ function readTheme(raw: unknown): GeneratedTheme | undefined {
   const radius = bounded(r.cardRadius, 0, 40);
   if (radius !== undefined) theme.cardRadius = radius;
 
-  // Text sits on the card; the input's own text sits on the input.
   theme.labelColor = readable(theme.labelColor, theme.cardBg);
   theme.inputTextColor = readable(theme.inputTextColor, theme.inputBg);
 
-  // `textMode` decides which way the renderer's own text goes, so a card that
-  // is light with "light" text — or the reverse — undoes the colours above.
   if (theme.cardBg) {
     theme.textMode = luminance(theme.cardBg) > 0.4 ? "dark" : "light";
   }
@@ -275,50 +250,26 @@ export type ParseThemeResult =
   | { ok: true; theme: GeneratedTheme }
   | { ok: false; reason: string };
 
-/**
- * Read a theme-only answer — a restyle, with no fields in sight.
- *
- * The whole point of the theme path is that the model is never handed the
- * fields and so cannot damage them. This parser is the other half of that
- * promise: it reads `theme` and nothing else, so even a model that ignores its
- * instructions and returns a full form has its fields discarded here rather
- * than reaching the canvas.
- *
- * A bare theme object is accepted as readily as one wrapped in `{ theme: … }`.
- * The small models produce both and the difference is not worth a retry.
- */
 export function parseGeneratedTheme(raw: unknown): ParseThemeResult {
-  if (!raw || typeof raw !== "object") return { ok: false, reason: "not an object" };
+  if (!raw || typeof raw !== "object")
+    return { ok: false, reason: "not an object" };
   const r = raw as Record<string, unknown>;
 
-  // The wrapped shape wins; a bare theme object is the fallback. Reading the
-  // wrapper as a theme is safe — it has no colour keys of its own — but only
-  // useful when the model skipped the wrapper entirely.
   const theme = readTheme(r.theme) ?? readTheme(r);
 
-  // An empty result is a failure, not a success with nothing in it. `readTheme`
-  // drops every value it cannot use, so a model that answered with malformed
-  // colours lands here — and merging {} onto the current theme would change
-  // nothing while telling the author their form had been restyled.
-  if (!theme || !Object.keys(theme).length) {
-    return { ok: false, reason: "no usable theme" };
-  }
+  if (!theme) return { ok: false, reason: "no usable theme" };
 
-  return { ok: true, theme };
+  const entries = Object.entries(theme).filter(([, v]) => v !== undefined);
+  if (!entries.length) return { ok: false, reason: "no usable theme" };
+
+  return { ok: true, theme: Object.fromEntries(entries) as GeneratedTheme };
 }
 
-/** How many fields one generated form may carry. */
 export const MAX_FIELDS = 25;
 
-/**
- * Read the model's answer into a form, or say why it cannot be.
- *
- * Everything is checked rather than cast: this is the boundary between a
- * language model's output and a document the editor will render, and the whole
- * point of it is that nothing past here has to wonder whether `type` is real.
- */
 export function parseGeneratedForm(raw: unknown): ParseResult {
-  if (!raw || typeof raw !== "object") return { ok: false, reason: "not an object" };
+  if (!raw || typeof raw !== "object")
+    return { ok: false, reason: "not an object" };
   const r = raw as Record<string, unknown>;
 
   const title = text(r.title, 120);
@@ -330,9 +281,6 @@ export function parseGeneratedForm(raw: unknown): ParseResult {
     .map(readField)
     .filter((f): f is GeneratedField => f !== null);
 
-  // A form with no usable field is not a starting point, it is an empty canvas
-  // the person could have opened themselves — better to say the generation
-  // failed than to hand back nothing and call it a result.
   if (!fields.length) return { ok: false, reason: "no usable fields" };
 
   const form: GeneratedForm = { title, fields };
