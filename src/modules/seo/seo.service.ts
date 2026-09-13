@@ -1,35 +1,25 @@
-// axios is kept only for the PageSpeed call, which targets a fixed Google
-// endpoint rather than a user-supplied host. Everything the user can influence
-// goes through safeFetch.
 import axios from "axios";
 import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
 import { safeFetch } from "../../infra/http-client/safe-fetch.js";
-import { validateStructuredData, type SchemaValidation } from "./schema-validate.js";
+import {
+  validateStructuredData,
+  type SchemaValidation,
+} from "./schema-validate.js";
 import {
   checkRobots,
   checkSitemap,
   type RobotsReport,
   type SitemapReport,
 } from "./robots-validate.js";
-import { checkLinks, type LinkCheckReport, type PageLink } from "./link-check.js";
+import {
+  checkLinks,
+  type LinkCheckReport,
+  type PageLink,
+} from "./link-check.js";
 import { analyzeAiSearch, type AiSearchReport } from "./ai-search.js";
 
-/**
- * On-page SEO auditing for a single URL.
- *
- * Two sources feed a report. The page itself is fetched once and parsed with
- * cheerio — that gives meta tags, headings, images, schema and the technical
- * signals. Google PageSpeed Insights supplies the Lighthouse scores, which we
- * cannot compute ourselves without running a headless browser.
- *
- * Everything here is deliberately tolerant: a site with no robots.txt, no
- * PageSpeed key, or a slow sitemap should still produce a usable report rather
- * than an error page.
- */
-
 const PAGE_TIMEOUT = 15_000;
-/** PageSpeed runs a real Lighthouse audit server-side; it is genuinely slow. */
 const PSI_TIMEOUT = 70_000;
 
 export type MetaTag = { name: string; content: string };
@@ -128,6 +118,13 @@ export type SeoStrategyResult = {
   metrics: SeoMetrics;
 };
 
+export type SeoResource = {
+  url: string;
+  wastedBytes?: number;
+  wastedMs?: number;
+  totalBytes?: number;
+};
+
 export type SeoSuggestion = {
   id: string;
   title: string;
@@ -137,6 +134,45 @@ export type SeoSuggestion = {
   description: string;
   advice: string;
   resources: string[];
+  items?: SeoResource[];
+};
+
+export type CruxMetric = {
+  /** 75th percentile — the figure Google judges. */
+  p75: number | null;
+  /** Share of samples in each Google band, as percentages. */
+  good: number;
+  needsImprovement: number;
+  poor: number;
+  category: "FAST" | "AVERAGE" | "SLOW" | "NONE";
+};
+
+export type CruxVitals = {
+  /** Whether Chrome had enough samples to report at all. */
+  available: boolean;
+  /** "url" when the data is for this exact page, "origin" when site-wide. */
+  scope: "url" | "origin";
+  overall: "FAST" | "AVERAGE" | "SLOW" | "NONE";
+  metrics: {
+    lcp: CruxMetric | null;
+    cls: CruxMetric | null;
+    inp: CruxMetric | null;
+    fcp: CruxMetric | null;
+    ttfb: CruxMetric | null;
+  };
+};
+
+export type SeoDiagnostics = {
+  /** Transfer bytes by resource type, largest first. */
+  byType: { type: string; requests: number; bytes: number }[];
+  totalRequests: number | null;
+  totalBytes: number | null;
+  /** Third-party origins and the main-thread time each cost. */
+  thirdParty: { entity: string; blockingMs: number; bytes: number }[];
+  thirdPartyBlockingMs: number | null;
+  domElements: number | null;
+  mainThreadMs: number | null;
+  serverResponseMs: number | null;
 };
 
 export type SeoPerformance = {
@@ -146,6 +182,14 @@ export type SeoPerformance = {
   desktop: SeoStrategyResult | null;
   mobile: SeoStrategyResult | null;
   suggestions: SeoSuggestion[];
+  /** Chrome real-user data for this URL, falling back to the origin. */
+  crux?: CruxVitals;
+  /** Composition and third-party cost, from the mobile run. */
+  diagnostics?: SeoDiagnostics;
+  /** Which Lighthouse produced these scores — they shift between versions. */
+  lighthouseVersion?: string;
+  /** When Google actually ran the audit. */
+  fetchTime?: string;
 };
 
 export type SeoSiteFiles = {
@@ -221,7 +265,8 @@ function extractMeta($: CheerioAPI): SeoMeta {
   const allMetaTags: MetaTag[] = [];
   $("meta").each((_i, el) => {
     const tag = $(el);
-    const name = tag.attr("name") ?? tag.attr("property") ?? tag.attr("http-equiv");
+    const name =
+      tag.attr("name") ?? tag.attr("property") ?? tag.attr("http-equiv");
     const content = tag.attr("content");
     if (name && content) allMetaTags.push({ name, content });
   });
@@ -255,7 +300,8 @@ function extractSchemaTypes($: CheerioAPI): string[] {
   const types: string[] = [];
   const push = (t: unknown) => {
     if (typeof t === "string") types.push(t);
-    else if (Array.isArray(t)) t.forEach((x) => typeof x === "string" && types.push(x));
+    else if (Array.isArray(t))
+      t.forEach((x) => typeof x === "string" && types.push(x));
   };
 
   $('script[type="application/ld+json"]').each((_i, el) => {
@@ -266,8 +312,8 @@ function extractSchemaTypes($: CheerioAPI): string[] {
       const nodes = Array.isArray(parsed)
         ? parsed
         : Array.isArray(parsed?.["@graph"])
-        ? parsed["@graph"]
-        : [parsed];
+          ? parsed["@graph"]
+          : [parsed];
       nodes.forEach((n: Record<string, unknown>) => push(n?.["@type"]));
     } catch {
       /* malformed JSON-LD is the site's problem, not a reason to fail */
@@ -305,18 +351,9 @@ function extractImages($: CheerioAPI, baseUrl: string): SeoImage[] {
       hasAlt: alt.trim().length > 0,
     });
   });
-  // A gallery page can carry hundreds of images; the report only needs enough
-  // to act on, and the rest are counted separately anyway.
   return images.slice(0, 100);
 }
 
-/**
- * Every followable link on the page, resolved to an absolute URL.
- *
- * One pass produces both the counts and the list the link checker requests, so
- * the two can never disagree about what counts as a link. Fragments, mailto,
- * tel and javascript hrefs are excluded — none of them are fetchable.
- */
 function collectLinks($: CheerioAPI, baseUrl: string) {
   const host = new URL(baseUrl).hostname.replace(/^www\./, "");
   const links: PageLink[] = [];
@@ -370,17 +407,50 @@ function headingStructure($: CheerioAPI): HeadingLevel[] {
   return out;
 }
 
-/**
- * Words a density report should never be topped by. Not exhaustive — the point
- * is to stop "the" and "with" from crowding out the terms a page actually
- * ranks for.
- */
 const STOP_WORDS = new Set([
-  "this", "that", "with", "from", "your", "have", "will", "they", "them", "there",
-  "their", "what", "when", "which", "then", "than", "been", "were", "into", "more",
-  "most", "some", "such", "only", "also", "just", "like", "over", "very", "here",
-  "about", "would", "could", "should", "these", "those", "other", "after", "before",
-  "https", "http", "www", "com",
+  "this",
+  "that",
+  "with",
+  "from",
+  "your",
+  "have",
+  "will",
+  "they",
+  "them",
+  "there",
+  "their",
+  "what",
+  "when",
+  "which",
+  "then",
+  "than",
+  "been",
+  "were",
+  "into",
+  "more",
+  "most",
+  "some",
+  "such",
+  "only",
+  "also",
+  "just",
+  "like",
+  "over",
+  "very",
+  "here",
+  "about",
+  "would",
+  "could",
+  "should",
+  "these",
+  "those",
+  "other",
+  "after",
+  "before",
+  "https",
+  "http",
+  "www",
+  "com",
 ]);
 
 function keywordDensity(text: string): Keyword[] {
@@ -456,20 +526,6 @@ function contentQuality($: CheerioAPI, wordCount: number): number {
   return Math.min(100, score);
 }
 
-/* ------------------------------- page fetch ------------------------------- */
-
-/**
- * Fetch the page under audit.
- *
- * Goes through `safeFetch` rather than a plain HTTP client: the URL comes from
- * a request body, and the domain check upstream only proves it belongs to a
- * site the caller registered — it says nothing about where that domain's DNS
- * actually points. Without the address guard, pointing a tracked domain at
- * 169.254.169.254 would have this server fetch its own cloud credentials.
- *
- * A 4xx response is kept rather than thrown: the page still carries SEO
- * signals, and the status code is itself a finding.
- */
 async function fetchPage(url: string) {
   const res = await safeFetch(url, {
     timeoutMs: PAGE_TIMEOUT,
@@ -479,13 +535,6 @@ async function fetchPage(url: string) {
   return { res, responseTimeMs: res.elapsedMs };
 }
 
-/* ---------------------------- pagespeed insights --------------------------- */
-
-/**
- * Plain-language advice for the Lighthouse audits people actually hit. Falls
- * back to Lighthouse's own description, which is accurate but written for
- * developers who already know what the audit means.
- */
 const ADVICE: Record<string, string> = {
   "uses-webp-images":
     "Serve images as WebP or AVIF. They are typically 25-35% smaller than JPEG at the same quality.",
@@ -511,14 +560,20 @@ const ADVICE: Record<string, string> = {
     "Add a unique meta description of roughly 120-160 characters. It is what searchers read in results.",
   "document-title": "Give the page a descriptive <title>.",
   viewport:
-    "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> for mobile rendering.",
-  "is-crawlable": "Check robots.txt and robots meta tags are not blocking search engines.",
-  "image-alt": "Give every meaningful image an alt attribute describing its content.",
-  "link-text": "Replace generic link text such as \"click here\" with descriptive wording.",
-  "color-contrast": "Increase text/background contrast to at least 4.5:1 for body copy.",
-  "font-size": "Use a base font size of at least 16px so mobile users are not pinching to read.",
+    'Add <meta name="viewport" content="width=device-width, initial-scale=1"> for mobile rendering.',
+  "is-crawlable":
+    "Check robots.txt and robots meta tags are not blocking search engines.",
+  "image-alt":
+    "Give every meaningful image an alt attribute describing its content.",
+  "link-text":
+    'Replace generic link text such as "click here" with descriptive wording.',
+  "color-contrast":
+    "Increase text/background contrast to at least 4.5:1 for body copy.",
+  "font-size":
+    "Use a base font size of at least 16px so mobile users are not pinching to read.",
   "tap-targets": "Make tap targets at least 48x48px with spacing between them.",
-  hreflang: "Fix hreflang annotations so the right language version is indexed per region.",
+  hreflang:
+    "Fix hreflang annotations so the right language version is indexed per region.",
   canonical: "Point rel=canonical at the preferred version of this page.",
 };
 
@@ -533,8 +588,33 @@ type PsiAudit = {
   details?: {
     overallSavingsMs?: number;
     overallSavingsBytes?: number;
-    items?: Array<{ url?: string; wastedBytes?: number; wastedMs?: number }>;
+    items?: Array<{
+      url?: string;
+      wastedBytes?: number;
+      wastedMs?: number;
+      totalBytes?: number;
+      transferSize?: number;
+      /** resource-summary rows key composition by type rather than URL. */
+      resourceType?: string;
+      requestCount?: number;
+      /** third-party-summary rows name the origin behind the cost. */
+      entity?: string | { text?: string };
+      mainThreadTime?: number;
+      blockingTime?: number;
+    }>;
   };
+};
+
+/** One metric inside a PageSpeed `loadingExperience` block. */
+type PsiCruxMetric = {
+  percentile?: number;
+  category?: string;
+  distributions?: Array<{ min?: number; max?: number; proportion?: number }>;
+};
+
+type PsiLoadingExperience = {
+  overall_category?: string;
+  metrics?: Record<string, PsiCruxMetric>;
 };
 
 const emptyScores = (): SeoScores => ({
@@ -544,18 +624,39 @@ const emptyScores = (): SeoScores => ({
   seo: null,
 });
 
-function buildSuggestion(id: string, audit: PsiAudit, category: string): SeoSuggestion {
+function buildSuggestion(
+  id: string,
+  audit: PsiAudit,
+  category: string,
+): SeoSuggestion {
   const base = ADVICE[id] ?? audit.description ?? audit.title ?? "";
   const savings: string[] = [];
   if (audit.details?.overallSavingsMs)
-    savings.push(`Saves about ${Math.round(audit.details.overallSavingsMs)} ms.`);
+    savings.push(
+      `Saves about ${Math.round(audit.details.overallSavingsMs)} ms.`,
+    );
   if (audit.details?.overallSavingsBytes)
-    savings.push(`Cuts about ${Math.round(audit.details.overallSavingsBytes / 1024)} KB.`);
+    savings.push(
+      `Cuts about ${Math.round(audit.details.overallSavingsBytes / 1024)} KB.`,
+    );
 
-  const resources = (audit.details?.items ?? [])
-    .map((i) => i.url)
-    .filter((u): u is string => Boolean(u))
+  const withUrls = (audit.details?.items ?? [])
+    .filter((i): i is typeof i & { url: string } => Boolean(i.url))
     .slice(0, 5);
+
+  const resources = withUrls.map((i) => i.url);
+
+  const items: SeoResource[] = withUrls.map((i) => {
+    const total = i.totalBytes ?? i.transferSize;
+    return {
+      url: i.url,
+      ...(i.wastedBytes != null
+        ? { wastedBytes: Math.round(i.wastedBytes) }
+        : {}),
+      ...(i.wastedMs != null ? { wastedMs: Math.round(i.wastedMs) } : {}),
+      ...(total != null ? { totalBytes: Math.round(total) } : {}),
+    };
+  });
 
   return {
     id,
@@ -565,9 +666,111 @@ function buildSuggestion(id: string, audit: PsiAudit, category: string): SeoSugg
     displayValue: audit.displayValue ?? null,
     // Lighthouse descriptions carry markdown link syntax; strip it so the UI
     // can render plain text without a markdown dependency.
-    description: (audit.description ?? "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"),
-    advice: [base.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"), ...savings].join(" ").trim(),
+    description: (audit.description ?? "").replace(
+      /\[([^\]]+)\]\([^)]+\)/g,
+      "$1",
+    ),
+    advice: [base.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"), ...savings]
+      .join(" ")
+      .trim(),
     resources,
+    ...(items.length ? { items } : {}),
+  };
+}
+
+const CRUX_KEYS: Record<string, keyof CruxVitals["metrics"]> = {
+  LARGEST_CONTENTFUL_PAINT_MS: "lcp",
+  CUMULATIVE_LAYOUT_SHIFT_SCORE: "cls",
+  INTERACTION_TO_NEXT_PAINT: "inp",
+  FIRST_CONTENTFUL_PAINT_MS: "fcp",
+  EXPERIMENTAL_TIME_TO_FIRST_BYTE: "ttfb",
+};
+
+function parseCrux(
+  block: PsiLoadingExperience | undefined,
+  scope: "url" | "origin",
+): CruxVitals | null {
+  if (!block?.metrics) return null;
+
+  const metrics: CruxVitals["metrics"] = {
+    lcp: null,
+    cls: null,
+    inp: null,
+    fcp: null,
+    ttfb: null,
+  };
+
+  let found = false;
+  for (const [psiKey, ourKey] of Object.entries(CRUX_KEYS)) {
+    const m = block.metrics[psiKey];
+    if (!m || m.percentile == null) continue;
+    found = true;
+
+    const pct = (i: number) =>
+      Math.round((m.distributions?.[i]?.proportion ?? 0) * 100);
+
+    metrics[ourKey] = {
+      p75:
+        ourKey === "cls"
+          ? Number((m.percentile / 100).toFixed(3))
+          : m.percentile,
+      good: pct(0),
+      needsImprovement: pct(1),
+      poor: pct(2),
+      category: (m.category as CruxMetric["category"]) ?? "NONE",
+    };
+  }
+
+  if (!found) return null;
+
+  return {
+    available: true,
+    scope,
+    overall: (block.overall_category as CruxVitals["overall"]) ?? "NONE",
+    metrics,
+  };
+}
+
+function parseDiagnostics(audits: Record<string, PsiAudit>): SeoDiagnostics {
+  const summaryItems = audits["resource-summary"]?.details?.items ?? [];
+
+  const byType = summaryItems
+    .filter((i) => i.resourceType && i.resourceType !== "total")
+    .map((i) => ({
+      type: String(i.resourceType),
+      requests: i.requestCount ?? 0,
+      bytes: i.transferSize ?? 0,
+    }))
+    .sort((a, b) => b.bytes - a.bytes);
+
+  const total = summaryItems.find((i) => i.resourceType === "total");
+
+  const thirdPartyItems = audits["third-party-summary"]?.details?.items ?? [];
+  const thirdParty = thirdPartyItems
+    .map((i) => ({
+      entity:
+        typeof i.entity === "string" ? i.entity : (i.entity?.text ?? "Unknown"),
+      blockingMs: Math.round(i.blockingTime ?? 0),
+      bytes: i.transferSize ?? 0,
+    }))
+    .filter((e) => e.blockingMs > 0 || e.bytes > 0)
+    .sort((a, b) => b.blockingMs - a.blockingMs)
+    .slice(0, 10);
+
+  const numeric = (id: string) => {
+    const v = audits[id]?.numericValue;
+    return v != null ? Math.round(v) : null;
+  };
+
+  return {
+    byType,
+    totalRequests: total?.requestCount ?? null,
+    totalBytes: total?.transferSize ?? null,
+    thirdParty,
+    thirdPartyBlockingMs: numeric("third-party-summary"),
+    domElements: numeric("dom-size"),
+    mainThreadMs: numeric("mainthread-work-breakdown"),
+    serverResponseMs: numeric("server-response-time"),
   };
 }
 
@@ -592,7 +795,7 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
     for (const c of categories) qs.append("category", c);
     return axios.get(
       `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${qs.toString()}`,
-      { timeout: PSI_TIMEOUT }
+      { timeout: PSI_TIMEOUT },
     );
   });
 
@@ -603,16 +806,29 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
   const results: SeoStrategyResult[] = [];
   const suggestions = new Map<string, SeoSuggestion>();
 
+  // Everything below comes from the mobile response where both succeed, since
+  // mobile is the profile Google indexes and ranks with.
+  let crux: CruxVitals | undefined;
+  let diagnostics: SeoDiagnostics | undefined;
+  let lighthouseVersion: string | undefined;
+  let fetchTime: string | undefined;
+
   settled.forEach((outcome, i) => {
     if (outcome.status !== "fulfilled") {
-      console.error(`PageSpeed ${strategies[i]} failed:`, (outcome.reason as Error)?.message);
+      console.error(
+        `PageSpeed ${strategies[i]} failed:`,
+        (outcome.reason as Error)?.message,
+      );
       return;
     }
 
-    const lighthouse = outcome.value.data?.lighthouseResult ?? {};
+    const payload = outcome.value.data ?? {};
+    const lighthouse = payload.lighthouseResult ?? {};
     const audits: Record<string, PsiAudit> = lighthouse.audits ?? {};
-    const cats: Record<string, { score?: number; auditRefs?: Array<{ id: string }> }> =
-      lighthouse.categories ?? {};
+    const cats: Record<
+      string,
+      { score?: number; auditRefs?: Array<{ id: string }> }
+    > = lighthouse.categories ?? {};
 
     const pct = (c?: { score?: number }) =>
       c?.score != null ? Math.round(c.score * 100) : null;
@@ -652,7 +868,21 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
       // `notApplicable` and `informative` audits have no score to fail.
       if (audit.score == null || audit.score >= 0.9) continue;
       if (!suggestions.has(id))
-        suggestions.set(id, buildSuggestion(id, audit, categoryOf.get(id) ?? "general"));
+        suggestions.set(
+          id,
+          buildSuggestion(id, audit, categoryOf.get(id) ?? "general"),
+        );
+    }
+
+    const isMobile = strategies[i] === "mobile";
+    if (isMobile || !diagnostics) {
+      diagnostics = parseDiagnostics(audits);
+      lighthouseVersion = lighthouse.lighthouseVersion;
+      fetchTime = lighthouse.fetchTime;
+      crux =
+        parseCrux(payload.loadingExperience, "url") ??
+        parseCrux(payload.originLoadingExperience, "origin") ??
+        undefined;
     }
   });
 
@@ -670,7 +900,6 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
   const desktop = results.find((r) => r.strategy === "desktop") ?? null;
   const mobile = results.find((r) => r.strategy === "mobile") ?? null;
 
-  // Headline scores follow mobile, which is what Google indexes with.
   const primary = mobile ?? desktop;
 
   return {
@@ -678,18 +907,16 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
     scores: primary ? primary.scores : emptyScores(),
     desktop,
     mobile,
-    suggestions: [...suggestions.values()].sort((a, b) => a.score - b.score).slice(0, 40),
+    suggestions: [...suggestions.values()]
+      .sort((a, b) => a.score - b.score)
+      .slice(0, 40),
+    crux,
+    diagnostics,
+    lighthouseVersion,
+    fetchTime,
   };
 }
 
-/* -------------------------------- site files ------------------------------- */
-
-/**
- * Fetch and fully validate robots.txt and the sitemap.
- *
- * The flat `robotsTxt`/`sitemap` fields are kept alongside the detailed reports
- * so stored audits from before the validator still render.
- */
 async function checkSiteFiles(url: string): Promise<SeoSiteFiles> {
   const parsed = new URL(url);
   const origin = parsed.origin;
@@ -705,13 +932,6 @@ async function checkSiteFiles(url: string): Promise<SeoSiteFiles> {
   };
 }
 
-/* --------------------------------- issues --------------------------------- */
-
-/**
- * The findings a site owner can act on directly, derived from the page itself
- * rather than from Lighthouse. Lighthouse covers performance; this covers the
- * markup decisions it does not grade.
- */
 function deriveIssues(
   meta: SeoMeta,
   content: SeoContent,
@@ -719,51 +939,183 @@ function deriveIssues(
   files: SeoSiteFiles,
   schema?: SchemaValidation,
   links?: LinkCheckReport,
-  aiSearch?: AiSearchReport
+  aiSearch?: AiSearchReport,
 ): SeoIssue[] {
   const issues: SeoIssue[] = [];
   const add = (
     severity: SeoIssue["severity"],
     area: SeoIssue["area"],
     title: string,
-    detail: string
+    detail: string,
   ) => issues.push({ severity, area, title, detail });
 
   const titleLen = meta.title.length;
-  if (!titleLen) add("critical", "meta", "Missing page title", "The page has no <title>. Search engines have nothing to show as the result headline.");
-  else if (titleLen < 30) add("warning", "meta", "Title is short", `The title is ${titleLen} characters. Aim for 30-60 so it reads as a full phrase in results.`);
-  else if (titleLen > 60) add("warning", "meta", "Title is long", `The title is ${titleLen} characters and will be truncated in search results. Aim for 30-60.`);
+  if (!titleLen)
+    add(
+      "critical",
+      "meta",
+      "Missing page title",
+      "The page has no <title>. Search engines have nothing to show as the result headline.",
+    );
+  else if (titleLen < 30)
+    add(
+      "warning",
+      "meta",
+      "Title is short",
+      `The title is ${titleLen} characters. Aim for 30-60 so it reads as a full phrase in results.`,
+    );
+  else if (titleLen > 60)
+    add(
+      "warning",
+      "meta",
+      "Title is long",
+      `The title is ${titleLen} characters and will be truncated in search results. Aim for 30-60.`,
+    );
 
   const descLen = meta.description.length;
-  if (!descLen) add("critical", "meta", "Missing meta description", "Without a description, search engines invent one from page copy — usually badly.");
-  else if (descLen < 70) add("warning", "meta", "Description is short", `The description is ${descLen} characters. Aim for 120-160.`);
-  else if (descLen > 160) add("warning", "meta", "Description is long", `The description is ${descLen} characters and will be cut off. Aim for 120-160.`);
+  if (!descLen)
+    add(
+      "critical",
+      "meta",
+      "Missing meta description",
+      "Without a description, search engines invent one from page copy — usually badly.",
+    );
+  else if (descLen < 70)
+    add(
+      "warning",
+      "meta",
+      "Description is short",
+      `The description is ${descLen} characters. Aim for 120-160.`,
+    );
+  else if (descLen > 160)
+    add(
+      "warning",
+      "meta",
+      "Description is long",
+      `The description is ${descLen} characters and will be cut off. Aim for 120-160.`,
+    );
 
-  if (!meta.canonical) add("warning", "meta", "No canonical URL", "Add rel=canonical so duplicate URLs (tracking parameters, trailing slashes) consolidate onto one address.");
-  if (!technical.hasOpenGraph) add("warning", "meta", "No Open Graph tags", "Links shared to social platforms will render without a title, image or description.");
-  if (!technical.hasTwitterCards) add("info", "meta", "No Twitter Card tags", "Add twitter:card and friends for a richer preview on X.");
-  if (/noindex/i.test(meta.robots)) add("critical", "meta", "Page is set to noindex", "The robots meta tag blocks this page from search results entirely.");
+  if (!meta.canonical)
+    add(
+      "warning",
+      "meta",
+      "No canonical URL",
+      "Add rel=canonical so duplicate URLs (tracking parameters, trailing slashes) consolidate onto one address.",
+    );
+  if (!technical.hasOpenGraph)
+    add(
+      "warning",
+      "meta",
+      "No Open Graph tags",
+      "Links shared to social platforms will render without a title, image or description.",
+    );
+  if (!technical.hasTwitterCards)
+    add(
+      "info",
+      "meta",
+      "No Twitter Card tags",
+      "Add twitter:card and friends for a richer preview on X.",
+    );
+  if (/noindex/i.test(meta.robots))
+    add(
+      "critical",
+      "meta",
+      "Page is set to noindex",
+      "The robots meta tag blocks this page from search results entirely.",
+    );
 
-  if (content.h1Count === 0) add("critical", "content", "No H1 heading", "Every page should have exactly one H1 stating what the page is about.");
-  else if (content.h1Count > 1) add("warning", "content", "Multiple H1 headings", `Found ${content.h1Count} H1 elements. Keep one and demote the rest to H2.`);
+  if (content.h1Count === 0)
+    add(
+      "critical",
+      "content",
+      "No H1 heading",
+      "Every page should have exactly one H1 stating what the page is about.",
+    );
+  else if (content.h1Count > 1)
+    add(
+      "warning",
+      "content",
+      "Multiple H1 headings",
+      `Found ${content.h1Count} H1 elements. Keep one and demote the rest to H2.`,
+    );
 
-  if (content.wordCount < 300) add("warning", "content", "Thin content", `Only ${content.wordCount} words on the page. Pages under 300 words rarely rank for competitive terms.`);
-  if (technical.missingAltImages > 0) add("warning", "content", "Images missing alt text", `${technical.missingAltImages} of ${technical.totalImages} images have no alt attribute.`);
-  if (!content.hasSchema) add("info", "content", "No structured data", "Add JSON-LD schema so search engines can show rich results.");
-  if (content.internalLinks < 3) add("info", "content", "Few internal links", "Internal links spread authority and help crawlers discover the rest of the site.");
+  if (content.wordCount < 300)
+    add(
+      "warning",
+      "content",
+      "Thin content",
+      `Only ${content.wordCount} words on the page. Pages under 300 words rarely rank for competitive terms.`,
+    );
+  if (technical.missingAltImages > 0)
+    add(
+      "warning",
+      "content",
+      "Images missing alt text",
+      `${technical.missingAltImages} of ${technical.totalImages} images have no alt attribute.`,
+    );
+  if (!content.hasSchema)
+    add(
+      "info",
+      "content",
+      "No structured data",
+      "Add JSON-LD schema so search engines can show rich results.",
+    );
+  if (content.internalLinks < 3)
+    add(
+      "info",
+      "content",
+      "Few internal links",
+      "Internal links spread authority and help crawlers discover the rest of the site.",
+    );
 
-  if (!technical.hasHttps) add("critical", "technical", "Not served over HTTPS", "HTTPS is a ranking signal and browsers flag plain HTTP pages as insecure.");
-  if (!technical.hasMobileViewport) add("critical", "technical", "No mobile viewport", "Without a viewport meta tag the page renders at desktop width on phones.");
-  if (!technical.hasFavicon) add("info", "technical", "No favicon", "Add a favicon — it appears next to your result on mobile search.");
-  if (technical.statusCode >= 400) add("critical", "technical", `Page returned ${technical.statusCode}`, "The URL does not serve a successful response, so it will not be indexed.");
-  if (technical.responseTimeMs > 1000) add("warning", "technical", "Slow server response", `The server took ${technical.responseTimeMs} ms to respond. Under 600 ms is a reasonable target.`);
+  if (!technical.hasHttps)
+    add(
+      "critical",
+      "technical",
+      "Not served over HTTPS",
+      "HTTPS is a ranking signal and browsers flag plain HTTP pages as insecure.",
+    );
+  if (!technical.hasMobileViewport)
+    add(
+      "critical",
+      "technical",
+      "No mobile viewport",
+      "Without a viewport meta tag the page renders at desktop width on phones.",
+    );
+  if (!technical.hasFavicon)
+    add(
+      "info",
+      "technical",
+      "No favicon",
+      "Add a favicon — it appears next to your result on mobile search.",
+    );
+  if (technical.statusCode >= 400)
+    add(
+      "critical",
+      "technical",
+      `Page returned ${technical.statusCode}`,
+      "The URL does not serve a successful response, so it will not be indexed.",
+    );
+  if (technical.responseTimeMs > 1000)
+    add(
+      "warning",
+      "technical",
+      "Slow server response",
+      `The server took ${technical.responseTimeMs} ms to respond. Under 600 ms is a reasonable target.`,
+    );
 
   // The validators produce their own findings with far more detail than a
   // presence check, so when they ran, their output replaces the flat checks.
   if (files.robotsReport || files.sitemapReport) {
     const fileFindings = [
-      ...(files.robotsReport?.findings ?? []).map((f) => ({ ...f, source: "robots.txt" })),
-      ...(files.sitemapReport?.findings ?? []).map((f) => ({ ...f, source: "sitemap" })),
+      ...(files.robotsReport?.findings ?? []).map((f) => ({
+        ...f,
+        source: "robots.txt",
+      })),
+      ...(files.sitemapReport?.findings ?? []).map((f) => ({
+        ...f,
+        source: "sitemap",
+      })),
     ];
     for (const f of fileFindings) {
       // "info" findings are notes about the file, not problems to fix, so they
@@ -772,28 +1124,48 @@ function deriveIssues(
       add(
         f.severity === "critical" ? "critical" : "warning",
         "files",
-        f.severity === "critical" ? `${f.source}: blocking issue` : `${f.source} warning`,
-        f.message
+        f.severity === "critical"
+          ? `${f.source}: blocking issue`
+          : `${f.source} warning`,
+        f.message,
       );
     }
   } else {
-    if (!files.robotsTxt.present) add("warning", "files", "No robots.txt", "Add a robots.txt so crawlers get explicit rules and a sitemap pointer.");
-    if (!files.sitemap.present) add("warning", "files", "No sitemap found", "Publish a sitemap.xml and reference it from robots.txt so every page is discoverable.");
+    if (!files.robotsTxt.present)
+      add(
+        "warning",
+        "files",
+        "No robots.txt",
+        "Add a robots.txt so crawlers get explicit rules and a sitemap pointer.",
+      );
+    if (!files.sitemap.present)
+      add(
+        "warning",
+        "files",
+        "No sitemap found",
+        "Publish a sitemap.xml and reference it from robots.txt so every page is discoverable.",
+      );
   }
 
   if (links) {
     // Internal breakage is the site owner's own problem to fix and reflects
     // directly on the site, so it outranks a dead outbound link.
-    const brokenInternal = links.results.filter((r) => r.status === "broken" && r.internal);
-    const brokenExternal = links.results.filter((r) => r.status === "broken" && !r.internal);
-    const chains = links.results.filter((r) => r.status === "redirect" && r.chain.length > 2);
+    const brokenInternal = links.results.filter(
+      (r) => r.status === "broken" && r.internal,
+    );
+    const brokenExternal = links.results.filter(
+      (r) => r.status === "broken" && !r.internal,
+    );
+    const chains = links.results.filter(
+      (r) => r.status === "redirect" && r.chain.length > 2,
+    );
 
     if (brokenInternal.length)
       add(
         "critical",
         "content",
         `${brokenInternal.length} broken internal link${brokenInternal.length === 1 ? "" : "s"}`,
-        `Links on your own site that lead nowhere, starting with ${brokenInternal[0].url}. They strand visitors and waste crawl budget.`
+        `Links on your own site that lead nowhere, starting with ${brokenInternal[0].url}. They strand visitors and waste crawl budget.`,
       );
 
     if (brokenExternal.length)
@@ -801,7 +1173,7 @@ function deriveIssues(
         "warning",
         "content",
         `${brokenExternal.length} broken outbound link${brokenExternal.length === 1 ? "" : "s"}`,
-        `Links to other sites that no longer resolve, starting with ${brokenExternal[0].url}.`
+        `Links to other sites that no longer resolve, starting with ${brokenExternal[0].url}.`,
       );
 
     if (chains.length)
@@ -809,16 +1181,23 @@ function deriveIssues(
         "info",
         "content",
         `${chains.length} long redirect chain${chains.length === 1 ? "" : "s"}`,
-        "Each hop costs crawl budget. Link straight to the final URL."
+        "Each hop costs crawl budget. Link straight to the final URL.",
       );
   }
 
   // Broken schema is worse than no schema: it looks done and produces nothing.
   if (schema) {
     for (const f of schema.findings.filter((x) => x.severity === "error")) {
-      add("critical", "content", `Invalid structured data: ${f.type}`, f.message);
+      add(
+        "critical",
+        "content",
+        `Invalid structured data: ${f.type}`,
+        f.message,
+      );
     }
-    const schemaWarnings = schema.findings.filter((x) => x.severity === "warning");
+    const schemaWarnings = schema.findings.filter(
+      (x) => x.severity === "warning",
+    );
     if (schemaWarnings.length) {
       add(
         "info",
@@ -826,7 +1205,7 @@ function deriveIssues(
         "Structured data could be richer",
         `${schemaWarnings.length} recommended propert${
           schemaWarnings.length === 1 ? "y is" : "ies are"
-        } missing. See the Schema tab.`
+        } missing. See the Schema tab.`,
       );
     }
   }
@@ -838,8 +1217,10 @@ function deriveIssues(
       add(
         f.severity,
         "ai",
-        f.severity === "critical" ? "Blocked from AI search" : "AI search readiness",
-        f.message
+        f.severity === "critical"
+          ? "Blocked from AI search"
+          : "AI search readiness",
+        f.message,
       );
     }
   }
@@ -855,14 +1236,17 @@ function deriveIssues(
  */
 function overallScore(perf: SeoPerformance, issues: SeoIssue[]): number {
   const penalty = issues.reduce(
-    (sum, i) => sum + (i.severity === "critical" ? 12 : i.severity === "warning" ? 5 : 1),
-    0
+    (sum, i) =>
+      sum + (i.severity === "critical" ? 12 : i.severity === "warning" ? 5 : 1),
+    0,
   );
   const onPage = Math.max(0, 100 - penalty);
 
-  const lh = [perf.scores.seo, perf.scores.performance, perf.scores.accessibility].filter(
-    (n): n is number => n != null
-  );
+  const lh = [
+    perf.scores.seo,
+    perf.scores.performance,
+    perf.scores.accessibility,
+  ].filter((n): n is number => n != null);
   if (!lh.length) return onPage;
 
   const lhAvg = lh.reduce((a, b) => a + b, 0) / lh.length;
@@ -916,7 +1300,10 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     server: String(res.headers["server"] ?? ""),
     hasHttps: finalUrl.startsWith("https"),
     hasMobileViewport: $('meta[name="viewport"]').length > 0,
-    hasFavicon: $('link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]').length > 0,
+    hasFavicon:
+      $(
+        'link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]',
+      ).length > 0,
     hasOpenGraph: $('meta[property^="og:"]').length > 0,
     hasTwitterCards: $('meta[name^="twitter:"]').length > 0,
     hasStructuredData: $('script[type="application/ld+json"]').length > 0,
@@ -949,10 +1336,18 @@ export async function analyzeUrl(rawUrl: string): Promise<SeoReportData> {
     finalUrl,
     siteFiles.robotsReport?.groups ?? [],
     content.schemaTypes,
-    wordCount
+    wordCount,
   );
 
-  const issues = deriveIssues(meta, content, technical, siteFiles, schema, linkCheck, aiSearch);
+  const issues = deriveIssues(
+    meta,
+    content,
+    technical,
+    siteFiles,
+    schema,
+    linkCheck,
+    aiSearch,
+  );
 
   return {
     url,
