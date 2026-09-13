@@ -1,57 +1,16 @@
 import type { CompareSnapshot } from "./competitor.js";
 
-/**
- * Turning two snapshots into the answer someone actually wants.
- *
- * A side-by-side table shows every number for both pages and leaves the reader
- * to work out which ones matter. This computes that judgement instead: where a
- * competitor genuinely beats you, by how much, and what to do about it.
- *
- * Kept on the server rather than in the page so the comparison the UI draws and
- * the one Orbit reasons from are the same computation. Two implementations of
- * "who is winning" would eventually disagree, and the one the user was not
- * looking at would be the one quoted back at them.
- */
-
-/** Which side a metric favours. */
 export type Verdict = "win" | "lose" | "tie";
 
 export type MetricComparison = {
-  /** Stable id, so the UI can key rows and pick its own labels. */
   id: string;
   label: string;
-  /** Your value, already formatted for display. */
   mine: string;
   theirs: string;
   verdict: Verdict;
-  /**
-   * Why this metric matters, in one line. Present only when you are losing —
-   * a row you already win needs no explanation.
-   */
   note?: string;
-  /**
-   * Why a row that shows two different numbers is nonetheless a tie.
-   *
-   * Every comparison below carries a tolerance, because two pages are never
-   * numerically identical and calling a 2-point difference a "loss" would fill
-   * the table with defeats nobody can act on. Left unexplained, though, a row
-   * reading "68 vs 70 — too close to call" looks like the comparison is broken.
-   * Present only on ties that came from a tolerance, not on exact matches.
-   */
   tieReason?: string;
-  /**
-   * Share of the on-page score this metric can move, 0-1.
-   *
-   * Lets the UI rank rows by what is actually costing points rather than by the
-   * order they happen to be declared in. Approximate by design: the score is
-   * not a clean weighted sum, so these are the penalty each signal carries
-   * relative to the total penalty available.
-   */
   weight: number;
-  /**
-   * How much this row matters right now: `weight` scaled by how far apart the
-   * two pages are, 0-1. A heavily-weighted row you are tying on scores 0.
-   */
   impact: number;
 };
 
@@ -83,28 +42,13 @@ type Outcome = {
   tieReason?: string;
 };
 
-/**
- * How far apart two numbers are, relative to the larger of them.
- *
- * Relative rather than absolute because the metrics are on wildly different
- * scales — 200 ms and 200 words are not comparable magnitudes, but "30% apart"
- * means the same thing in both. Capped at 1 so one page having twenty times the
- * word count of another does not swamp every other row.
- */
+
 function relativeGap(mine: number, theirs: number): number {
   const larger = Math.max(Math.abs(mine), Math.abs(theirs));
   if (larger === 0) return 0;
   return Math.min(1, Math.abs(mine - theirs) / larger);
 }
 
-/**
- * Explain a tie that two different numbers produced.
- *
- * Returned as prose rather than a raw tolerance figure because the reader is
- * being told why the table disagrees with their arithmetic, and "within the 2
- * we treat as noise" answers that where "tolerance: 2" does not. Exact matches
- * get no reason — nothing needs explaining when both sides read the same.
- */
 function explainTie(mine: number, theirs: number, tolerance: number, unit: string): string | undefined {
   if (mine === theirs) return undefined;
   const rounded = Math.round(tolerance * 10) / 10;
@@ -127,12 +71,7 @@ function lessIsBetter(mine: number, theirs: number, tolerance = 0, unit = ""): O
   return { verdict: mine < theirs ? "win" : "lose", separation: relativeGap(mine, theirs) };
 }
 
-/**
- * Compare two booleans where having the thing is better.
- *
- * Separation is all-or-nothing: you either ship Open Graph tags or you do not,
- * and there is no partial credit to scale by.
- */
+
 function havingIsBetter(mine: boolean, theirs: boolean): Outcome {
   if (mine === theirs) return { verdict: "tie", separation: 0 };
   return { verdict: mine ? "win" : "lose", separation: 1 };
@@ -140,11 +79,25 @@ function havingIsBetter(mine: boolean, theirs: boolean): Outcome {
 
 const yesNo = (v: boolean) => (v ? "Yes" : "No");
 
-/**
- * Whether a title or description length is in the range search engines show
- * without truncating. Both being "wrong" in different directions is a tie:
- * neither page is doing the right thing, and pretending one wins is noise.
- */
+
+const bothCaptured = (a: unknown, b: unknown) => a !== undefined && b !== undefined;
+
+const capturedYesNo = (v: boolean | undefined) =>
+  v === undefined ? "Not captured" : yesNo(v);
+
+const isNoindex = (robots: string | undefined) => /noindex/.test(robots ?? "");
+
+const indexableLabel = (robots: string | undefined) =>
+  robots === undefined ? "Not captured" : isNoindex(robots) ? "Blocked" : "Yes";
+
+/** A tie that says the data is missing rather than implying the two are equal. */
+const unmeasured = (): Outcome => ({
+  verdict: "tie",
+  separation: 0,
+  tieReason: "Not captured on one of these snapshots — refresh both to compare this.",
+});
+
+
 function lengthVerdict(
   mine: number,
   theirs: number,
@@ -157,9 +110,6 @@ function lengthVerdict(
     return {
       verdict: "tie",
       separation: 0,
-      // Two failures for different reasons is the case worth explaining: the
-      // reader sees 12 against 78 marked a tie and needs to know that neither
-      // number is in range, so neither page wins the row.
       tieReason: mineOk
         ? undefined
         : `Neither page is in the ${min}–${max} range, so neither wins this row.`,
@@ -177,33 +127,27 @@ function topicKey(text: string): string {
     .trim();
 }
 
-/**
- * How much of the on-page score each signal can move, 0-1.
- *
- * Derived from the penalties in `scoreSnapshot` rather than invented: a missing
- * title costs 15 points against roughly 100 points of available penalty, so it
- * weighs 0.15. Approximate on purpose — the score is not a clean weighted sum,
- * and these exist to rank rows sensibly, not to reconstruct the arithmetic.
- *
- * The overall score row is excluded from ranking entirely (weight 0): it is the
- * sum of the others, so letting it compete for the top of the table would just
- * pin the total above its own components.
- */
+
 const METRIC_WEIGHTS: Record<string, number> = {
   score: 0,
-  title: 0.15,
-  description: 0.1,
-  words: 0.15,
-  headings: 0.08,
-  schema: 0.12,
-  "internal-links": 0.08,
-  speed: 0.12,
-  "page-weight": 0.06,
-  "open-graph": 0.06,
-  "alt-text": 0.08,
+  title: 0.13,
+  description: 0.09,
+  words: 0.13,
+  headings: 0.07,
+  schema: 0.1,
+  "internal-links": 0.07,
+  speed: 0.1,
+  "page-weight": 0.05,
+  "open-graph": 0.05,
+  "alt-text": 0.07,
+
+  indexable: 0.08,
+  mobile: 0.03,
+  canonical: 0.02,
+  "twitter-cards": 0.01,
+  "heading-depth": 0.0,
 };
 
-/** Assemble one row from its outcome, attaching the weight and derived impact. */
 function row(
   id: string,
   label: string,
@@ -222,9 +166,6 @@ function row(
     note,
     tieReason: outcome.tieReason,
     weight,
-    // Only rows you are losing carry impact. A signal you win is not costing
-    // you anything, however heavily it is weighted, and sorting by "importance"
-    // rather than "what is wrong" would lead the table with your own strengths.
     impact: outcome.verdict === "lose" ? weight * outcome.separation : 0,
   };
 }
@@ -330,15 +271,55 @@ export function compareSnapshots(
       lessIsBetter(mine.imagesMissingAlt, theirs.imagesMissingAlt, 1, "images"),
       "Alt text is both an accessibility requirement and how images get found in search."
     ),
+
+    row(
+      "mobile",
+      "Mobile viewport",
+      capturedYesNo(mine.hasMobileViewport),
+      capturedYesNo(theirs.hasMobileViewport),
+      bothCaptured(mine.hasMobileViewport, theirs.hasMobileViewport)
+        ? havingIsBetter(mine.hasMobileViewport!, theirs.hasMobileViewport!)
+        : unmeasured(),
+      "Google indexes the mobile version first. Without this tag a page is rendered at desktop width on a phone."
+    ),
+    row(
+      "indexable",
+      "Indexable",
+      indexableLabel(mine.metaRobots),
+      indexableLabel(theirs.metaRobots),
+      bothCaptured(mine.metaRobots, theirs.metaRobots)
+        ? havingIsBetter(!isNoindex(mine.metaRobots), !isNoindex(theirs.metaRobots))
+        : unmeasured(),
+      "A noindex directive removes the page from search entirely, whatever else it does well."
+    ),
+    row(
+      "canonical",
+      "Canonical URL",
+      mine.canonical ? "Set" : "Missing",
+      theirs.canonical ? "Set" : "Missing",
+      havingIsBetter(Boolean(mine.canonical), Boolean(theirs.canonical)),
+      "A canonical tells search engines which URL is the real one when the same page is reachable more than one way."
+    ),
+    row(
+      "twitter-cards",
+      "Twitter Card tags",
+      yesNo(mine.hasTwitterCards),
+      yesNo(theirs.hasTwitterCards),
+      havingIsBetter(mine.hasTwitterCards, theirs.hasTwitterCards),
+      "Decides how a link renders when shared on X. Without them the post shows a bare URL."
+    ),
+    row(
+      "heading-depth",
+      "Outline depth",
+      String((mine.headings ?? []).length),
+      String((theirs.headings ?? []).length),
+      (mine.headings && theirs.headings)
+        ? moreIsBetter(mine.headings.length, theirs.headings.length, 3, "headings")
+        : unmeasured(),
+      "The full H1–H3 outline, not just top-level sections — how thoroughly the page is structured."
+    ),
   ];
 
-  // Their prominent words that never appear on your page. Their own brand name
-  // is excluded — "they mention themselves more than you do" is not a gap.
-  //
-  // Every list below is defaulted: a snapshot stored before these fields
-  // shipped has none of them, and a competitor added last month must not crash
-  // the comparison. A missing list yields an empty gap, which is the honest
-  // answer — it was not measured, so nothing is known to be missing.
   const theirHost = safeHost(theirs.finalUrl);
   const mineWords = new Set((mine.keywords ?? []).map((k) => k.word));
   const missingKeywords = (theirs.keywords ?? [])
@@ -352,8 +333,6 @@ export function compareSnapshots(
     (t) => !mineTypes.has(t.toLowerCase())
   );
 
-  // Section topics they cover and you do not. Compared on normalised text, so
-  // "Pricing" and "pricing." count as the same section.
   const mineTopics = new Set((mine.headings ?? []).map((h) => topicKey(h.text)));
   const contentGaps = (theirs.headings ?? [])
     .filter((h) => h.level === 2 || h.level === 3)
@@ -361,13 +340,7 @@ export function compareSnapshots(
       const key = topicKey(h.text);
       return key.length > 3 && !mineTopics.has(key);
     })
-    // A heading naming a topic is a content gap worth reporting; a heading that
-    // is a marketing sentence is the same page's hero copy, and listing
-    // "Analyze your brand's visibility across major AI search engines, track
-    // mentions and links, and benchmark competitors to grow your presence" as a
-    // section you are missing tells the reader nothing they can act on. Real
-    // section headings are short — the cut is on word count rather than
-    // characters, since a long single word is still a topic.
+
     .filter((h) => h.text.split(/\s+/).length <= 8)
     .slice(0, 8)
     .map((h) => h.text);
@@ -390,14 +363,7 @@ function safeHost(url: string): string {
   }
 }
 
-/**
- * Where you stand in the tracked field.
- *
- * A per-competitor delta answers "am I ahead of them", which is the wrong
- * question once someone tracks more than one rival: "they lead by 7" says
- * nothing about whether that is last place or a close second. This is the set
- * viewed as a standings table instead.
- */
+
 export type CompetitivePosition = {
   /** 1 is the top of the field. */
   rank: number;
@@ -422,13 +388,7 @@ type Standable = {
   snapshot: { score: number };
 };
 
-/**
- * Rank the field and locate yourself in it.
- *
- * Ties are ranked by standard competition ordering — two competitors on the
- * same score share a rank — because telling someone they are 4th when they are
- * level with 3rd is a distinction the score does not support.
- */
+
 export function computePosition(
   myScore: number,
   competitors: Standable[]
@@ -450,17 +410,12 @@ export function computePosition(
   const leader = field[0];
   const iLead = leader.competitorId === "__me__";
 
-  // The nearest rival strictly above and strictly below, walking outward from
-  // where you sit. Strict comparisons on purpose: someone level with you is
-  // neither a gap to close nor a lead to defend.
   const above = [...field.slice(0, myIndex)].reverse().find((f) => f.score > myScore) ?? null;
   const below = field.slice(myIndex + 1).find((f) => f.score < myScore) ?? null;
 
   return {
     rank,
     fieldSize: field.length,
-    // Share of *rivals* beaten, not of the whole field — being ahead of
-    // yourself is not an achievement worth counting. A field of one is 100.
     percentile: competitors.length === 0 ? 100 : Math.round((behindMe / competitors.length) * 100),
     leader: iLead ? null : leader.label,
     gapToLeader: iLead ? 0 : leader.score - myScore,
@@ -473,13 +428,7 @@ export function computePosition(
   };
 }
 
-/**
- * The changes worth making, hardest-hitting first.
- *
- * Ordered by how much each moves the score, not by how easy it is: a list that
- * opens with "add Twitter Card tags" while the page is 900 words short of the
- * competition is technically correct and practically useless.
- */
+
 function recommend(
   metrics: MetricComparison[],
   missingSchemaTypes: string[],
