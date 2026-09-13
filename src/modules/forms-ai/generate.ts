@@ -6,9 +6,7 @@ import {
   CARD_SHADOWS,
   MAX_FIELDS,
   parseGeneratedForm,
-  parseGeneratedTheme,
   type GeneratedForm,
-  type GeneratedTheme,
 } from "./form-schema.js";
 import { reconcileRevision } from "./reconcile.js";
 
@@ -172,134 +170,9 @@ function extractJson(text: string): unknown {
   return null;
 }
 
-/**
- * The instructions for a restyle.
- *
- * Deliberately not the form prompt with a note attached. A model asked for a
- * form returns a form — the fields come back whether or not anyone wanted them
- * touched, and on the 8B under token pressure they come back reworded. The only
- * reliable way to keep a restyle from editing the questions is to never put the
- * questions in front of it, and to describe an output shape that has no room
- * for them.
- */
-function themeSystemPrompt(): string {
-  return [
-    "You choose colour palettes for web forms. You reply with one JSON object and nothing else — no prose, no code fence, no explanation.",
-    "",
-    "Shape:",
-    "{",
-    '  "theme": { "pageBg": string, "cardBg": string, "cardBorder": string, "accentColor": string, "labelColor": string, "inputBg": string, "inputBorder": string, "inputTextColor": string, "textMode": string, "fontFamily": string, "cardRadius": number, "cardShadow": string }',
-    "}",
-    "",
-    "Rules:",
-    '- Every colour is a 6-digit hex string like "#0f172a". Anything else is dropped.',
-    "- Return the whole theme every time, including the keys the request did not mention. A half-theme leaves the form in two palettes at once.",
-    "- Pick one coherent palette. The colours should look chosen together, not sampled from different forms.",
-    '- "labelColor" must be readable on "cardBg", and "inputTextColor" on "inputBg". A palette nobody can read is not a palette.',
-    '- "textMode" is "light" on a dark card and "dark" on a light one — match it to "cardBg".',
-    `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}.`,
-    `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}.`,
-    '- "cardRadius" is a number of pixels, 0 to 40.',
-    "",
-    "Never mention the form's fields, questions, title or wording. You are choosing colours, nothing else.",
-  ].join("\n");
-}
-
-const THEME_EXAMPLE_USER = "make it dark with a warm orange accent";
-const THEME_EXAMPLE_REPLY = JSON.stringify({
-  theme: {
-    pageBg: "#0b0f14",
-    cardBg: "#131a22",
-    cardBorder: "#22303c",
-    accentColor: "#f97316",
-    labelColor: "#e6edf3",
-    inputBg: "#0e151c",
-    inputBorder: "#2a3945",
-    inputTextColor: "#e6edf3",
-    textMode: "light",
-    fontFamily: "inter",
-    cardRadius: 14,
-    cardShadow: "lg",
-  },
-});
-
 export type GenerateResult =
   | { ok: true; form: GeneratedForm; model: string }
   | { ok: false; status: number; error: string };
-
-export type GenerateThemeResult =
-  | { ok: true; theme: GeneratedTheme; model: string }
-  | { ok: false; status: number; error: string };
-
-/**
- * Restyle a form without touching a single field.
- *
- * The form's fields are never sent and the reply has nowhere to put them, so
- * the class of damage the reconciler exists to repair — a dropped question, a
- * reworded label, a reordered form — cannot happen on this path at all. That is
- * the point of splitting it out: a guard that runs after the fact can only
- * catch what it recognises, where a prompt that omits the fields is exact.
- *
- * The current theme goes in as the assistant's own last answer, so a follow-up
- * ("a bit lighter") is read against what is actually on the canvas. What comes
- * back is merged onto it rather than replacing it, so a model that answers with
- * three keys changes three keys.
- */
-export async function generateTheme(
-  prompt: string,
-  current?: GeneratedTheme,
-): Promise<GenerateThemeResult> {
-  if (!cloudflareReady()) {
-    return { ok: false, status: 503, error: "form generation is not configured" };
-  }
-
-  const asked = prompt.trim().slice(0, MAX_PROMPT_CHARS);
-  if (!asked) return { ok: false, status: 400, error: "prompt required" };
-
-  const messages = [
-    { role: "system", content: themeSystemPrompt() },
-    { role: "user", content: THEME_EXAMPLE_USER },
-    { role: "assistant", content: THEME_EXAMPLE_REPLY },
-    ...(current && Object.keys(current).length
-      ? [
-          { role: "user", content: "Here is the theme the form is using now." },
-          { role: "assistant", content: JSON.stringify({ theme: current }) },
-        ]
-      : []),
-    { role: "user", content: asked },
-  ];
-
-  let lastDetail = "";
-
-  for (const model of MODELS) {
-    const res = await cloudflareChat({
-      model,
-      messages,
-      // A theme is a fraction of a form. A tight cap keeps a rambling model from
-      // spending the attempt budget on prose nobody reads.
-      maxTokens: 600,
-      temperature: 0.4,
-      signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      lastDetail = `${model}: ${res.detail}`;
-      continue;
-    }
-
-    const parsed = parseGeneratedTheme(extractJson(res.text));
-    if (parsed.ok) {
-      // Merged, not replaced: the keys the model left out are the ones the
-      // request did not ask about, and those should stay as the author set them.
-      return { ok: true, theme: { ...current, ...parsed.theme }, model };
-    }
-
-    lastDetail = `${model}: ${parsed.reason}`;
-  }
-
-  console.error("[forms-ai] theme generation failed —", lastDetail);
-  return { ok: false, status: 502, error: "could not restyle the form from that prompt" };
-}
 
 export function formsAiReady(): boolean {
   return cloudflareReady();

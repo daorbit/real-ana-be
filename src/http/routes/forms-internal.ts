@@ -5,33 +5,15 @@ import {
   hasQuota,
   spendQuota,
 } from "../../modules/billing/quota.service.js";
-import { generateForm, generateTheme, formsAiReady } from "../../modules/forms-ai/generate.js";
+import { generateForm, formsAiReady } from "../../modules/forms-ai/generate.js";
+import { generateEdit, type EditSnapshot } from "../../modules/forms-ai/edit.js";
 import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
-import { classifyEditIntent } from "../../modules/forms-ai/intent.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 
-/**
- * What the forms service is allowed to do, and what it has used.
- *
- * Lead capture runs as its own service with its own database, so it cannot read
- * a subscription directly — but plans and quota belong to billing, and having
- * two services hold their own opinion of a customer's plan is how the two
- * disagree. This is the one place the answer comes from.
- *
- * Not `requireAuth`: the caller is a server, not a browser, and there is no
- * session behind a public form submission at 3am. `FORMS_SERVICE_SECRET` is the
- * credential instead, exactly as `CRON_SECRET` is for the scheduler.
- */
+
 const router = Router();
 
-/**
- * Rejects anything that cannot prove it is the forms service.
- *
- * A missing secret fails closed. An endpoint that hands out a workspace's plan
- * and increments its billing meter is not one to leave open because an env var
- * was forgotten.
- */
 function authorize(req: Request, res: Response): boolean {
   const secret = process.env.FORMS_SERVICE_SECRET;
   if (!secret) {
@@ -46,12 +28,7 @@ function authorize(req: Request, res: Response): boolean {
   return true;
 }
 
-/**
- * The caps and the submission meter for one workspace.
- *
- * The forms service caches this briefly rather than calling per submission —
- * see its own client — so this stays a plain read with no side effects.
- */
+
 router.get(
   "/limits/:workspaceId",
   asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
@@ -60,14 +37,7 @@ router.get(
   }),
 );
 
-/**
- * Records one stored submission against the workspace's cycle.
- *
- * Called after the response has been saved, so it never refuses: the row
- * exists either way, and losing the count is better than pretending the
- * response did not arrive. Whether the next one is accepted is decided by the
- * limits above.
- */
+
 router.post(
   "/submissions/:workspaceId",
   asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
@@ -77,19 +47,7 @@ router.post(
   }),
 );
 
-/**
- * Draft a form from a sentence.
- *
- * Metered as an Orbit question, on the same allowance as the assistant: it is
- * the same models and the same cost to us, and a workspace that has spent its
- * month asking Orbit things has spent its month. Two meters over one budget
- * would only mean explaining to a customer why their AI ran out twice.
- *
- * Spent only once a form actually comes back. A refusal, a timeout, or an
- * answer we could not read costs the customer nothing — they have no way to
- * tell a bad prompt from a busy model, so charging for it would read as the
- * product taking their credit and giving nothing.
- */
+
 router.post(
   "/generate/:workspaceId",
   asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
@@ -104,8 +62,6 @@ router.post(
     const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
     if (!prompt.trim()) return res.status(400).json({ error: "prompt required" });
 
-    // Checked before the model is called, so a workspace with nothing left
-    // waits on nothing. The spend afterwards is what actually reserves it.
     if (!(await hasQuota(workspaceId, "orbit"))) {
       return res.status(402).json({
         error: "quota_exceeded",
@@ -115,55 +71,11 @@ router.post(
       });
     }
 
-    /**
-     * The form being refined, on a follow-up.
-     *
-     * Read through the same parser the model's own output goes through. It
-     * arrives from a browser by way of the forms service, so it is no more
-     * trusted than a generation — and a bad field type reaching the model as an
-     * example is how it learns to emit more of them.
-     */
+
     const prior = req.body?.previous ? parseGeneratedForm(req.body.previous) : null;
 
-    // "edit" is a change to a form that already exists in the builder, where a
-    // dropped field or an unasked-for restyle is real damage. "create" (the
-    // default) is a still-in-progress draft in the generator modal, where the
-    // model is meant to have a free hand. Only "edit" gets the conservative
-    // reconciliation pass.
     const mode = req.body?.mode === "edit" ? "edit" : "create";
 
-    /**
-     * A restyle of a live form is answered by a model that never sees the
-     * fields.
-     *
-     * The reconciliation pass below can put back a field the model dropped, but
-     * it matches on type and label — so a field the model kept and quietly
-     * reworded reads as a new one, and the old one is restored alongside it. An
-     * author who asked for different colours gets a longer form. Routing the
-     * appearance-only prompts away from the field-generating path is what makes
-     * that unreachable rather than merely unlikely.
-     *
-     * Only on "edit", and only with a form to restyle: a first draft has no
-     * theme to change and no fields to protect.
-     */
-    if (mode === "edit" && prior?.ok && classifyEditIntent(prompt) === "theme") {
-      const themed = await generateTheme(prompt, prior.form.theme);
-      if (!themed.ok) {
-        return res.status(themed.status).json({ error: themed.error });
-      }
-
-      await spendQuota(workspaceId, "orbit");
-
-      // The same shape every other answer has. The caller applies a form, and
-      // this is that form with one thing different. `intent` is advisory — a
-      // caller that ignores it still applies a correct form; one that reads it
-      // can say "restyled" rather than counting fields that did not change.
-      return res.json({
-        form: { ...prior.form, theme: themed.theme },
-        model: themed.model,
-        intent: "theme",
-      });
-    }
 
     const result = await generateForm(
       prompt,
@@ -174,21 +86,111 @@ router.post(
       return res.status(result.status).json({ error: result.error });
     }
 
-    // After the work, never before. A spend that precedes a failed generation
-    // bills for nothing delivered.
+
     await spendQuota(workspaceId, "orbit");
 
     res.json({ form: result.form, model: result.model });
   }),
 );
 
+/** The form as the builder describes it, sanity-checked before the model sees it. */
+function readEditSnapshot(raw: unknown): EditSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.fields)) return null;
+
+  const str = (v: unknown, max: number) =>
+    typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined;
+
+  const fields = r.fields
+    .slice(0, 100)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const f = entry as Record<string, unknown>;
+      const id = str(f.id, 100);
+      const type = str(f.type, 40);
+      if (!id || !type) return null;
+      return {
+        id,
+        type,
+        label: str(f.label, 120) ?? "",
+        required: f.required === true,
+        options: Array.isArray(f.options)
+          ? f.options
+              .map((o) => str(o, 120))
+              .filter((o): o is string => Boolean(o))
+              .slice(0, 40)
+          : undefined,
+      };
+    })
+    .filter((f): f is NonNullable<typeof f> => f !== null);
+
+  return {
+    title: str(r.title, 120),
+    formDescription: str(r.formDescription, 500),
+    submitLabel: str(r.submitLabel, 40),
+    fields,
+    theme:
+      r.theme && typeof r.theme === "object"
+        ? (r.theme as Record<string, unknown>)
+        : undefined,
+  };
+}
+
 /**
- * The branding one workspace's forms should carry.
+ * Change a form that already exists.
  *
- * Resolved here rather than shipped raw: whether a workspace's own name is
- * honoured depends on its plan, and the forms service has no way to know that.
- * It receives the finished answer and renders it.
+ * Separate from `/generate` because it answers a different question.
+ * Generating asks "what should this form be" and rewrites the document to say
+ * so — right for a first draft, destructive for an edit, where the author has
+ * fields, wording and layout they never asked about. This asks "what should
+ * change", and returns only that.
+ *
+ * The caller applies the operations to the form it is already holding, so
+ * anything the model did not name is not merely preserved but never touched.
+ * That is what lets layout survive: a grid and its columns are not in this
+ * conversation at all.
+ *
+ * Metered identically to a generation — same models, same cost, same allowance.
  */
+router.post(
+  "/edit/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+
+    const { workspaceId } = req.params;
+
+    if (!formsAiReady()) {
+      return res.status(503).json({ error: "form editing is not configured" });
+    }
+
+    const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
+    if (!prompt.trim()) return res.status(400).json({ error: "prompt required" });
+
+    const snapshot = readEditSnapshot(req.body?.snapshot);
+    if (!snapshot) return res.status(400).json({ error: "snapshot required" });
+
+    if (!(await hasQuota(workspaceId, "orbit"))) {
+      return res.status(402).json({
+        error: "quota_exceeded",
+        code: "quota_exceeded",
+        kind: "orbit_questions",
+        message: "This workspace has used its AI questions for the period.",
+      });
+    }
+
+    const result = await generateEdit(prompt, snapshot);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+
+    // After the work, never before.
+    await spendQuota(workspaceId, "orbit");
+
+    res.json({ ops: result.ops, model: result.model });
+  }),
+);
+
 router.get(
   "/branding/:workspaceId",
   asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
