@@ -74,6 +74,15 @@ function gatewayConfigured(gateway: Gateway): boolean {
   return gateway === "cashfree" ? cashfreeConfigured() : razorpayConfigured();
 }
 
+/**
+ * Cashfree's account is INR-only for now — international collection is not live
+ * on it yet, so a USD order would be accepted here and then fail at the
+ * gateway. Reject it up front and keep Razorpay as the USD route.
+ */
+function gatewaySupportsCurrency(gateway: Gateway, currency: string): boolean {
+  return gateway === "cashfree" ? currency === "INR" : true;
+}
+
  
 async function resolveCashfreePhone(
   bodyPhone: unknown,
@@ -228,7 +237,11 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const gateway = resolveGateway(req.body?.gateway);
   if (!gatewayConfigured(gateway))
     return res.status(503).json({ error: `${gateway} payments are not configured` });
- 
+  if (!gatewaySupportsCurrency(gateway, currency))
+    return res
+      .status(400)
+      .json({ error: `${gateway} cannot take ${currency} payments yet`, code: "gateway_currency_unsupported" });
+
   const chargeable = Math.max(amount, 100);
 
   const buyer = await User.findById(req.userId).select("name email");
@@ -444,6 +457,10 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
   if (!pack) return res.status(404).json({ error: "addon not found" });
 
   const currency = resolveCurrency(req.body?.currency);
+  if (!gatewaySupportsCurrency(gateway, currency))
+    return res
+      .status(400)
+      .json({ error: `${gateway} cannot take ${currency} payments yet`, code: "gateway_currency_unsupported" });
 
   const packs = Number(req.body?.packs ?? 1);
   if (!Number.isInteger(packs) || packs < 1)

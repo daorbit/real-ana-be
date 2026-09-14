@@ -7,7 +7,6 @@ import { Event } from "../../modules/analytics/models/Event.js";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Project } from "../../modules/workspace/models/Project.js";
-import { ContactMessage } from "../../modules/support/models/ContactMessage.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../../config/AppSetting.js";
 import { demoUsageSnapshot } from "../../modules/billing/demo-limit.js";
 import { Plan } from "../../modules/billing/models/Plan.js";
@@ -28,7 +27,7 @@ import { accountBillingSummary } from "../../modules/billing/quota.service.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { CURRENCIES } from "../../modules/billing/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../modules/billing/fx.js";
-import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, contactReplyHtml, type BodyLayout } from "../../infra/mail/mailer.js";
+import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, type BodyLayout } from "../../infra/mail/mailer.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage } from "../../modules/orbit/cloudflare-ai.js";
@@ -780,132 +779,5 @@ function couponErrorMessage(e: unknown): string {
   return message || "could not save the coupon";
 }
 
-
-const CONTACT_STATUSES = ["new", "read", "replied", "spam"] as const;
-type ContactStatus = (typeof CONTACT_STATUSES)[number];
-
-router.get("/contact", async (req: AuthedRequest, res: Response) => {
-  const status = String(req.query.status ?? "").trim();
-  const q = String(req.query.q ?? "").trim();
-  const page = Math.max(1, Number(req.query.page) || 1);
-
-  const source = String(req.query.source ?? "").trim();
-
-  const filter: Record<string, unknown> = {};
-  if (CONTACT_STATUSES.includes(status as ContactStatus)) filter.status = status;
-  if (source === "app" || source === "marketing" || source === "newsletter") {
-    filter.source = source;
-  }
-  if (q) {
-    filter.$or = [
-      { name: { $regex: escapeRegex(q), $options: "i" } },
-      { email: { $regex: escapeRegex(q), $options: "i" } },
-      { company: { $regex: escapeRegex(q), $options: "i" } },
-      { message: { $regex: escapeRegex(q), $options: "i" } },
-    ];
-  }
-
-  const [messages, total, unread] = await Promise.all([
-    ContactMessage.find(filter)
-      .select("-ipHash")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * PAGE_SIZE)
-      .limit(PAGE_SIZE)
-      .lean(),
-    ContactMessage.countDocuments(filter),
-    ContactMessage.countDocuments({ status: "new" }),
-  ]);
-
-  res.json({
-    messages,
-    total,
-    unread,
-    page,
-    pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
-  });
-});
-
-/** Unread count on its own, for the nav badge — the list query is too heavy to poll. */
-router.get("/contact/unread", async (_req: AuthedRequest, res: Response) => {
-  res.json({ unread: await ContactMessage.countDocuments({ status: "new" }) });
-});
-
-router.patch("/contact/:id", async (req: AuthedRequest, res: Response) => {
-  const update: Record<string, unknown> = {};
-
-  const status = String(req.body?.status ?? "").trim();
-  if (status) {
-    if (!CONTACT_STATUSES.includes(status as ContactStatus)) {
-      return res.status(400).json({ error: "unknown status" });
-    }
-    update.status = status;
-    // Stamped once, on the move out of "new", so it records when someone first
-    // looked rather than the last time anything was edited.
-    if (status !== "new") update.readAt = new Date();
-  }
-
-  if (typeof req.body?.adminNote === "string") {
-    update.adminNote = req.body.adminNote.trim().slice(0, 2000);
-  }
-
-  if (!Object.keys(update).length) {
-    return res.status(400).json({ error: "nothing to update" });
-  }
-
-  const message = await ContactMessage.findByIdAndUpdate(req.params.id, update, { new: true })
-    .select("-ipHash")
-    .lean();
-
-  if (!message) return res.status(404).json({ error: "message not found" });
-  res.json(message);
-});
-
-
-router.post("/contact/:id/reply", async (req: AuthedRequest, res: Response) => {
-  if (!mailConfigured()) {
-    return res.status(503).json({ error: "email is not configured on the server" });
-  }
-
-  const message = await ContactMessage.findById(req.params.id);
-  if (!message) return res.status(404).json({ error: "message not found" });
-
-  const subject = String(req.body?.subject ?? "").trim().slice(0, 200);
-  const body = String(req.body?.body ?? "").trim().slice(0, 10000);
-
-  if (!subject) return res.status(400).json({ error: "a subject is required" });
-  if (body.length < 10) return res.status(400).json({ error: "the reply is too short" });
-
-  // Recorded so the next admin can see who answered, not just that someone did.
-  const sender = await User.findById(req.userId).select("email");
-  const sentBy = sender?.email ?? "unknown";
-
-  try {
-    await sendOne(
-      { email: message.email, name: message.name },
-      subject,
-      body,
-      contactReplyHtml(body, message.message)
-    );
-  } catch (e) {
-    return res
-      .status(502)
-      .json({ error: (e as Error)?.message || "the email could not be sent" });
-  }
-
-  message.replies.push({ subject, body, sentBy, sentAt: new Date() });
-  message.status = "replied";
-  if (!message.readAt) message.readAt = new Date();
-  await message.save();
-
-  const saved = message.toObject();
-  delete (saved as Record<string, unknown>).ipHash;
-  res.json(saved);
-});
-
-router.delete("/contact/:id", async (req: AuthedRequest, res: Response) => {
-  const deleted = await ContactMessage.findByIdAndDelete(req.params.id);
-  if (!deleted) return res.status(404).json({ error: "message not found" });
-  res.status(204).end();
-});
 
 export default router;

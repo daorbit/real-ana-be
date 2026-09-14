@@ -1089,44 +1089,6 @@ export function contactAckText(name: string, subject: string, message: string): 
   ].join("\n");
 }
 
-/**
- * An admin's reply, as the sender sees it.
- *
- * Their original message is quoted underneath so the reply stands on its own —
- * they may have written days ago, and a bare answer to a forgotten question is
- * a second round trip.
- */
-export function contactReplyHtml(body: string, original: string): string {
-  const paragraphs = escapeHtml(body)
-    .split(/\n{2,}/)
-    .map(
-      (block) =>
-        `<p style="margin:0 0 ${S.block}px;font-size:14.5px;line-height:1.7;color:${C.text}">${block.replace(
-          /\n/g,
-          "<br>"
-        )}</p>`
-    )
-    .join("");
-
-  // The reply itself is set in the heading colour, not body grey: this is a
-  // person writing back, and it should read as the message rather than as
-  // supporting text around the quote below it.
-  return shell(
-    `${paragraphs}
-
-    <div style="margin:${S.section}px 0;height:1px;background:${C.line}"></div>
-
-    ${label("Your original message", 0)}
-
-    <div class="panel" style="padding:16px 18px;background:${C.panel};border-radius:10px">
-      <p style="margin:0;font-size:14px;line-height:1.7;color:${C.faint}">${escapeHtml(
-        original
-      ).replace(/\n/g, "<br>")}</p>
-    </div>`,
-    "Reply to this email to continue the conversation."
-  );
-}
-
 /* -------------------------------- receipts -------------------------------- */
 
 /**

@@ -32,9 +32,6 @@ import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
 import inviteRoutes from "./http/routes/invites.js";
 import reportsPublicRoutes from "./http/routes/reports-public.js";
-import contactPublicRoutes from "./http/routes/contact-public.js";
-import newsletterPublicRoutes from "./http/routes/newsletter-public.js";
-import supportRoutes from "./http/routes/support.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import swaggerUi from "swagger-ui-express";
@@ -194,12 +191,10 @@ app.use("/api/public/plans", openCors, plansPublicRoutes);
 // links above — most recipients have no account, and requiring one to stop
 // receiving mail is how a report turns into a spam complaint.
 app.use("/api/public/reports", openCors, reportsPublicRoutes);
-// The marketing site's contact form. Open CORS because the landing page is a
-// different origin from the dashboard and is deliberately not in that
-// allowlist; the route only writes, and reading messages back is admin-only.
-app.use("/api/public/contact", openCors, contactPublicRoutes);
-// The newsletter dialog on the same site. Same origin story, same write-only shape.
-app.use("/api/public/newsletter", openCors, newsletterPublicRoutes);
+// Inbound messages — the marketing site's contact form, the newsletter dialog
+// and the in-app help form — are da-forms forms now, posting to forms.daorbit.in
+// and read in that product's entries view. Nothing writes ContactMessage here
+// any more, so the model, its three routes and the admin inbox are all gone.
 // Orbit on the marketing site — unauthenticated pre-sales chat, Cloudflare-only
 // models, rate-limited per IP. Separate from the workspace-metered in-app
 // assistant at /api/workspaces/:wid/orbit.
@@ -267,10 +262,9 @@ app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);
 // to the workspace yet, which is the whole point of the link.
 app.use("/api/invites", dashboardCors, inviteRoutes);
 app.use("/api/sites", dashboardCors, statsRoutes);
-app.use("/api/support", dashboardCors, supportRoutes);
-// Orbit AI, the in-app assistant. Beside support rather than under it: the two
-// are the same job — a stuck user — and Orbit hands over to the form when it
-// cannot help.
+// Orbit AI, the in-app assistant. The in-app support form it used to hand over
+// to is now a da-forms form embedded on the Help page, which posts to da-forms
+// rather than here.
 // Mounted under a workspace because Orbit is now metered against one: the AI
 // tier, its question quota, and its addon credits all live on the workspace's
 // subscription, the same as audits and crawls.
