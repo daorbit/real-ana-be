@@ -1,0 +1,38 @@
+# Pings the Google review sync route every six hours.
+#
+# The interval is set by how fast the data actually changes and by Google's
+# quota, not by how often it could run. A business gets a handful of reviews a
+# week, and the Business Profile API's per-project quota is small and shared
+# across every workspace on the deployment — so a tighter schedule would spend
+# the whole allowance re-reading reviews nobody has written yet, and starve the
+# syncs users explicitly asked for with the "Sync reviews" button.
+#
+# The route itself asks what is *stale* rather than what is scheduled for now
+# (see STALE_AFTER_MS in sync.service), so a spare tick is a cheap no-op and a
+# missed one is picked up by the next. That is what makes this safe to run on a
+# best-effort trigger rather than a punctual one.
+#
+# Nothing server-side depends on this being Cloudflare: the route authenticates
+# on CRON_SECRET and does not care who calls it.
+name = "reviews-cron"
+main = "src/index.ts"
+compatibility_date = "2026-08-19"
+account_id = "594bc4ae163c865c9faa90cbb457d30b"
+
+# Cron-only Worker: no fetch handler, so no HTTP route is served and the
+# workers.dev subdomain is never hit.
+workers_dev = false
+
+[triggers]
+# 00:00, 06:00, 12:00 and 18:00 UTC.
+crons = ["0 0,6,12,18 * * *"]
+
+[vars]
+# Public base URL of the backend deployment -- the custom domain in front of
+# Vercel, matching PUBLIC_BASE_URL in .env. Not a secret: CRON_SECRET is the
+# credential, and it is set via `wrangler secret put`, never in this file.
+API_BASE = "https://quantalog-be.daorbit.in"
+
+[observability]
+# Keeps logs queryable in the dashboard rather than only live via `wrangler tail`.
+enabled = true

@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import authRoutes from "./http/routes/auth.js";
 import linkedinRoutes from "./http/routes/linkedin.js";
 import instagramRoutes from "./http/routes/instagram.js";
+import googleReviewsRoutes from "./http/routes/google-reviews.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import formsTokenRoutes from "./http/routes/forms-token.js";
@@ -222,6 +223,16 @@ app.use("/api/auth/linkedin", linkedinRoutes);
 // accept, while `/status` and disconnect are ordinary dashboard fetches.
 app.use("/api/auth/instagram", instagramRoutes);
 app.use("/auth/instagram", instagramRoutes);
+
+// Google Business Profile connection and review data. Mounted before
+// `/api/auth` so its paths win, for the same reason as LinkedIn above.
+//
+// The router applies CORS per route rather than taking it here: the two OAuth
+// endpoints are browser navigations (one from a `window.location` assignment,
+// one from accounts.google.com) which send no Origin the dashboard allowlist
+// would accept, while everything below them is an ordinary dashboard fetch that
+// needs it.
+app.use("/api/auth/google-business", googleReviewsRoutes);
 
 // Scheduled social posts. Scoped to the signed-in user rather than a workspace
 // prefix: a schedule publishes with that user's own LinkedIn token.

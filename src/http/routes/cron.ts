@@ -5,6 +5,7 @@ import { runDueSchedules } from "../../modules/reports/report-runner.js";
 import { runDuePosts } from "../../modules/social/post-runner.js";
 import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
+import { syncDue } from "../../modules/reviews/sync.service.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -104,24 +105,31 @@ router.get("/reports", async (req: Request, res: Response) => {
 });
 
 /**
- * Publish scheduled LinkedIn posts that are due.
+ * Refresh Google reviews for every location that has gone stale.
  *
- * Runs once a day, which is the most the Hobby plan allows: a more frequent
- * expression is rejected at deploy time, not at run time, so a quarter-hourly
- * schedule here would fail the deployment outright. Hobby also gives no better than
- * per-hour precision (±59 min), so even this single tick is not punctual.
+ * Always 200 when the sweep itself ran, even if individual locations failed. A
+ * non-2xx tells Vercel the job is broken, and one workspace with a revoked
+ * Google token is not that — the per-location outcome is recorded on the
+ * location row, where the dashboard shows it to the customer who can act on it.
  *
- * That is a real constraint on the feature rather than a detail. A post stored
- * for 12:00 in the author's zone goes out on whenever the day's one tick lands,
- * which can be hours off. Honouring the picked time needs either the Pro plan
- * (per-minute schedules) or an external pinger hitting this route on a tighter
- * interval with the same `CRON_SECRET` — the handler does not care which.
- *
- * Each schedule still carries its own `nextRunAt`, so daily, weekly and monthly
- * cadences all work from one entry — the tick asks "what is due", not "what is
- * scheduled for now". The runner caps how much one tick attempts; see
- * `runDuePosts`.
+ * The batch size and staleness window live in `sync.service`, not here: they
+ * are properties of how fast reviews arrive and how much Google quota there is,
+ * not of how often Vercel is willing to call this.
  */
+router.get("/reviews", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await syncDue();
+    console.log(`[cron] reviews: ${summary.ran} synced, ${summary.failed} failed`);
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] review sync failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+ 
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 

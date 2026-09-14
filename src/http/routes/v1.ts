@@ -5,6 +5,8 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Marker, MARKER_KINDS } from "../../modules/analytics/models/Marker.js";
+import { GoogleLocation } from "../../modules/reviews/models/GoogleLocation.js";
+import { GoogleReview } from "../../modules/reviews/models/GoogleReview.js";
 import { requireApiKey, ApiKeyRequest } from "../middleware/api-key.js";
 import { computeStats, parseFilters } from "../../modules/analytics/stats.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
@@ -277,6 +279,71 @@ router.get("/track/:appUserId", async (req: ApiKeyRequest, res: Response) => {
       dest: e.get("destination"),
       ts: e.get("ts"),
     })),
+  });
+});
+
+ 
+router.get("/reviews", async (req: ApiKeyRequest, res: Response) => {
+  const locationFilter: Record<string, unknown> = { workspaceId: req.workspaceId };
+  if (req.query.locationId) locationFilter.googleLocationId = String(req.query.locationId);
+
+  const locations = await GoogleLocation.find(locationFilter);
+  if (!locations.length) {
+ 
+    return res.json({ rating: 0, totalReviews: 0, reviews: [], page: 1, pageSize: 0 });
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+
+ 
+  const SORTS: Record<string, Record<string, 1 | -1>> = {
+    newest: { reviewCreatedAt: -1 },
+    oldest: { reviewCreatedAt: 1 },
+    highest: { rating: -1, reviewCreatedAt: -1 },
+    lowest: { rating: 1, reviewCreatedAt: -1 },
+  };
+  const sort = SORTS[String(req.query.sort ?? "newest")] ?? SORTS.newest;
+
+  const reviews = await GoogleReview.find({
+    workspaceId: req.workspaceId,
+    googleLocationId: { $in: locations.map((l) => l._id) },
+    deletedAt: null,
+  })
+    .sort(sort)
+    .skip((page - 1) * limit)
+    .limit(limit)
+    .select("googleReviewId reviewerName reviewerPhoto rating comment reviewCreatedAt replyComment");
+
+  // Across several locations the figures are combined by review count, so a
+  // 500-review branch is not averaged equally with a 3-review one.
+  const totalReviews = locations.reduce((sum, l) => sum + Number(l.get("totalReviewCount") ?? 0), 0);
+  const weighted = locations.reduce(
+    (sum, l) => sum + Number(l.get("averageRating") ?? 0) * Number(l.get("totalReviewCount") ?? 0),
+    0,
+  );
+
+  res.json({
+    rating: totalReviews ? Number((weighted / totalReviews).toFixed(1)) : 0,
+    totalReviews,
+    page,
+    pageSize: limit,
+    reviews: reviews.map((review) => ({
+      id: review.get("googleReviewId"),
+      author: review.get("reviewerName"),
+      photo: review.get("reviewerPhoto"),
+      rating: review.get("rating"),
+      comment: review.get("comment"),
+      reply: review.get("replyComment") || undefined,
+      createdAt: review.get("reviewCreatedAt"),
+    })),
+    // Google requires that review content it supplies is attributed. Carried in
+    // the payload so a customer building their own widget has it to hand rather
+    // than having to read the documentation to discover the obligation.
+    attribution: {
+      source: "Google",
+      notice: "Reviews powered by Google",
+    },
   });
 });
 
