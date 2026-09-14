@@ -66,6 +66,11 @@ export function buildOpenApiSpec() {
         description:
           "Deploys, releases, and campaigns drawn on the analytics timeline. Post one from CI and a traffic change a week later already has its cause on the chart.",
       },
+      {
+        name: "Reviews",
+        description:
+          "Your Google Business Profile reviews, synced into Quantalog and served from here so you can display them on your own site. Connect Google from the dashboard first.",
+      },
     ],
     components: {
       securitySchemes: {
@@ -165,6 +170,64 @@ export function buildOpenApiSpec() {
             kind: { type: "string", examples: ["deploy"] },
             at: { type: "string", format: "date-time" },
             siteIds: { type: "array", items: { type: "string" } },
+          },
+        },
+
+        Review: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description: "Google's own review id. Stable, and safe to use as a key.",
+              examples: ["AbFvOqm1..."],
+            },
+            author: { type: "string", examples: ["Rahul Sharma"] },
+            photo: {
+              type: "string",
+              description:
+                "The reviewer's Google avatar URL, or an empty string. Served from Google's own domain rather than copied.",
+            },
+            rating: { type: "integer", minimum: 1, maximum: 5, examples: [5] },
+            comment: {
+              type: "string",
+              description: "Empty for a star-only rating, which is a normal kind of review.",
+              examples: ["Excellent service!"],
+            },
+            reply: {
+              type: "string",
+              description: "The business owner's public reply. Absent when there is none.",
+            },
+            createdAt: { type: "string", format: "date-time" },
+          },
+        },
+
+        ReviewsResponse: {
+          type: "object",
+          properties: {
+            rating: {
+              type: "number",
+              description:
+                "Google's average across every connected location, weighted by review count.",
+              examples: [4.8],
+            },
+            totalReviews: {
+              type: "integer",
+              description:
+                "Google's own count. Larger than the number of reviews returned, because it includes ratings left without text.",
+              examples: [127],
+            },
+            page: { type: "integer", examples: [1] },
+            pageSize: { type: "integer", examples: [20] },
+            reviews: { type: "array", items: ref("Review") },
+            attribution: {
+              type: "object",
+              description:
+                "Wording to display alongside the reviews. Google requires that content it supplies is attributed.",
+              properties: {
+                source: { type: "string", examples: ["Google"] },
+                notice: { type: "string", examples: ["Reviews powered by Google"] },
+              },
+            },
           },
         },
       },
@@ -418,6 +481,77 @@ export function buildOpenApiSpec() {
           description: "The hundred most recent, newest first.",
           responses: {
             200: json("Markers in this workspace.", { type: "array", items: ref("Marker") }),
+            401: { $ref: "#/components/responses/Unauthorized" },
+          },
+        },
+      },
+
+      "/v1/reviews": {
+        get: {
+          tags: ["Reviews"],
+          summary: "List your Google reviews",
+          description: [
+            "The reviews synced from the Google Business Profile connected to this",
+            "workspace — built for displaying them on your own website.",
+            "",
+            "```",
+            'curl "https://quantalog-be.daorbit.in/v1/reviews?limit=5" \\',
+            '     -H "Authorization: Bearer sk_live_xxxxxxxxxxxx"',
+            "```",
+            "",
+            "Served from Quantalog's cache rather than called through to Google, so",
+            "it is safe to call on every page load. Reviews refresh on a schedule",
+            "and whenever **Sync reviews** is pressed in the dashboard, which means",
+            "a review posted on Google appears here within a few hours rather than",
+            "instantly.",
+            "",
+            "`rating` and `totalReviews` are Google's own figures, not an average of",
+            "the reviews in `reviews`. Google counts star-only ratings that carry no",
+            "text and are not returned by its API, so these match what the business",
+            "sees on Google while the list is necessarily shorter.",
+            "",
+            "A workspace with no Google connection gets an empty list and a zero",
+            "rating rather than an error — that is a normal state, not a failure.",
+            "",
+            "## Displaying these reviews",
+            "",
+            "Google requires that review content it supplies is attributed to",
+            "Google. The `attribution` object carries the wording to show; do not",
+            "strip it.",
+          ].join("\n"),
+          parameters: [
+            {
+              name: "limit",
+              in: "query",
+              description: "Reviews per page, 1–100.",
+              schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+            },
+            {
+              name: "page",
+              in: "query",
+              description: "1-based page number.",
+              schema: { type: "integer", minimum: 1, default: 1 },
+            },
+            {
+              name: "sort",
+              in: "query",
+              description: "Ordering. Anything unrecognised falls back to `newest`.",
+              schema: {
+                type: "string",
+                enum: ["newest", "oldest", "highest", "lowest"],
+                default: "newest",
+              },
+            },
+            {
+              name: "locationId",
+              in: "query",
+              description:
+                "Restrict to one connected business. Omit to combine every location in the workspace.",
+              schema: { type: "string" },
+            },
+          ],
+          responses: {
+            200: json("Reviews for this workspace.", ref("ReviewsResponse")),
             401: { $ref: "#/components/responses/Unauthorized" },
           },
         },
