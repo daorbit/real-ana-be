@@ -35,6 +35,15 @@ const brandingSchema = new Schema(
      * by refusing to remember it.
      */
     hidePoweredBy: { type: Boolean, default: false },
+    /**
+     * Whether Orbit's watermark is left on pictures it draws for this
+     * workspace.
+     *
+     * Stored the same way as `hidePoweredBy` and for the same reason — a
+     * downgrade should not erase the choice, only stop honouring it until the
+     * workspace is Pro again.
+     */
+    watermarkAiImages: { type: Boolean, default: true },
   },
   { timestamps: true },
 );

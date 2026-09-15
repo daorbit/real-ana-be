@@ -70,6 +70,11 @@ export type OrbitPlanEntry = {
    * across the catalogue later.
    */
   dataAccess: boolean;
+  /** Whether the workspace may ask Orbit to draw a picture. Off the image
+   * model's own cost, separate from `monthlyQuota` and `modelTier` — a
+   * drawing is charged on this flag alone, not spent against the question
+   * quota or gated by the chat model tier. */
+  imageGeneration: boolean;
   /** Display order on the pricing page; lower first. */
   sortOrder: number;
   features: string[];
@@ -88,6 +93,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     maxQuestionChars: 500,
     hourlyBurst: 10,
     dataAccess: false,
+    imageGeneration: false,
     sortOrder: 0,
     features: ["Open-weight models", "20 questions a month"],
   },
@@ -101,6 +107,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     maxQuestionChars: 2000,
     hourlyBurst: 30,
     dataAccess: false,
+    imageGeneration: false,
     sortOrder: 1,
     features: ["Everything in Orbit Free", "Reasoning models", "Longer conversations"],
   },
@@ -114,11 +121,13 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     maxQuestionChars: 2000,
     hourlyBurst: 100,
     dataAccess: true,
+    imageGeneration: true,
     sortOrder: 2,
     features: [
       "Everything in Orbit Starter",
       "Gemini Flash",
       "Answers from your own analytics",
+      "Draw pictures",
     ],
   },
 ];

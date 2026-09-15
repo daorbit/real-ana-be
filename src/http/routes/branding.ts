@@ -59,6 +59,8 @@ router.put(
         accentColor: str(body.accentColor),
         hidePoweredBy:
           typeof body.hidePoweredBy === "boolean" ? body.hidePoweredBy : undefined,
+        watermarkAiImages:
+          typeof body.watermarkAiImages === "boolean" ? body.watermarkAiImages : undefined,
       }),
     );
   }),

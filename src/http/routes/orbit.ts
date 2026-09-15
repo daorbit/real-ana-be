@@ -21,6 +21,7 @@ import {
 } from "../../modules/orbit-history/index.js";
 import { planLimit } from "../plan-limit.js";
 import { checkImageDataUrl, cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
+import { resolveBranding } from "../../modules/branding/branding.service.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -58,6 +59,20 @@ const MAX_TURN_CHARS = 4000;
 /** Matches the body-size override for this route in `app.ts`, with room for
  * the base64 overhead and the rest of the JSON envelope. */
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+
+/**
+ * Cloudinary public id of the Orbit mark (light theme), pre-uploaded once to
+ * the account this server points at. Left unset, generated images simply go
+ * out unmarked instead of failing the request over a missing asset.
+ */
+const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
+
+/** Cloudinary overlay transformation stamping the Orbit mark bottom-right,
+ * sized relative to the source image. */
+function watermarkTransformation(): string | undefined {
+  if (!WATERMARK_PUBLIC_ID) return undefined;
+  return `l_${WATERMARK_PUBLIC_ID},w_0.16,fl_relative,g_south_east,x_0.03,y_0.03,o_85`;
+}
 
 /**
  * In-process request counts, keyed by workspace.
@@ -159,6 +174,7 @@ router.get("/status", async (req: AuthedRequest, res: Response) => {
       tier: plan.modelTier,
       monthlyQuota: plan.monthlyQuota,
       maxQuestionChars: plan.maxQuestionChars,
+      imageGeneration: plan.imageGeneration,
     },
     models: ORBIT_MODELS.filter((m) => providerReady(m.provider)).map((m) => ({
       id: m.id,
@@ -229,6 +245,17 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // reading and drawing are mutually exclusive — so the toggle is ignored
   // rather than erroring, the same tolerance an unrecognised `model` gets.
   const generateImage = Boolean(req.body?.generateImage) && !rawImage;
+
+  // Gated on the Orbit plan's own flag, not the question quota below — a
+  // Starter workspace with questions left still can't draw, so the browser
+  // needs a clear "upgrade" answer rather than a quota error that implies
+  // waiting for the next cycle would fix it.
+  if (generateImage && !plan.imageGeneration) {
+    return planLimit(res, "Drawing pictures is part of Orbit Pro.", {
+      kind: "orbit_image_generation",
+      label: "Orbit image generation",
+    }, "plan_required");
+  }
 
   if (!question) {
     return res.status(400).json({
@@ -307,10 +334,17 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   let generatedImageUrl: string | undefined;
   if (result.imageBase64) {
     try {
+      // Pro can switch this off in Branding; every other plan is forced on —
+      // see `resolveBranding`, which already refuses the stored choice back
+      // to true once a workspace isn't Pro.
+      const brand = await resolveBranding(ws.id).catch(() => null);
+      const watermark = brand?.watermarkAiImages !== false;
+
       const uploaded = await uploadImage({
         file: `data:image/jpeg;base64,${result.imageBase64}`,
         folder: `orbit/${ws.id}`,
         publicId: `orbit-gen-${ws.id}-${Date.now()}`,
+        transformation: watermark ? watermarkTransformation() : undefined,
       });
       generatedImageUrl = uploaded.url;
     } catch (e) {

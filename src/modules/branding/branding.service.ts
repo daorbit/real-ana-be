@@ -24,7 +24,10 @@ export interface ResolvedBranding {
   poweredByLabel: string;
   /** Whether this plan may override any of the above. */
   editable: boolean;
- 
+  /** Whether Orbit's watermark is left on pictures it draws for this
+   * workspace. True unless a Pro workspace has switched it off. */
+  watermarkAiImages: boolean;
+
   defaults: { name: string; logoUrl?: string };
   /** What the workspace stored, regardless of whether its plan honours it. */
   stored: {
@@ -32,6 +35,7 @@ export interface ResolvedBranding {
     logoUrl?: string;
     accentColor?: string;
     hidePoweredBy: boolean;
+    watermarkAiImages: boolean;
   };
 }
 
@@ -44,6 +48,7 @@ export async function resolveBranding(workspaceId: string): Promise<ResolvedBran
           logoUrl?: string;
           accentColor?: string;
           hidePoweredBy?: boolean;
+          watermarkAiImages?: boolean;
         }>()
       : null,
     currentPlan(workspaceId).catch(() => null),
@@ -57,6 +62,7 @@ export async function resolveBranding(workspaceId: string): Promise<ResolvedBran
     logoUrl: stored?.logoUrl?.trim() || undefined,
     accentColor: stored?.accentColor?.trim() || undefined,
     hidePoweredBy: Boolean(stored?.hidePoweredBy),
+    watermarkAiImages: stored?.watermarkAiImages !== false,
   };
 
   return {
@@ -66,6 +72,9 @@ export async function resolveBranding(workspaceId: string): Promise<ResolvedBran
     showPoweredBy: !(editable && storedView.hidePoweredBy),
     poweredByLabel: POWERED_BY_LABEL,
     editable,
+    // A workspace that isn't Pro can't have switched it off, whatever it has
+    // stored from a previous Pro period — same rule as `showPoweredBy`.
+    watermarkAiImages: !editable || storedView.watermarkAiImages,
     defaults: { name: DEFAULT_BRAND_NAME, logoUrl: DEFAULT_BRAND_LOGO },
     stored: storedView,
   };
@@ -76,6 +85,7 @@ export interface BrandingInput {
   logoUrl?: string;
   accentColor?: string;
   hidePoweredBy?: boolean;
+  watermarkAiImages?: boolean;
 }
 
 /**
@@ -104,6 +114,7 @@ export async function saveBranding(
     else unset[field] = "";
   }
   if (input.hidePoweredBy !== undefined) set.hidePoweredBy = input.hidePoweredBy;
+  if (input.watermarkAiImages !== undefined) set.watermarkAiImages = input.watermarkAiImages;
 
   await Branding.findOneAndUpdate(
     { workspaceId },
