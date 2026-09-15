@@ -23,31 +23,6 @@ import { planLimit } from "../plan-limit.js";
 import { checkImageDataUrl, cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 
-/**
- * Orbit AI — the in-app support assistant.
- *
- * Authenticated only. The assistant answers from a product reference rather
- * than from anything account-specific, but a model call costs money on every
- * request, and an open endpoint is a bill someone else gets to run up.
- *
- * Conversations are stored, per workspace, in `modules/orbit-history` — the
- * deliberate addition this comment used to describe as a future one. Reviewing
- * what people actually ask is the best docs backlog there is, and losing a
- * thread to a refresh was the complaint that made it worth the retention
- * question.
- *
- * Two things keep that honest. The transcript still arrives from the browser on
- * every question, so storage is a record rather than the source of truth and a
- * database problem cannot stop an answer — the write is best-effort and never
- * fails the request. And it is only this route: the public assistant on the
- * marketing site stays in memory, because it is unauthenticated and there is no
- * one to show a transcript to or ask about it.
- *
- * Metered against the workspace, not the account: the Orbit tier and its
- * question quota are bought per workspace like everything else, so the routes
- * are mounted under `/api/workspaces/:wid/orbit` and every question is checked
- * and spent against that workspace's subscription.
- */
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 
@@ -60,11 +35,7 @@ const MAX_TURN_CHARS = 4000;
  * the base64 overhead and the rest of the JSON envelope. */
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
-/**
- * Cloudinary public id of the Orbit mark (light theme), pre-uploaded once to
- * the account this server points at. Left unset, generated images simply go
- * out unmarked instead of failing the request over a missing asset.
- */
+
 const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
 
 /** Cloudinary overlay transformation stamping the Orbit mark bottom-right,
@@ -72,26 +43,17 @@ const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
  *
  * A layer name with folders in it needs its `/` swapped for `:` — Cloudinary
  * reads the bare slash as the end of the transformation segment, which broke
- * the whole upload (not just the watermark) rather than merely skipping it. */
-function watermarkTransformation(): string | undefined {
+ * the whole upload (not just the watermark) rather than merely skipping it.
+ *
+ * Exported so other routes that upload an Orbit-drawn image (the post planner,
+ * for one) stamp it the same way instead of repeating this string. */
+export function watermarkTransformation(): string | undefined {
   if (!WATERMARK_PUBLIC_ID) return undefined;
   const layer = WATERMARK_PUBLIC_ID.replace(/\//g, ":");
   return `l_${layer},w_0.16,fl_relative,g_south_east,x_0.03,y_0.03,o_85`;
 }
 
-/**
- * In-process request counts, keyed by workspace.
- *
- * Deliberately not in Mongo: this is throttling, not accounting. Losing the
- * counts on restart costs one workspace a few extra questions, which is cheaper
- * than a database round trip on every message — the durable count that decides
- * what someone is entitled to is `orbitUsed` on the subscription.
- *
- * This does a different job from the quota. The quota is billing: it says how
- * many questions a cycle includes. This is abuse control: it stops a workspace
- * with two thousand questions left from spending them all in a minute through a
- * script, which is what would turn a plan into an unbounded provider bill.
- */
+
 const hits = new Map<string, number[]>();
 
 function rateLimited(key: string, limit: number): boolean {

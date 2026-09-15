@@ -16,9 +16,13 @@ import { resolveAccess, isDenied } from "../../modules/workspace/access.service.
 import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
 import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
-import { quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
+import { quantalogOrbitHost, effectiveOrbitPlan } from "../../modules/orbit/orbit-host.js";
 import { parsePlan } from "../../modules/social/plan-parse.js";
 import { readSeoPanels } from "./seo.js";
+import { cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
+import { resolveBranding } from "../../modules/branding/branding.service.js";
+import { watermarkTransformation } from "./orbit.js";
+import { planLimit } from "../plan-limit.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -31,16 +35,23 @@ const MAX_CAPTION_CHARS = 3000;
 /** The networks a caption can be written for, and how each one wants to read. */
 const CAPTION_TONES: Record<string, string> = {
   linkedin:
-    "LinkedIn: a professional but human first-person post. Three or four short paragraphs, a concrete hook in the first line, and three or four relevant hashtags at the end.",
+    "LinkedIn: a professional but human first-person post. Three or four short paragraphs, a concrete hook in the first line, a clear point in plain language, and three to five specific, relevant hashtags at the end (no generic filler tags like #business or #success).",
   facebook:
-    "Facebook: warm and conversational, two or three short paragraphs, at most two hashtags.",
+    "Facebook: warm and conversational, two or three short paragraphs, at most two specific hashtags.",
   twitter:
-    "X (Twitter): one punchy post under 240 characters including the link, at most two hashtags.",
+    "X (Twitter): one punchy post under 240 characters including the link, at most two specific hashtags.",
   whatsapp:
     "WhatsApp: a short direct message to a colleague. Two or three sentences, no hashtags.",
   telegram:
     "Telegram: brief and informative, two or three sentences, no hashtags.",
 };
+
+/** What every caption must clear, regardless of platform. */
+const CAPTION_QUALITY_RULES =
+  "Write like a specific, competent person who actually did the thing, not like ad copy. " +
+  "No generic filler phrases (\"excited to announce\", \"game-changer\", \"in today's fast-paced world\", " +
+  "\"we are thrilled\"), no empty buzzwords, no emoji unless the author used one. Be concrete: name the " +
+  "actual thing, result or detail the author gave you instead of describing it in vague terms.";
 
 /**
  * Write a share caption.
@@ -87,6 +98,7 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
         systemPrompt:
           "You write social media posts for a person posting under their own name. " +
           `Write for ${tone}\n\n` +
+          `${CAPTION_QUALITY_RULES}\n\n` +
           "Rules: write in the first person. Use only what the author told you — never invent figures, " +
           "dates, links or claims they did not give you. Do not use markdown, headings, bullet characters " +
           "or quotation marks around the post. " +
@@ -137,6 +149,7 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
       systemPrompt:
         "You write social media captions for people sharing their public web-analytics dashboard, which is hosted on a product called Quantalog. " +
         `Write for ${tone}\n\n` +
+        `${CAPTION_QUALITY_RULES}\n\n` +
         "Rules: write in the first person as the dashboard's owner. Use only the facts given — never invent figures, dates or claims. " +
         "Include the dashboard URL exactly as provided, on its own line. Do not use markdown, headings, bullet characters or quotation marks around the caption. " +
         "Return the caption in the `reply` field and an empty `suggestions` array.",
@@ -224,6 +237,7 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
       systemPrompt:
         "You help a person schedule a social media post that will go out under their own name. " +
         `Write any caption for ${tone}\n\n` +
+        `${CAPTION_QUALITY_RULES}\n\n` +
         "Put a single JSON object in the `reply` field and nothing else — no markdown, no code fences, no prose " +
         "around it. Its keys are exactly:\n" +
         '  "message": string — what you say to the author. One short question when something is still open, or a ' +
@@ -267,40 +281,10 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         : "llama-fast",
 
  
-      // Models measured as unusable for *this* prompt. They stay in the chat
-      // panel's chain, where they are fine; the difference is that this route
-      // needs a JSON object back and has someone waiting on it.
-      //
-      //   gemini-flash  503s while overloaded, and leads the chain — so it
-      //                 burned the budget before anything else ran
-      //   gpt-oss       returns an empty completion however large its token
-      //                 budget; it reasons and then writes nothing
-      //   gemma         the free pool is rate-limited upstream and answers 429
-      //                 on most attempts. Not the same model as gemini-flash,
-      //                 which is why excluding that one never stopped this.
-      // Everything that is not a Llama on Cloudflare. Measured on this prompt,
-      // 2026-08-28: the Llamas answer in 1-4s with a parseable object every
-      // time, while the OpenRouter models take 17-31s (deepseek), time out
-      // (nemotron, qwen), answer 429 from a rate-limited free pool (gemma), or
-      // return an empty completion (gpt-oss). None of them earn a turn here
-      // when the fast path is an order of magnitude quicker and more reliable.
-      //
-      // They all stay in the chat panel's chain, which has different needs:
-      // there the answer is prose, a slower model is affordable, and DeepSeek
-      // is genuinely the better writer.
+
       exclude: ["gemini-flash", "gpt-oss", "gemma", "deepseek", "nemotron", "north-mini"],
 
- 
-      // Both models in this chain answer in 1-4s, so the old 72s budget was
-      // sized for a fallback that no longer runs. 15s per attempt is several
-      // times the slowest run measured, which leaves room for a bad day
-      // without making someone watch a spinner for a minute when a model
-      // genuinely hangs.
-      // This route asked the model for a plan object, not for Orbit's
-      // `{reply, suggestions}` envelope — so the raw text is what it wants.
-      // Without this the envelope check rejects a correctly-formed plan for
-      // having no `reply` key, and every model in the chain is scored as
-      // having returned "an unusable answer".
+
       rawOutput: true,
 
       budgetMs: 32_000,
@@ -368,6 +352,74 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
     // silently skip February. The composer's own picker stops at 28 too.
     dayOfMonth: int(parsed.dayOfMonth, 1, 28, 1),
   });
+});
+
+/**
+ * Draw a picture for the post being planned.
+ *
+ * Same Cloudflare Flux call and Cloudinary upload/watermark pipeline as the
+ * main Orbit assistant's "draw a picture" mode — this just puts it behind the
+ * planner's own admin-only access check instead of the support chat's.
+ */
+router.post("/:wid/share/plan-image", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Image generation is not available on this server." });
+  }
+  if (!cloudinaryConfigured()) {
+    return res.status(503).json({ error: "Image uploads are not configured on this server." });
+  }
+
+  const plan = await effectiveOrbitPlan(ws.id);
+  if (!plan.imageGeneration) {
+    return planLimit(res, "Drawing pictures is part of Orbit Pro.", {
+      kind: "orbit_image_generation",
+    }, "plan_required");
+  }
+
+  const prompt = String(req.body?.prompt ?? "").trim().slice(0, 800);
+  if (!prompt) return res.status(400).json({ error: "Say what to draw." });
+
+  const result = await askOrbit(prompt, {
+    generateImage: true,
+    host: quantalogOrbitHost,
+    tenantId: ws.id,
+  });
+
+  if (!result.ok) {
+    if (result.quotaExceeded) {
+      return planLimit(res, result.error, {
+        kind: "orbit_questions",
+        label: "Orbit questions",
+        quota: plan.monthlyQuota,
+      });
+    }
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  if (!result.imageBase64) {
+    return res.status(502).json({ error: "Orbit could not draw that. Try again." });
+  }
+
+  try {
+    const brand = await resolveBranding(ws.id).catch(() => null);
+    const watermark = brand?.watermarkAiImages !== false;
+
+    const uploaded = await uploadImage({
+      file: `data:image/jpeg;base64,${result.imageBase64}`,
+      folder: `orbit/${ws.id}`,
+      publicId: `social-plan-gen-${ws.id}-${Date.now()}`,
+      transformation: watermark ? watermarkTransformation() : undefined,
+    });
+
+    res.json({ imageUrl: uploaded.url });
+  } catch (e) {
+    console.error("[social] generated image upload failed:", (e as Error).message);
+    res.status(502).json({ error: "That image could not be saved. Try again." });
+  }
 });
 
 export default router;
