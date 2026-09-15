@@ -171,6 +171,13 @@ export type OrbitAnswer = {
   /** A generated picture, base64 with no `data:` prefix — set only when the
    * call asked for one. */
   imageBase64?: string;
+  /**
+   * The tenant's figures as data, set only when this question pulled the
+   * data digest into the prompt (the same condition `wantsData` gates below).
+   * For the client to render a table under the prose instead of leaving the
+   * numbers to be read out of it.
+   */
+  dataDigest?: unknown;
 };
 
 export type OrbitResult =
@@ -395,6 +402,10 @@ export async function askOrbit(
   const pages = docIndex();
 
   let prompt = options.systemPrompt ?? orbitPromptFor(knowledge, pages);
+  // Set only when this question actually pulled the digest in below, and
+  // carried through onto the returned answer so the panel can render it as a
+  // table alongside the prose.
+  let dataDigest: unknown;
   // Only the assistant's own prompt takes the tenant's figures. A caller that
   // brought its own instructions also brought its own data in the question.
   //
@@ -414,6 +425,12 @@ export async function askOrbit(
         knowledge,
         pages,
       );
+      // Best-effort and independent of the text digest above: a host may
+      // implement one without the other, and a failure here should not cost
+      // the question its prose answer.
+      if (host.dataDigest) {
+        dataDigest = await host.dataDigest(tenantId).catch(() => undefined);
+      }
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);
     }
@@ -489,7 +506,7 @@ export async function askOrbit(
             console.error("[orbit] quota spend failed:", (e as Error).message);
           }
         }
-        return { ok: true, ...parsed, model: model.id, modelLabel: model.label };
+        return { ok: true, ...parsed, model: model.id, modelLabel: model.label, dataDigest };
       }
       // A 200 whose body could not be read as an answer. Logged, or a model
       // that always answers unusably looks identical to one that is down.

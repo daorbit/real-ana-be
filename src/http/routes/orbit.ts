@@ -374,6 +374,10 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     model: result.model,
     modelLabel: result.modelLabel,
     imageUrl: generatedImageUrl,
+    // Not persisted to history — recomputed live each time the digest is
+    // wanted, so a table stays fresh rather than showing figures as they
+    // stood when a saved conversation was first answered.
+    dataDigest: result.dataDigest,
     /** The thread this landed in. Null when it could not be stored. */
     conversationId: savedId,
     // Sent back so the panel can count down without a second round trip. Read

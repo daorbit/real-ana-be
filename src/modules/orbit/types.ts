@@ -108,4 +108,16 @@ export type OrbitHost = {
    * places it in the prompt.
    */
   dataSummary?(tenantId: string): Promise<string>;
+
+  /**
+   * The same figures as `dataSummary`, as data rather than prose, for the
+   * client to render as a table alongside the model's answer.
+   *
+   * Optional and separate from `dataSummary`: a host with nothing to show — or
+   * one that would rather the answer stand alone — can implement one without
+   * the other. Orbit never reads this itself; it is only carried through on
+   * `OrbitAnswer.dataDigest` when the call that produced an answer also fetched
+   * it.
+   */
+  dataDigest?(tenantId: string): Promise<unknown>;
 };

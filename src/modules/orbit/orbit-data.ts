@@ -44,6 +44,37 @@ function topList(label: string, rows: Row[] | undefined): string {
   return `${label}: ${top.map((r) => `${r.key} (${r.count})`).join(", ")}`;
 }
 
+/**
+ * The same 7-day figures as `workspaceDataSummary`'s text, as data instead of
+ * prose.
+ *
+ * For the chat panel to render as a stat row/table under an answer that used
+ * them — a person scanning "Visitors: 412 (+8%)" in a paragraph has to parse
+ * it back out; showing the same numbers as a small table saves that step.
+ * Still only the aggregates the text digest already carries: nothing here
+ * that isn't also being sent to the model.
+ */
+export type OrbitDataDigestSite = {
+  domain: string;
+  visitors: number;
+  visitorsChangePct: number | null;
+  pageviews: number;
+  pageviewsChangePct: number | null;
+  sessions: number;
+  sessionsChangePct: number | null;
+  bounceRate: number;
+  bounceRateChangePct: number | null;
+  live: number;
+  topPages: Row[];
+  topReferrers: Row[];
+  countries: Row[];
+  devices: Row[];
+};
+
+export type OrbitDataDigest = {
+  sites: OrbitDataDigestSite[];
+};
+
 /** A delta as a signed percentage, or nothing when there is no prior period to compare. */
 function change(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "";
@@ -170,4 +201,45 @@ export async function workspaceDataSummary(workspaceId: string): Promise<string>
   }
 
   return blocks.join("\n\n");
+}
+
+/**
+ * The structured counterpart to `workspaceDataSummary`, for rendering the
+ * same 7-day figures as a table in the chat panel instead of re-parsing them
+ * out of the prose sent to the model.
+ *
+ * A second, separate fetch rather than returned alongside the text: this
+ * runs only when a question was actually answered from the digest (`ask.ts`
+ * calls it after `wantsData` and a successful answer), while the text is
+ * built unconditionally inside the prompt path. Keeping them apart means the
+ * panel never pays for a table nobody asked a data question toward.
+ */
+export async function workspaceDataDigest(workspaceId: string): Promise<OrbitDataDigest> {
+  const sites = await Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES);
+  if (!sites.length) return { sites: [] };
+
+  const digest: OrbitDataDigestSite[] = [];
+
+  for (const site of sites) {
+    const stats = await computeStats([site.siteId as string], "7d");
+
+    digest.push({
+      domain: site.domain as string,
+      visitors: stats.visitors,
+      visitorsChangePct: stats.deltas?.visitors ?? null,
+      pageviews: stats.pageviews,
+      pageviewsChangePct: stats.deltas?.pageviews ?? null,
+      sessions: stats.sessions,
+      sessionsChangePct: stats.deltas?.sessions ?? null,
+      bounceRate: stats.bounceRate,
+      bounceRateChangePct: stats.deltas?.bounceRate ?? null,
+      live: stats.live,
+      topPages: ((stats.topPages as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
+      topReferrers: ((stats.topReferrers as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
+      countries: ((stats.countries as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
+      devices: ((stats.devices as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
+    });
+  }
+
+  return { sites: digest };
 }

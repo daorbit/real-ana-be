@@ -18,7 +18,7 @@ import {
 import { Subscription } from "../billing/models/Subscription.js";
 import { getPlanCatalogEntry } from "../billing/plans.catalog.js";
 import { hasQuota, spendQuota } from "../billing/quota.service.js";
-import { workspaceDataSummary } from "./orbit-data.js";
+import { workspaceDataDigest, workspaceDataSummary } from "./orbit-data.js";
 
 /**
  * The Orbit tier each analytics plan includes.
@@ -117,5 +117,9 @@ export const quantalogOrbitHost: OrbitHost = {
 
   dataSummary(workspaceId) {
     return workspaceDataSummary(workspaceId);
+  },
+
+  dataDigest(workspaceId) {
+    return workspaceDataDigest(workspaceId);
   },
 };
