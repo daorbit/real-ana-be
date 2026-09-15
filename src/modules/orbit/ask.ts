@@ -1,7 +1,7 @@
 
 import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
 import { relevantKnowledge, selectedHeadings } from "./retrieval.js";
-import { cloudflareChat, cloudflareVisionChat } from "./cloudflare-ai.js";
+import { cloudflareChat, cloudflareVisionChat, cloudflareGenerateImage } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
 import {
   availableModels,
@@ -73,6 +73,19 @@ const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 
 /** Room for a description of an image plus a few follow-up sentences. */
 const VISION_MAX_TOKENS = 1024;
+
+/**
+ * The one model that draws a picture.
+ *
+ * Same treatment as `VISION_MODEL`: not in `ORBIT_MODELS`, never fallen back
+ * to or from, reached only through `askOrbitGenerateImage` when a call is
+ * explicitly asking to generate rather than to chat.
+ */
+const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
+
+/** The default step count. Higher looks better and costs more of the shared
+ * daily neuron budget; four is FLUX Schnell's own recommended default. */
+const IMAGE_STEPS = 4;
 
 /**
  * Phrases that mean "about my own numbers" rather than "about the product".
@@ -155,6 +168,9 @@ export type OrbitAnswer = {
   /** Which model answered. The client shows it, so a fallback is visible. */
   model: string;
   modelLabel: string;
+  /** A generated picture, base64 with no `data:` prefix — set only when the
+   * call asked for one. */
+  imageBase64?: string;
 };
 
 export type OrbitResult =
@@ -203,6 +219,15 @@ export type AskOptions = {
    * there is nothing to pick and nothing to fall back to.
    */
   image?: string;
+  /**
+   * Draw a picture from `question` instead of answering it.
+   *
+   * Its own path, ahead of everything else in `askOrbit` — same deal as
+   * `image`, a different call entirely rather than a flag threaded through
+   * the text chain. Ignored if `image` is also set; a call is read *or*
+   * drawn, never both.
+   */
+  generateImage?: boolean;
   /**
    * The product embedding Orbit. Supplies the entitlement and owns quota.
    *
@@ -294,6 +319,7 @@ export async function askOrbit(
   // chain, no product reference, no history-driven retrieval — so it is
   // handed off before any of the text-path setup below even runs.
   if (options.image) return askOrbitVision(question, options.image, options);
+  if (options.generateImage) return askOrbitGenerateImage(question, options);
 
   const {
     modelId,
@@ -520,6 +546,77 @@ async function askOrbitVision(
     suggestions: [],
     model: "llama-vision",
     modelLabel: "Llama 3.2 Vision",
+  };
+}
+
+/**
+ * The image-generation path. Same quota contract as the other two, one call,
+ * no fallback — the reply here isn't prose at all, it's the picture itself,
+ * carried on `imageBase64` with `reply` left as a short caption.
+ */
+async function askOrbitGenerateImage(
+  question: string,
+  options: AskOptions,
+): Promise<OrbitResult> {
+  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS } = options;
+
+  if (!question.trim()) {
+    return { ok: false, status: 400, error: "Say what to draw." };
+  }
+
+  if (host && tenantId && !(await host.hasQuota(tenantId))) {
+    const entitlement = await host.entitlement(tenantId);
+    return {
+      ok: false,
+      status: 402,
+      quotaExceeded: true,
+      error: entitlement
+        ? `You have used all ${entitlement.monthlyQuota} questions included this period. Buy a question pack, or upgrade.`
+        : "You are out of questions for this period.",
+    };
+  }
+
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), Math.min(TIMEOUT_MS, budgetMs));
+
+  let raw;
+  try {
+    raw = await cloudflareGenerateImage({
+      model: IMAGE_MODEL,
+      prompt: question.trim(),
+      steps: IMAGE_STEPS,
+      signal: abort.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!raw.ok) {
+    console.error(`[orbit] image generation failed (${raw.status}): ${raw.detail.slice(0, 300)}`);
+    return raw.status === 429
+      ? { ok: false, error: "Orbit is busy right now. Try again in a moment.", status: 429 }
+      : {
+          ok: false,
+          error: "Orbit could not draw that. Try again, or use Help & support.",
+          status: 502,
+        };
+  }
+
+  if (host && tenantId) {
+    try {
+      await host.spendQuota(tenantId);
+    } catch (e) {
+      console.error("[orbit] quota spend failed:", (e as Error).message);
+    }
+  }
+
+  return {
+    ok: true,
+    reply: "",
+    suggestions: [],
+    model: "flux-schnell",
+    modelLabel: "FLUX",
+    imageBase64: raw.image,
   };
 }
 

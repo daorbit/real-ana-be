@@ -20,6 +20,17 @@ export interface CloudflareVisionRequest {
   signal?: AbortSignal;
 }
 
+export interface CloudflareImageGenRequest {
+  model: string;
+  prompt: string;
+  steps?: number;
+  signal?: AbortSignal;
+}
+
+export type CloudflareImageGenResult =
+  | { ok: true; /** Base64, no prefix. */ image: string }
+  | { ok: false; status: number; detail: string };
+
  
 export function cloudflareReady(): boolean {
   return Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
@@ -146,7 +157,64 @@ export async function cloudflareVisionChat(
   }
 }
 
- 
+/**
+ * Cloudflare's text-to-image models — a third request shape again:
+ * `{prompt, steps}` in, a base64 image out under `result.image`, not
+ * `result.response`.
+ */
+export async function cloudflareGenerateImage(
+  req: CloudflareImageGenRequest,
+): Promise<CloudflareImageGenResult> {
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+
+  if (!token) return { ok: false, status: 503, detail: "no CLOUDFLARE_API_TOKEN" };
+  if (!account) return { ok: false, status: 503, detail: "no CLOUDFLARE_ACCOUNT_ID" };
+
+  const abort = new AbortController();
+  const timer = req.signal
+    ? null
+    : setTimeout(() => abort.abort(), 30_000);
+
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${req.model}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt: req.prompt, steps: req.steps }),
+        signal: req.signal ?? abort.signal,
+      },
+    );
+
+    const body = await res.text();
+
+    if (!res.ok) {
+      return { ok: false, status: res.status, detail: body.slice(0, 300) };
+    }
+
+    const data = JSON.parse(body) as { result?: { image?: string } };
+    const image = data.result?.image;
+
+    if (!image) return { ok: false, status: 502, detail: "empty image" };
+
+    return { ok: true, image };
+  } catch (e) {
+    const aborted = e instanceof Error && e.name === "AbortError";
+    return {
+      ok: false,
+      status: aborted ? 504 : 502,
+      detail: e instanceof Error ? e.message : "request failed",
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+
 export type WorkersAiUsage = {
   neuronsToday: number;
   dailyLimit: number;
