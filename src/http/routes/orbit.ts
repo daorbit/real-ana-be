@@ -222,8 +222,18 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     if (!question) question = "What's in this image?";
   }
 
+  // Explicit rather than inferred from the question's wording — the same
+  // reasoning as the composer's own toggle: a model guessing "draw a plan
+  // for my week" is a picture request would be wrong far more often than it
+  // would be a helpful shortcut. Meaningless alongside an attached image —
+  // reading and drawing are mutually exclusive — so the toggle is ignored
+  // rather than erroring, the same tolerance an unrecognised `model` gets.
+  const generateImage = Boolean(req.body?.generateImage) && !rawImage;
+
   if (!question) {
-    return res.status(400).json({ error: "Ask a question first." });
+    return res.status(400).json({
+      error: generateImage ? "Say what to draw." : "Ask a question first.",
+    });
   }
 
   // The chosen model is a preference, not a instruction: an unknown id falls
@@ -244,12 +254,13 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // for every embedder rather than depending on each route remembering it. A
   // 402 comes back here as an ordinary failed result.
   const result = await askOrbit(question, {
-    // An image turn carries no conversation history into the vision model —
-    // `askOrbit` defers to the image path before `history`/`modelId` are
-    // even read, so passing them here is harmless but unused.
+    // An image turn — reading or drawing — carries no conversation history
+    // and ignores `modelId`; `askOrbit` defers to that path before either is
+    // read, so passing them here is harmless but unused.
     history: readHistory(req.body?.history, plan.maxHistoryTurns),
     modelId,
     image: rawImage,
+    generateImage,
     host: quantalogOrbitHost,
     tenantId: ws.id,
   });
@@ -289,6 +300,26 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     return res.status(result.status).json({ error: result.error });
   }
 
+  // A drawn image comes back as bytes, not a URL — uploaded here rather than
+  // handed to the browser raw, both so a saved thread has something to show
+  // later and so the response carries an ordinary URL like every other image
+  // in the app, not a multi-megabyte data URL on every answer.
+  let generatedImageUrl: string | undefined;
+  if (result.imageBase64) {
+    try {
+      const uploaded = await uploadImage({
+        file: `data:image/jpeg;base64,${result.imageBase64}`,
+        folder: `orbit/${ws.id}`,
+        publicId: `orbit-gen-${ws.id}-${Date.now()}`,
+      });
+      generatedImageUrl = uploaded.url;
+    } catch (e) {
+      console.error("[orbit] generated image upload failed:", (e as Error).message);
+      // The answer still goes out — a picture that couldn't be saved is
+      // better shown once than not shown at all.
+    }
+  }
+
   // Awaited, unlike the failure path, because the response carries the id back
   // — the browser needs it to put the next question in the same thread. It
   // never throws: `recordExchange` returns null on any storage problem and the
@@ -306,6 +337,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       model: result.model,
       modelLabel: result.modelLabel,
       latencyMs: Date.now() - startedAt,
+      imageUrl: generatedImageUrl,
     },
   });
 
@@ -316,6 +348,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     suggestions: result.suggestions,
     model: result.model,
     modelLabel: result.modelLabel,
+    imageUrl: generatedImageUrl,
     /** The thread this landed in. Null when it could not be stored. */
     conversationId: savedId,
     // Sent back so the panel can count down without a second round trip. Read

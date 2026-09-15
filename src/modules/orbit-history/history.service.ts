@@ -36,6 +36,8 @@ export type RecordedTurn = {
   latencyMs?: number;
   /** True when `reply` is an error message rather than an answer. */
   failed?: boolean;
+  /** A generated image's Cloudinary URL, on an assistant turn that drew one. */
+  imageUrl?: string;
 };
 
 function titleFrom(question: string): string {
@@ -130,6 +132,7 @@ export async function recordExchange(args: {
         seq: seq + 1,
         role: "assistant",
         content: turn.reply.slice(0, MAX_CONTENT_CHARS),
+        imageUrl: turn.imageUrl || undefined,
         suggestions: cleanSuggestions(turn.suggestions),
         failed: Boolean(turn.failed),
         model: turn.model ?? "",
