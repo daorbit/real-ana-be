@@ -3,7 +3,9 @@ import type { Response } from "express";
 
 export interface PlanLimitInfo {
   kind: string;
-  label: string;
+  /** The cap's name, for a dialog heading. Omitted by a `plan_required`
+   * refusal: nothing was used up, so there is no limit to name. */
+  label?: string;
   used?: number;
   quota?: number;
   plan?: string;

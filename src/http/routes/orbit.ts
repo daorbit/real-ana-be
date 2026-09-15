@@ -258,7 +258,6 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   if (generateImage && !plan.imageGeneration) {
     return planLimit(res, "Drawing pictures is part of Orbit Pro.", {
       kind: "orbit_image_generation",
-      label: "Orbit image generation",
     }, "plan_required");
   }
 
