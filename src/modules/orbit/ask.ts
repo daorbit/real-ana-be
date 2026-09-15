@@ -612,7 +612,8 @@ async function askOrbitGenerateImage(
 
   return {
     ok: true,
-    reply: "",
+
+    reply: "Here's what I drew.",
     suggestions: [],
     model: "flux-schnell",
     modelLabel: "FLUX",
