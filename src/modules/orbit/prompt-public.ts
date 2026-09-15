@@ -1,6 +1,8 @@
  
 
-import { ORBIT_KNOWLEDGE } from "./prompt.js";
+import { orbitKnowledge } from "./corpus.js";
+import { DOC_INDEX_PLACEHOLDER } from "./prompt.js";
+import { docIndex } from "./retrieval.js";
 
  
 export const PUBLIC_ORBIT_SUGGESTIONS = [
@@ -64,20 +66,7 @@ How to answer:
 Documentation index — the only doc pages you may link to. Each is
 https://quantalog.daorbit.in/docs/<slug>:
 
-- overview — what Quantalog is, first steps
-- tracking — installing the snippet, frameworks, SPA routing
-- script-options — tracker configuration
-- custom-events — sending your own events
-- funnels — funnels and drop-off
-- conversions — goals and conversions
-- retention — retention cohorts
-- email-reports — scheduled email and WhatsApp reports
-- scheduled-posts — scheduling LinkedIn posts
-- seo — SEO audits, crawls, competitors
-- platform-api — the multi-tenant Platform API
-- api-reference — REST endpoints and API keys
-- privacy — cookieless tracking, GDPR, data retention
-- billing — plans, quotas, add-ons
+${DOC_INDEX_PLACEHOLDER}
 `.trim();
 
  
@@ -94,11 +83,13 @@ export type PageContext = {
 };
 
 export function orbitPublicPromptFor(knowledge: string, page?: PageContext): string {
-  const base = `${ORBIT_PUBLIC_SYSTEM_PROMPT}
+  const rules = ORBIT_PUBLIC_SYSTEM_PROMPT.replace(DOC_INDEX_PLACEHOLDER, docIndex());
+
+  const base = `${rules}
 
 Product reference:
 
-${(knowledge || ORBIT_KNOWLEDGE).trim()}`;
+${(knowledge || orbitKnowledge()).trim()}`;
 
   if (!page?.text.trim()) return base;
 

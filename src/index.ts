@@ -2,6 +2,7 @@ import "dotenv/config";
 import app from "./app.js";
 import { connectDB } from "./infra/db/connection.js";
 import { startFxCron } from "./modules/billing/fx-cron.js";
+import { primeOrbitKnowledge } from "./modules/orbit/corpus.js";
 
 const PORT = process.env.PORT ?? 4000;
 
@@ -10,6 +11,12 @@ async function start() {
   // After the connection, never before: a tick that fires against no DB
   // fails for a reason that has nothing to do with exchange rates.
   startFxCron();
+
+  // Fetched, not awaited: the docs are Orbit's product reference, and a slow or
+  // unreachable docs site must delay every other route's availability by
+  // nothing. Until it lands, Orbit answers from its compiled-in stub.
+  primeOrbitKnowledge();
+
   app.listen(PORT, () => {
     console.log(`Backend running on http://localhost:${PORT}`);
   });

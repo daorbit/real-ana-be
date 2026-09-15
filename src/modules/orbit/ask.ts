@@ -1,6 +1,6 @@
 
 import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
-import { relevantKnowledge, selectedHeadings } from "./retrieval.js";
+import { docIndex, relevantKnowledge, selectedHeadings } from "./retrieval.js";
 import { cloudflareChat, cloudflareVisionChat, cloudflareGenerateImage } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
 import {
@@ -392,7 +392,9 @@ export async function askOrbit(
     );
   }
 
-  let prompt = options.systemPrompt ?? orbitPromptFor(knowledge);
+  const pages = docIndex();
+
+  let prompt = options.systemPrompt ?? orbitPromptFor(knowledge, pages);
   // Only the assistant's own prompt takes the tenant's figures. A caller that
   // brought its own instructions also brought its own data in the question.
   //
@@ -407,7 +409,11 @@ export async function askOrbit(
     wantsData(question)
   ) {
     try {
-      prompt = orbitPromptWithData(await host.dataSummary(tenantId), knowledge);
+      prompt = orbitPromptWithData(
+        await host.dataSummary(tenantId),
+        knowledge,
+        pages,
+      );
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);
     }
