@@ -63,6 +63,8 @@ app.use("/api/social/posts", express.json({ limit: "12mb" }));
 app.use("/api/workspaces/:wid/media", express.json({ limit: "40mb" }));
 // An Orbit question can carry an attached image as a base64 data URL.
 app.use("/api/workspaces/:wid/orbit/ask", express.json({ limit: "8mb" }));
+// A form-generation request can carry a photo of the form being recreated.
+app.use("/api/internal/forms/generate/:workspaceId", express.json({ limit: "8mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.

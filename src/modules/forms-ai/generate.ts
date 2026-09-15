@@ -1,4 +1,4 @@
-import { cloudflareChat, cloudflareReady } from "../orbit/cloudflare-ai.js";
+import { cloudflareChat, cloudflareReady, cloudflareVisionChat } from "../orbit/cloudflare-ai.js";
 import {
   GENERATABLE_FIELD_TYPES,
   OPTION_FIELD_TYPES,
@@ -39,6 +39,21 @@ const MODELS = [
 
 /** Per-attempt budget. Two attempts still have to fit inside a request. */
 const ATTEMPT_TIMEOUT_MS = 20_000;
+
+/**
+ * The one model that reads an attached photo of a form.
+ *
+ * Not tried as a fallback for the ordinary two-model chain above and vice
+ * versa: it has a different request shape entirely (`{image, prompt}`, no
+ * `messages`, no `response_format`), so it is its own path in `generateForm`
+ * rather than a third entry in `MODELS`.
+ */
+const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
+
+/** Vision answers run longer — describing a busy form is more tokens than
+ * writing one from a sentence. */
+const VISION_ATTEMPT_TIMEOUT_MS = 30_000;
+const VISION_MAX_TOKENS = 3000;
 
 const OPTION_TYPES = [...OPTION_FIELD_TYPES].join(", ");
 
@@ -200,13 +215,25 @@ export async function generateForm(
    * where the model has a free hand.
    */
   mode: GenerateMode = "create",
+  /**
+   * A photo of a paper or existing form to build from — "create this same
+   * form", "create this form with an email field added". Base64, no
+   * `data:image/...;base64,` prefix.
+   *
+   * Routes the whole call to the vision model instead of the two-model text
+   * chain: the two speak different request shapes entirely, and a photo is
+   * read once, not fallen back on.
+   */
+  image?: string,
 ): Promise<GenerateResult> {
   if (!cloudflareReady()) {
     return { ok: false, status: 503, error: "form generation is not configured" };
   }
 
   const asked = prompt.trim().slice(0, MAX_PROMPT_CHARS);
-  if (!asked) return { ok: false, status: 400, error: "prompt required" };
+  if (!asked && !image) return { ok: false, status: 400, error: "prompt required" };
+
+  if (image) return generateFormFromImage(asked, image, previous, mode);
 
   const messages = [
     { role: "system", content: systemPrompt() },
@@ -269,4 +296,72 @@ export async function generateForm(
 
   console.error("[forms-ai] generation failed —", lastDetail);
   return { ok: false, status: 502, error: "could not generate a form from that prompt" };
+}
+
+/**
+ * Build a form from a photo — of a paper form, a screenshot of one, a
+ * whiteboard sketch — with an optional typed instruction alongside it
+ * ("create this same form", "create this form with an email field added").
+ *
+ * One call, no fallback chain: there is exactly one vision model, and its
+ * REST endpoint takes a single `prompt` string rather than a `messages`
+ * array, so the system instructions, the worked example, and the user's own
+ * request are all folded into one block of text rather than kept as
+ * separate turns the way the text path does.
+ */
+async function generateFormFromImage(
+  asked: string,
+  image: string,
+  previous: GeneratedForm | undefined,
+  mode: GenerateMode,
+): Promise<GenerateResult> {
+  const instruction = asked || "Create this form.";
+
+  const prompt = [
+    systemPrompt(),
+    "",
+    `Example — asked "${EXAMPLE_USER}", the reply was:`,
+    EXAMPLE_REPLY,
+    "",
+    "Now look at the attached image. It shows a form — on paper, on a screen, "
+      + "or sketched — and the fields, labels, options and layout in it are what "
+      + "you are building from. Read every field visible in the image, in the "
+      + "order they appear.",
+    previous
+      ? "Here is the form already in the builder, as JSON:\n"
+          + JSON.stringify(previous)
+          + "\n\nThe request below is a change to it, not a new form — keep every "
+          + "field already there, in the same order and wording, unless the "
+          + "request or the image is explicitly about that field."
+      : "",
+    `Request: ${instruction}`,
+    "",
+    "Reply with one JSON object in the shape above and nothing else.",
+  ].filter(Boolean).join("\n");
+
+  const res = await cloudflareVisionChat({
+    model: VISION_MODEL,
+    image,
+    prompt,
+    maxTokens: VISION_MAX_TOKENS,
+    signal: AbortSignal.timeout(VISION_ATTEMPT_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    console.error(`[forms-ai] vision generation failed (${res.status}): ${res.detail.slice(0, 300)}`);
+    return { ok: false, status: 502, error: "could not read that image" };
+  }
+
+  const parsed = parseGeneratedForm(extractJson(res.text));
+  if (!parsed.ok) {
+    console.error("[forms-ai] vision generation unparseable —", parsed.reason);
+    return { ok: false, status: 502, error: "could not build a form from that image" };
+  }
+
+  const form =
+    previous && mode === "edit"
+      ? reconcileRevision(previous, parsed.form, instruction)
+      : parsed.form;
+
+  return { ok: true, form, model: VISION_MODEL };
 }

@@ -10,9 +10,13 @@ import { generateEdit, type EditSnapshot } from "../../modules/forms-ai/edit.js"
 import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 
 
 const router = Router();
+
+/** Matches the body-size override for this route in `app.ts`. */
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
 function authorize(req: Request, res: Response): boolean {
   const secret = process.env.FORMS_SERVICE_SECRET;
@@ -60,7 +64,21 @@ router.post(
     }
 
     const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
-    if (!prompt.trim()) return res.status(400).json({ error: "prompt required" });
+
+    const rawImage = typeof req.body?.image === "string" ? req.body.image : undefined;
+    let image: string | undefined;
+
+    if (rawImage) {
+      const checked = checkImageDataUrl(rawImage, MAX_IMAGE_BYTES);
+      if ("error" in checked) return res.status(400).json({ error: checked.error });
+      // The model reads the bytes directly — no upload, nothing to store.
+      // Unlike Orbit's chat history, a generated form has no transcript that
+      // would otherwise show a question about a picture that has vanished.
+      const comma = rawImage.indexOf(",");
+      image = comma === -1 ? rawImage : rawImage.slice(comma + 1);
+    }
+
+    if (!prompt.trim() && !image) return res.status(400).json({ error: "prompt required" });
 
     if (!(await hasQuota(workspaceId, "orbit"))) {
       return res.status(402).json({
@@ -81,6 +99,7 @@ router.post(
       prompt,
       prior?.ok ? prior.form : undefined,
       mode,
+      image,
     );
     if (!result.ok) {
       return res.status(result.status).json({ error: result.error });
