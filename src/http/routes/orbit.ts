@@ -20,6 +20,7 @@ import {
   renameConversation,
 } from "../../modules/orbit-history/index.js";
 import { planLimit } from "../plan-limit.js";
+import { checkImageDataUrl, cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
 
 /**
  * Orbit AI — the in-app support assistant.
@@ -53,6 +54,10 @@ const WINDOW_MS = 60 * 60 * 1000;
 
 /** Per past turn. Long enough for a real answer, short enough to bound the prompt. */
 const MAX_TURN_CHARS = 4000;
+
+/** Matches the body-size override for this route in `app.ts`, with room for
+ * the base64 overhead and the rest of the JSON envelope. */
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
 /**
  * In-process request counts, keyed by workspace.
@@ -182,7 +187,41 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     });
   }
 
-  const question = String(req.body?.question ?? "").trim().slice(0, plan.maxQuestionChars);
+  let question = String(req.body?.question ?? "").trim().slice(0, plan.maxQuestionChars);
+
+  // An attachment, validated and uploaded before the model is asked anything
+  // — a bad or oversized image should fail fast rather than after a paid
+  // model call. Cloudinary is used for storage only, not for the call
+  // itself: Cloudflare reads the original bytes directly, no round trip
+  // through a hosted URL needed.
+  const rawImage = typeof req.body?.image === "string" ? req.body.image : undefined;
+  let imageUrl: string | undefined;
+
+  if (rawImage) {
+    if (!cloudinaryConfigured()) {
+      return res.status(503).json({ error: "Image uploads are not configured on this server." });
+    }
+
+    const checked = checkImageDataUrl(rawImage, MAX_IMAGE_BYTES);
+    if ("error" in checked) return res.status(400).json({ error: checked.error });
+
+    try {
+      const uploaded = await uploadImage({
+        file: rawImage,
+        folder: `orbit/${ws.id}`,
+        publicId: `orbit-${ws.id}-${Date.now()}`,
+      });
+      imageUrl = uploaded.url;
+    } catch (e) {
+      console.error("[orbit] image upload failed:", (e as Error).message);
+      return res.status(502).json({ error: "That image could not be uploaded. Try again." });
+    }
+
+    // Sending an image with nothing typed is a valid way to ask "what is
+    // this" — the model still needs a prompt, so one stands in for it.
+    if (!question) question = "What's in this image?";
+  }
+
   if (!question) {
     return res.status(400).json({ error: "Ask a question first." });
   }
@@ -205,8 +244,12 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // for every embedder rather than depending on each route remembering it. A
   // 402 comes back here as an ordinary failed result.
   const result = await askOrbit(question, {
+    // An image turn carries no conversation history into the vision model —
+    // `askOrbit` defers to the image path before `history`/`modelId` are
+    // even read, so passing them here is harmless but unused.
     history: readHistory(req.body?.history, plan.maxHistoryTurns),
     modelId,
+    image: rawImage,
     host: quantalogOrbitHost,
     tenantId: ws.id,
   });
@@ -234,6 +277,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
         userId: req.userId!,
         conversationId,
         question,
+        imageUrl,
         turn: {
           reply: result.error,
           failed: true,
@@ -255,6 +299,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     userId: req.userId!,
     conversationId,
     question,
+    imageUrl,
     turn: {
       reply: result.reply,
       suggestions: result.suggestions,

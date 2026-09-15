@@ -104,9 +104,12 @@ export async function recordExchange(args: {
   userId: string;
   conversationId?: string;
   question: string;
+  /** A user-attached image, already uploaded — its Cloudinary URL, not the
+   * data URL that was sent to the model. */
+  imageUrl?: string;
   turn: RecordedTurn;
 }): Promise<string | null> {
-  const { workspaceId, userId, conversationId, question, turn } = args;
+  const { workspaceId, userId, conversationId, question, imageUrl, turn } = args;
 
   try {
     const convo = await openConversation(workspaceId, userId, conversationId, question);
@@ -119,6 +122,7 @@ export async function recordExchange(args: {
         seq,
         role: "user",
         content: question.slice(0, MAX_CONTENT_CHARS),
+        imageUrl: imageUrl || undefined,
       },
       {
         conversationId: convo._id,
@@ -202,7 +206,7 @@ export async function readConversation(workspaceId: string, conversationId: stri
 
   const messages = await OrbitMessage.find({ conversationId: convo._id })
     .sort({ seq: 1 })
-    .select("seq role content suggestions failed modelLabel createdAt")
+    .select("seq role content imageUrl suggestions failed modelLabel createdAt")
     .lean();
 
   return {
@@ -216,6 +220,7 @@ export async function readConversation(workspaceId: string, conversationId: stri
       seq: m.seq,
       role: m.role as "user" | "assistant",
       content: m.content,
+      imageUrl: m.imageUrl || undefined,
       suggestions: m.suggestions ?? [],
       failed: Boolean(m.failed),
       modelLabel: m.modelLabel || undefined,

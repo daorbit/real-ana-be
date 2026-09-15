@@ -11,6 +11,15 @@ export type CloudflareChatResult =
   | { ok: true; text: string }
   | { ok: false; status: number; detail: string };
 
+export interface CloudflareVisionRequest {
+  model: string;
+  /** Base64 payload only — no `data:image/...;base64,` prefix. */
+  image: string;
+  prompt: string;
+  maxTokens?: number;
+  signal?: AbortSignal;
+}
+
  
 export function cloudflareReady(): boolean {
   return Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
@@ -67,6 +76,62 @@ export async function cloudflareChat(
         : raw && typeof raw === "object"
           ? JSON.stringify(raw)
           : "";
+
+    if (!text.trim()) return { ok: false, status: 502, detail: "empty completion" };
+
+    return { ok: true, text };
+  } catch (e) {
+    const aborted = e instanceof Error && e.name === "AbortError";
+    return {
+      ok: false,
+      status: aborted ? 504 : 502,
+      detail: e instanceof Error ? e.message : "request failed",
+    };
+  }
+}
+
+/**
+ * Cloudflare's vision models, a different request shape entirely from the
+ * text chat above: `{ image, prompt }`, not `{ messages }`. Kept as its own
+ * function rather than a branch in `cloudflareChat` because the two share
+ * nothing past the endpoint and the error handling.
+ */
+export async function cloudflareVisionChat(
+  req: CloudflareVisionRequest,
+): Promise<CloudflareChatResult> {
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+
+  if (!token) return { ok: false, status: 503, detail: "no CLOUDFLARE_API_TOKEN" };
+  if (!account) return { ok: false, status: 503, detail: "no CLOUDFLARE_ACCOUNT_ID" };
+
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${req.model}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          image: req.image,
+          prompt: req.prompt,
+          max_tokens: req.maxTokens,
+        }),
+        signal: req.signal,
+      },
+    );
+
+    const body = await res.text();
+
+    if (!res.ok) {
+      return { ok: false, status: res.status, detail: body.slice(0, 300) };
+    }
+
+    const data = JSON.parse(body) as { result?: { response?: unknown } };
+    const raw = data.result?.response;
+    const text = typeof raw === "string" ? raw : "";
 
     if (!text.trim()) return { ok: false, status: 502, detail: "empty completion" };
 

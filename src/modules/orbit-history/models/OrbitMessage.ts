@@ -15,6 +15,11 @@ import mongoose, { Schema } from "mongoose";
  * question. That is up to twelve thousand characters of arbitrary page text per
  * turn, it is not what the user wrote, and keeping it would quietly turn a
  * transcript store into a copy of whatever they were looking at.
+ *
+ * An attached *image* is a different thing and is stored (`imageUrl`): it is
+ * something the person deliberately chose to send, not ambient page content,
+ * and without it a restored thread would show a question about a picture that
+ * has vanished.
  */
 const orbitMessageSchema = new Schema(
   {
@@ -43,6 +48,12 @@ const orbitMessageSchema = new Schema(
      * question would have carried.
      */
     content: { type: String, required: true, maxlength: 4000 },
+
+    /**
+     * The Cloudinary URL of an image attached to a user turn. Empty on every
+     * assistant turn, and on a user turn that carried no attachment.
+     */
+    imageUrl: { type: String, trim: true, default: "" },
 
     /**
      * The follow-ups offered after this answer. Kept on the turn that produced

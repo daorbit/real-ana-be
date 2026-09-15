@@ -1,25 +1,7 @@
-/**
- * Orbit AI — the model call behind the in-app assistant.
- *
- * Two providers over plain HTTPS, no SDKs: each is one POST with a JSON body,
- * and two dependencies that have to be kept in step with fast-moving APIs is a
- * poor trade for the forty lines they would save.
- *
- * Keys are read from the environment on every call rather than captured at
- * import. That keeps a rotated key working after a restart without a rebuild,
- * and it means a missing key is a runtime "not configured" the route can report
- * instead of a crash at boot.
- *
- * The important behaviour here is the fallback. Most of these models are free
- * tiers, which are rate-limited by definition, so a single-model assistant
- * answers "try again later" the moment two people ask at once. When a call
- * fails, the next model in the chain answers and the user never learns there
- * was a problem.
- */
 
 import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
 import { relevantKnowledge, selectedHeadings } from "./retrieval.js";
-import { cloudflareChat } from "./cloudflare-ai.js";
+import { cloudflareChat, cloudflareVisionChat } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
 import {
   availableModels,
@@ -78,6 +60,19 @@ const MAX_TOKENS = 2600;
 
 /** At most this many follow-ups. Three fits the panel; more is a menu. */
 const MAX_SUGGESTIONS = 3;
+
+/**
+ * The one model that reads an attached image.
+ *
+ * Deliberately not in `ORBIT_MODELS` — that catalogue feeds the picker and
+ * the model-selection chain, and this model is never picked. It is reached
+ * only by `askOrbitVision`, which `askOrbit` defers to the moment a call
+ * carries an image, before any of the usual chain/fallback logic runs.
+ */
+const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
+
+/** Room for a description of an image plus a few follow-up sentences. */
+const VISION_MAX_TOKENS = 1024;
 
 /**
  * Phrases that mean "about my own numbers" rather than "about the product".
@@ -199,6 +194,16 @@ export type AskOptions = {
   /** The asker's preferred model. Tried first; everything else after it. */
   modelId?: string;
   /**
+   * A base64 image data URL (`data:image/...;base64,...`) to answer a
+   * question about, already size- and type-validated by the route.
+   *
+   * Its presence, not `modelId`, decides the model: `askOrbit` defers to
+   * `askOrbitVision` the moment this is set, before any of the usual
+   * chain/fallback/history logic runs. There is exactly one vision model, so
+   * there is nothing to pick and nothing to fall back to.
+   */
+  image?: string;
+  /**
    * The product embedding Orbit. Supplies the entitlement and owns quota.
    *
    * Optional so a host with nothing to bill — a script, a test, an internal
@@ -285,6 +290,11 @@ export async function askOrbit(
   question: string,
   options: AskOptions = {},
 ): Promise<OrbitResult> {
+  // An attached image is answered entirely differently — one model, no
+  // chain, no product reference, no history-driven retrieval — so it is
+  // handed off before any of the text-path setup below even runs.
+  if (options.image) return askOrbitVision(question, options.image, options);
+
   const {
     modelId,
     host,
@@ -438,6 +448,79 @@ export async function askOrbit(
         error: "Orbit could not answer that. Try again, or use Help & support.",
         status: 502,
       };
+}
+
+/**
+ * The image path. Same quota contract as `askOrbit` — checked before the
+ * call, spent only on success — but nothing else about the text path
+ * applies: no product reference, no retrieval, no fallback chain (there is
+ * one vision model), and no structured `{reply, suggestions}` envelope,
+ * since this endpoint does not support `response_format`.
+ */
+async function askOrbitVision(
+  question: string,
+  image: string,
+  options: AskOptions,
+): Promise<OrbitResult> {
+  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS } = options;
+
+  if (host && tenantId && !(await host.hasQuota(tenantId))) {
+    const entitlement = await host.entitlement(tenantId);
+    return {
+      ok: false,
+      status: 402,
+      quotaExceeded: true,
+      error: entitlement
+        ? `You have used all ${entitlement.monthlyQuota} questions included this period. Buy a question pack, or upgrade.`
+        : "You are out of questions for this period.",
+    };
+  }
+
+  const comma = image.indexOf(",");
+  const base64 = comma === -1 ? image : image.slice(comma + 1);
+
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), Math.min(TIMEOUT_MS, budgetMs));
+
+  let raw;
+  try {
+    raw = await cloudflareVisionChat({
+      model: VISION_MODEL,
+      image: base64,
+      prompt: question || "Describe what's in this image.",
+      maxTokens: VISION_MAX_TOKENS,
+      signal: abort.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!raw.ok) {
+    console.error(`[orbit] vision call failed (${raw.status}): ${raw.detail.slice(0, 300)}`);
+    return raw.status === 429
+      ? { ok: false, error: "Orbit is busy right now. Try again in a moment.", status: 429 }
+      : {
+          ok: false,
+          error: "Orbit could not read that image. Try again, or use Help & support.",
+          status: 502,
+        };
+  }
+
+  if (host && tenantId) {
+    try {
+      await host.spendQuota(tenantId);
+    } catch (e) {
+      console.error("[orbit] quota spend failed:", (e as Error).message);
+    }
+  }
+
+  return {
+    ok: true,
+    reply: raw.text.trim(),
+    suggestions: [],
+    model: "llama-vision",
+    modelLabel: "Llama 3.2 Vision",
+  };
 }
 
 type CallResult =
