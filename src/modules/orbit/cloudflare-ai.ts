@@ -142,7 +142,15 @@ export async function cloudflareVisionChat(
 
     const data = JSON.parse(body) as { result?: { response?: unknown } };
     const raw = data.result?.response;
-    const text = typeof raw === "string" ? raw : "";
+    // Asked for JSON, this model sometimes returns it parsed rather than as
+    // a string — the same duality the text endpoint has, re-serialised so
+    // the caller's own JSON extraction sees it either way.
+    const text =
+      typeof raw === "string"
+        ? raw
+        : raw && typeof raw === "object"
+          ? JSON.stringify(raw)
+          : "";
 
     if (!text.trim()) return { ok: false, status: 502, detail: "empty completion" };
 
