@@ -68,10 +68,15 @@ const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
 
 /** Cloudinary overlay transformation stamping the Orbit mark bottom-right,
- * sized relative to the source image. */
+ * sized relative to the source image.
+ *
+ * A layer name with folders in it needs its `/` swapped for `:` — Cloudinary
+ * reads the bare slash as the end of the transformation segment, which broke
+ * the whole upload (not just the watermark) rather than merely skipping it. */
 function watermarkTransformation(): string | undefined {
   if (!WATERMARK_PUBLIC_ID) return undefined;
-  return `l_${WATERMARK_PUBLIC_ID},w_0.16,fl_relative,g_south_east,x_0.03,y_0.03,o_85`;
+  const layer = WATERMARK_PUBLIC_ID.replace(/\//g, ":");
+  return `l_${layer},w_0.16,fl_relative,g_south_east,x_0.03,y_0.03,o_85`;
 }
 
 /**
