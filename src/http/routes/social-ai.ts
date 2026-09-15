@@ -257,7 +257,12 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         '  "dayOfMonth": integer 1-28 — the day a monthly post repeats on.\n\n' +
         "Rules: ask ONE question at a time, and only about something you genuinely cannot infer — never ask again " +
         "about anything the author has already settled or that the composer's fields already hold. Normally you " +
-        "need at most three things: what the post is about, when it goes out, and an image. An Instagram post " +
+        "need at most three things: what the post is about, when it goes out, and an image. Never ask the same " +
+        "question, or a rephrasing of it, twice in a row — if the conversation shows you already asked what the " +
+        "post is about and got any answer at all, even a short or vague one (\"just fun\", \"no\", \"idk\"), that " +
+        "answer is final: write the caption from whatever you have rather than asking again. A caption from a thin " +
+        "topic is always better than another question — write something concrete and specific to what little you " +
+        "were given, never a placeholder, and let the author edit it after. An Instagram post " +
         "cannot publish without an image, so when the fields show none, ask for one and set needsImage true — the " +
         "author attaches it in the composer, and the next turn's fields will show it. On LinkedIn an image is " +
         "optional: offer it once, accept no for an answer, and never ask twice. Always return every key, " +
