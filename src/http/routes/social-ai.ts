@@ -35,23 +35,36 @@ const MAX_CAPTION_CHARS = 3000;
 /** The networks a caption can be written for, and how each one wants to read. */
 const CAPTION_TONES: Record<string, string> = {
   linkedin:
-    "LinkedIn: a professional but human first-person post. Three or four short paragraphs, a concrete hook in the first line, a clear point in plain language, and three to five specific, relevant hashtags at the end (no generic filler tags like #business or #success).",
+    "LinkedIn: a professional but human first-person post. A short, punchy hook line on its own, then a blank " +
+    "line, then two or three short paragraphs (1-3 sentences each) each separated by a blank line so it reads " +
+    "as distinct beats rather than one block. One or two well-placed emoji at most — as a bullet or accent, " +
+    "never more than one per line. End with a blank line, then three to five specific, relevant hashtags on " +
+    "their own line (no generic filler tags like #business or #success).",
   facebook:
-    "Facebook: warm and conversational, two or three short paragraphs, at most two specific hashtags.",
+    "Facebook: warm and conversational. A short hook line, a blank line, then one or two short paragraphs, each " +
+    "separated by a blank line. Emoji welcome where they land naturally, not stacked. At most two specific " +
+    "hashtags on their own line at the end.",
   twitter:
-    "X (Twitter): one punchy post under 240 characters including the link, at most two specific hashtags.",
+    "X (Twitter): one punchy post under 240 characters including the link. Short line breaks between the hook " +
+    "and the point rather than one run-on sentence. One emoji at most. At most two specific hashtags.",
   whatsapp:
-    "WhatsApp: a short direct message to a colleague. Two or three sentences, no hashtags.",
+    "WhatsApp: a short direct message to a colleague. Two or three sentences, one blank line between them if it " +
+    "reads better broken up. No hashtags.",
   telegram:
-    "Telegram: brief and informative, two or three sentences, no hashtags.",
+    "Telegram: brief and informative, two or three sentences. No hashtags.",
 };
 
 /** What every caption must clear, regardless of platform. */
 const CAPTION_QUALITY_RULES =
   "Write like a specific, competent person who actually did the thing, not like ad copy. " +
   "No generic filler phrases (\"excited to announce\", \"game-changer\", \"in today's fast-paced world\", " +
-  "\"we are thrilled\"), no empty buzzwords, no emoji unless the author used one. Be concrete: name the " +
-  "actual thing, result or detail the author gave you instead of describing it in vague terms.";
+  "\"we are thrilled\"), no empty buzzwords. Be concrete: name the actual thing, result or detail the author " +
+  "gave you instead of describing it in vague terms.\n\n" +
+  "Formatting: use real line breaks (\\n) between the hook, each beat, and the hashtag line — a caption that " +
+  "reads as one dense paragraph is a fail, the way a short-form social post from a person, not a press " +
+  "release, always breaks into short scannable lines with breathing room between them. Emoji are welcome where " +
+  "the platform allows them (see below) — used sparingly and only where they add tone, never a row of them, " +
+  "never one after every sentence.";
 
 /**
  * Write a share caption.
