@@ -145,7 +145,7 @@ const EXAMPLE_REPLY = JSON.stringify({
  * would waste a working generation. Braces are counted rather than regexed so a
  * nested object does not end the match early.
  */
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const start = text.indexOf("{");
   if (start === -1) return null;
 
@@ -182,7 +182,84 @@ function extractJson(text: string): unknown {
       }
     }
   }
-  return null;
+
+  // The object never closed: the reply hit the token ceiling mid-form. Rather
+  // than throw away a generation that is complete except for its tail, close
+  // what is open and keep the fields that did arrive — a form of nine fields
+  // when the model was writing twelve is a usable draft, and the alternative
+  // the user sees is "could not generate a form from that prompt".
+  return salvageTruncatedJson(text.slice(start), depth, inString);
+}
+
+/**
+ * Parse a JSON object whose end was cut off.
+ *
+ * Trims back to the last structurally complete element, then closes the
+ * brackets that are still open. Only ever called on a reply that already
+ * failed to parse whole, so the worst case is returning `null` exactly as
+ * before.
+ */
+function salvageTruncatedJson(fragment: string, depth: number, inString: boolean): unknown {
+  if (depth <= 0) return null;
+
+  let body = fragment;
+
+  // An unterminated string cannot be closed usefully — the value is half
+  // written — so drop back to before it started.
+  if (inString) {
+    const lastQuote = body.lastIndexOf('"');
+    if (lastQuote === -1) return null;
+    body = body.slice(0, lastQuote);
+  }
+
+  // Walk back to the last comma or closing bracket, so the fragment ends on a
+  // complete member rather than on `"label":` with nothing after it.
+  const lastComplete = Math.max(body.lastIndexOf("}"), body.lastIndexOf("]"));
+  if (lastComplete === -1) return null;
+  body = body.slice(0, lastComplete + 1);
+
+  // Re-count what is open after the trim, since it may have removed brackets.
+  let open = 0;
+  const stack: string[] = [];
+  let str = false;
+  let esc = false;
+
+  for (const ch of body) {
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (ch === "\\") {
+      esc = true;
+      continue;
+    }
+    if (ch === '"') {
+      str = !str;
+      continue;
+    }
+    if (str) continue;
+
+    if (ch === "{" || ch === "[") {
+      stack.push(ch);
+      open += 1;
+    } else if (ch === "}" || ch === "]") {
+      stack.pop();
+      open -= 1;
+    }
+  }
+
+  if (open <= 0) return null;
+
+  const closing = stack
+    .reverse()
+    .map((ch) => (ch === "{" ? "}" : "]"))
+    .join("");
+
+  try {
+    return JSON.parse(`${body}${closing}`);
+  } catch {
+    return null;
+  }
 }
 
 export type GenerateResult =
@@ -264,7 +341,11 @@ export async function generateForm(
     const res = await cloudflareChat({
       model,
       messages,
-      maxTokens: 2400,
+      // A full reply is a title, a description, up to 25 fields with their
+      // options, and a twelve-key theme. 2400 truncated that often enough to
+      // fail outright — which is a generation the user paid the wait for and
+      // did not get, to save tokens on a model that is billed in neurons.
+      maxTokens: 4000,
       // Low, not zero: the palette is the one place a little variation reads as
       // design rather than noise, and the parser bounds everything else.
       temperature: 0.4,
@@ -291,7 +372,12 @@ export async function generateForm(
 
     // A model that answered but not usably. Worth trying the next one: the
     // failure is usually a truncated object rather than a refusal.
-    lastDetail = `${model}: ${parsed.reason}`;
+    //
+    // The reply is logged with it. "not an object" on its own says the parser
+    // rejected something without saying what, which is the difference between
+    // a model refusing, a model writing prose, and a reply cut off at the
+    // token ceiling — three problems with three different fixes.
+    lastDetail = `${model}: ${parsed.reason} — reply: ${res.text.slice(0, 400)}`;
   }
 
   console.error("[forms-ai] generation failed —", lastDetail);
