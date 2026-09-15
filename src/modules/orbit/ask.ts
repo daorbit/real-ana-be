@@ -24,25 +24,25 @@ import type { OrbitEntitlement, OrbitHost } from "./types.js";
  */
 const TIMEOUT_MS = 35_000;
 
-/**
- * The longest anyone waits, across every attempt.
- *
- * Without this, a chain of five models each timing out is nearly three minutes
- * of spinner. The budget stops the loop once there is no realistic chance of
- * answering in time, and the user gets an error while they still care.
- */
 const TOTAL_BUDGET_MS = 75_000;
 
-/**
- * The least time worth starting an attempt with.
- *
- * Deliberately small. Most failures in this chain are immediate — a 429 or a
- * 503 arrives in well under a second — so a few seconds is enough for a healthy
- * model to answer or an unhealthy one to refuse, and reserving more would
- * re-introduce the bug where one slow model cancelled the whole rest of the
- * chain.
- */
 const MIN_ATTEMPT_MS = 4_000;
+
+/**
+ * What comes back when the caller gave up before an answer did.
+ *
+ * 499, borrowed from nginx: the client closed the connection. Not a failure
+ * of ours and not the client's error either, so neither a 5xx nor a plain
+ * 4xx says it. Nothing is written to the socket in practice — there is no
+ * longer a socket — but the route still needs a result to return, and one
+ * that is unmistakably *not* an answer is what keeps the spend and the
+ * transcript write on the success path only.
+ */
+const ABANDONED: OrbitResult = {
+  ok: false,
+  status: 499,
+  error: "Stopped before an answer arrived.",
+};
 
 /**
  * Room for a numbered fix — an SEO answer runs to several steps with a tag to
@@ -279,6 +279,19 @@ export type AskOptions = {
    */
   attemptMs?: number;
   /**
+   * Gives up when this fires, wherever the call has got to.
+   *
+   * For a caller whose reason to stop is outside the timeouts — on a request
+   * path, the person closing the tab or pressing stop. Without it the model
+   * call runs to completion and is charged for, into a socket nobody is
+   * reading: the timeouts protect us from a hung provider, not from an answer
+   * no one is waiting for any more.
+   *
+   * Composed with each attempt's own timeout rather than replacing it. Both
+   * still apply — whichever fires first ends the attempt.
+   */
+  signal?: AbortSignal;
+  /**
    * Accept the model's raw text instead of requiring Orbit's answer envelope.
    *
    * For callers that asked for their own JSON shape. The envelope exists for
@@ -328,6 +341,7 @@ export async function askOrbit(
     exclude = [],
     budgetMs = TOTAL_BUDGET_MS,
     attemptMs = TIMEOUT_MS,
+    signal,
     rawOutput = false,
   } = options;
   const barred = new Set(exclude);
@@ -427,8 +441,25 @@ export async function askOrbit(
       break;
     }
 
+    // Nobody is waiting for this any more. Checked before each attempt as well
+    // as inside the call, because the chain's whole purpose is to try the next
+    // model when one fails — and an abort makes every remaining attempt fail
+    // instantly, which would walk the entire chain for an answer with no
+    // reader.
+    if (signal?.aborted) return ABANDONED;
+
     // Whatever is left, so a late attempt still runs rather than being skipped.
-    const raw = await callModel(model, question, history, prompt, budgetMs - elapsed, attemptMs);
+    const raw = await callModel(
+      model,
+      question,
+      history,
+      prompt,
+      budgetMs - elapsed,
+      attemptMs,
+      signal,
+    );
+
+    if (signal?.aborted) return ABANDONED;
 
     if (raw.ok) {
       // `rawOutput` callers asked the model for their own JSON shape, so the
@@ -488,7 +519,7 @@ async function askOrbitVision(
   image: string,
   options: AskOptions,
 ): Promise<OrbitResult> {
-  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS } = options;
+  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS, signal } = options;
 
   if (host && tenantId && !(await host.hasQuota(tenantId))) {
     const entitlement = await host.entitlement(tenantId);
@@ -507,6 +538,9 @@ async function askOrbitVision(
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.min(TIMEOUT_MS, budgetMs));
+  const relay = () => abort.abort();
+  signal?.addEventListener("abort", relay);
+  if (signal?.aborted) abort.abort();
 
   let raw;
   try {
@@ -519,7 +553,11 @@ async function askOrbitVision(
     });
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", relay);
   }
+
+  // Before the spend below, so a question nobody waited for is not charged.
+  if (signal?.aborted) return ABANDONED;
 
   if (!raw.ok) {
     console.error(`[orbit] vision call failed (${raw.status}): ${raw.detail.slice(0, 300)}`);
@@ -558,7 +596,7 @@ async function askOrbitGenerateImage(
   question: string,
   options: AskOptions,
 ): Promise<OrbitResult> {
-  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS } = options;
+  const { host, tenantId, budgetMs = TOTAL_BUDGET_MS, signal } = options;
 
   if (!question.trim()) {
     return { ok: false, status: 400, error: "Say what to draw." };
@@ -578,6 +616,9 @@ async function askOrbitGenerateImage(
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.min(TIMEOUT_MS, budgetMs));
+  const relay = () => abort.abort();
+  signal?.addEventListener("abort", relay);
+  if (signal?.aborted) abort.abort();
 
   let raw;
   try {
@@ -589,7 +630,11 @@ async function askOrbitGenerateImage(
     });
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", relay);
   }
+
+  // Before the spend below, so a picture nobody waited for is not charged.
+  if (signal?.aborted) return ABANDONED;
 
   if (!raw.ok) {
     console.error(`[orbit] image generation failed (${raw.status}): ${raw.detail.slice(0, 300)}`);
@@ -640,15 +685,17 @@ function callModel(
   budgetMs = TIMEOUT_MS,
   /** The caller's per-attempt ceiling; the default is the standard timeout. */
   attemptMs = TIMEOUT_MS,
+  /** Gives up when this fires, on top of the timeouts. */
+  signal?: AbortSignal,
 ): Promise<CallResult> {
   const timeout = Math.min(attemptMs, Math.max(MIN_ATTEMPT_MS, budgetMs));
   if (model.provider === "gemini") {
-    return callGemini(model, question, history, prompt, timeout);
+    return callGemini(model, question, history, prompt, timeout, signal);
   }
   if (model.provider === "cloudflare") {
-    return callCloudflare(model, question, history, prompt, timeout);
+    return callCloudflare(model, question, history, prompt, timeout, signal);
   }
-  return callOpenAiCompatible(model, question, history, prompt, timeout);
+  return callOpenAiCompatible(model, question, history, prompt, timeout, signal);
 }
 
 /** Host, key and any provider-specific headers for an OpenAI-shaped API. */
@@ -686,9 +733,13 @@ async function post(
   headers: Record<string, string>,
   body: unknown,
   timeoutMs: number = TIMEOUT_MS,
+  caller?: AbortSignal,
 ): Promise<CallResult> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
+  const relay = () => abort.abort();
+  caller?.addEventListener("abort", relay);
+  if (caller?.aborted) abort.abort();
 
   try {
     const res = await fetch(url, {
@@ -711,6 +762,7 @@ async function post(
     };
   } finally {
     clearTimeout(timer);
+    caller?.removeEventListener("abort", relay);
   }
 }
 
@@ -720,6 +772,7 @@ async function callGemini(
   history: OrbitTurn[],
   prompt: string,
   timeoutMs: number = TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<CallResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: false, status: 503, detail: "no GEMINI_API_KEY" };
@@ -756,6 +809,7 @@ async function callGemini(
       },
     },
     timeoutMs,
+    signal,
   );
 
   if (!res.ok) return res;
@@ -802,9 +856,13 @@ async function callCloudflare(
   history: OrbitTurn[],
   prompt: string,
   timeoutMs: number = TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<CallResult> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
+  const relay = () => abort.abort();
+  signal?.addEventListener("abort", relay);
+  if (signal?.aborted) abort.abort();
 
   try {
     return await cloudflareChat({
@@ -820,6 +878,7 @@ async function callCloudflare(
     });
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", relay);
   }
 }
 
@@ -829,6 +888,7 @@ async function callOpenAiCompatible(
   history: OrbitTurn[],
   prompt: string,
   timeoutMs: number = TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<CallResult> {
   const { url, key, keyName, headers } = openAiEndpoint(model.provider);
   if (!key) return { ok: false, status: 503, detail: `no ${keyName}` };
@@ -867,6 +927,7 @@ async function callOpenAiCompatible(
         : {}),
     },
     timeoutMs,
+    signal,
   );
 
   if (!res.ok) return res;

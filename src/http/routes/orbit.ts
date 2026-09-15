@@ -281,21 +281,46 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
 
   const startedAt = Date.now();
 
+  /*
+   * Stops the model call when the browser hangs up.
+   *
+   * Pressing stop in the panel aborts the request, which closes the socket;
+   * without this the call it was paying for runs to completion and is charged
+   * for anyway, into a response nobody will read. Node fires `close` on the
+   * request for a normal finish too, so the listener is removed as soon as
+   * there is an answer — see the `finally` below.
+   */
+  const hungUp = new AbortController();
+  const onClose = () => hungUp.abort();
+  req.on("close", onClose);
+
   // The quota check and the spend both happen inside `askOrbit`, against the
   // host — that is what keeps "never charge for an unanswered question" true
   // for every embedder rather than depending on each route remembering it. A
   // 402 comes back here as an ordinary failed result.
-  const result = await askOrbit(question, {
-    // An image turn — reading or drawing — carries no conversation history
-    // and ignores `modelId`; `askOrbit` defers to that path before either is
-    // read, so passing them here is harmless but unused.
-    history: readHistory(req.body?.history, plan.maxHistoryTurns),
-    modelId,
-    image: rawImage,
-    generateImage,
-    host: quantalogOrbitHost,
-    tenantId: ws.id,
-  });
+  let result;
+  try {
+    result = await askOrbit(question, {
+      // An image turn — reading or drawing — carries no conversation history
+      // and ignores `modelId`; `askOrbit` defers to that path before either is
+      // read, so passing them here is harmless but unused.
+      history: readHistory(req.body?.history, plan.maxHistoryTurns),
+      modelId,
+      image: rawImage,
+      generateImage,
+      host: quantalogOrbitHost,
+      tenantId: ws.id,
+      signal: hungUp.signal,
+    });
+  } finally {
+    req.off("close", onClose);
+  }
+
+  // Nobody is listening. Nothing was spent — `askOrbit` returns before the
+  // charge once its signal fires — and nothing is stored, because a question
+  // that was withdrawn is not part of the conversation. Writing to a closed
+  // socket would throw, so this returns without a response at all.
+  if (hungUp.signal.aborted) return;
 
   if (!result.ok) {
     // A spent question allowance is a plan limit, not a failure — it goes back
