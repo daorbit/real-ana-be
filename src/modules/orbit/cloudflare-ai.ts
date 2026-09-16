@@ -140,12 +140,7 @@ export async function cloudflareChat(
   return last;
 }
 
-/**
- * Cloudflare's vision models, a different request shape entirely from the
- * text chat above: `{ image, prompt }`, not `{ messages }`. Kept as its own
- * function rather than a branch in `cloudflareChat` because the two share
- * nothing past the endpoint and the error handling.
- */
+
 export async function cloudflareVisionChat(
   req: CloudflareVisionRequest,
 ): Promise<CloudflareChatResult> {
@@ -183,9 +178,7 @@ export async function cloudflareVisionChat(
 
       const data = JSON.parse(body) as { result?: { response?: unknown } };
       const raw = data.result?.response;
-      // Asked for JSON, this model sometimes returns it parsed rather than as
-      // a string — the same duality the text endpoint has, re-serialised so
-      // the caller's own JSON extraction sees it either way.
+
       const text =
         typeof raw === "string"
           ? raw
@@ -284,17 +277,20 @@ export type WorkersAiModelUsage = {
   neurons: number;
   /** Average inference time across this model's requests today, ms. */
   avgLatencyMs: number;
+  bytesIn: number;
+  bytesOut: number;
+  /** Failures broken out by Cloudflare's own error code (e.g. 4006 is the
+   * daily neuron limit) rather than collapsed into one `failed` count. */
+  errorsByCode: { code: number; count: number }[];
 };
 
 export type WorkersAiUsage = {
-  /** "Primary" for CLOUDFLARE_*, "Fallback" for NO_REPLY_MAIL_CLOUDFLARE_* —
-   * lets the admin card tell the two accounts apart. */
+
   label: string;
   neuronsToday: number;
   dailyLimit: number;
   unavailable?: string;
-  /** Per-model breakdown, most active first. Empty when there's nothing to
-   * show yet or the account's `unavailable`. */
+
   models: WorkersAiModelUsage[];
 };
 
@@ -321,6 +317,8 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
               totalInputTokens
               totalOutputTokens
               totalInferenceTimeMs
+              totalRequestBytesIn
+              totalRequestBytesOut
             }
             dimensions { modelId errorCode }
           }
@@ -357,6 +355,8 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
                 totalInputTokens?: number;
                 totalOutputTokens?: number;
                 totalInferenceTimeMs?: number;
+                totalRequestBytesIn?: number;
+                totalRequestBytesOut?: number;
               };
               dimensions?: { modelId?: string; errorCode?: number };
             }[];
@@ -382,15 +382,14 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
       0,
     );
 
-    // Cloudflare returns one row per (model, errorCode) combination for the
-    // day — a success row and a failure row for the same model are separate
-    // entries — so they're merged here into one row per model.
+
     const byModel = new Map<string, WorkersAiModelUsage>();
     for (const g of groups) {
       const modelId = g.dimensions?.modelId;
       if (!modelId) continue;
       const requests = g.count ?? 0;
-      const failed = g.dimensions?.errorCode ? requests : 0;
+      const errorCode = g.dimensions?.errorCode ?? 0;
+      const failed = errorCode ? requests : 0;
 
       const row = byModel.get(modelId) ?? {
         modelId,
@@ -400,6 +399,9 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
         outputTokens: 0,
         neurons: 0,
         avgLatencyMs: 0,
+        bytesIn: 0,
+        bytesOut: 0,
+        errorsByCode: [],
       };
       const priorTimeMs = row.avgLatencyMs * row.requests;
 
@@ -408,9 +410,17 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
       row.inputTokens += g.sum?.totalInputTokens ?? 0;
       row.outputTokens += g.sum?.totalOutputTokens ?? 0;
       row.neurons += g.sum?.totalNeurons ?? 0;
+      row.bytesIn += g.sum?.totalRequestBytesIn ?? 0;
+      row.bytesOut += g.sum?.totalRequestBytesOut ?? 0;
       row.avgLatencyMs = row.requests
         ? (priorTimeMs + (g.sum?.totalInferenceTimeMs ?? 0)) / row.requests
         : 0;
+
+      if (errorCode) {
+        const existing = row.errorsByCode.find((e) => e.code === errorCode);
+        if (existing) existing.count += requests;
+        else row.errorsByCode.push({ code: errorCode, count: requests });
+      }
 
       byModel.set(modelId, row);
     }
@@ -429,13 +439,135 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
   }
 }
 
-/** Every configured account's usage today, queried in parallel. Empty array
- * when nothing is configured — same "nothing to show" meaning `null` used to
- * carry, but as an array so the admin page can map over it uniformly. */
+
 export async function workersAiUsage(): Promise<WorkersAiUsage[]> {
   const creds = cloudflareCredentials();
   if (!creds.length) return [];
 
   const labels = ["Primary", "Fallback"];
   return Promise.all(creds.map((c, i) => accountUsage(labels[i] ?? `Account ${i + 1}`, c)));
+}
+
+export type WorkersAiTrendPoint = {
+  /** ISO hour (today) or ISO date (7d) this bucket covers. */
+  bucket: string;
+  neurons: number;
+  requests: number;
+};
+
+/** One account's trend buckets, before accounts are merged. */
+async function accountTrend(
+  creds: CloudflareCreds,
+  range: "today" | "7d",
+): Promise<WorkersAiTrendPoint[]> {
+  const { token, account } = creds;
+
+  const end = new Date();
+  const start = new Date();
+  if (range === "today") {
+    start.setUTCHours(0, 0, 0, 0);
+  } else {
+    start.setUTCDate(start.getUTCDate() - 6);
+    start.setUTCHours(0, 0, 0, 0);
+  }
+
+
+  const bucketField = range === "today" ? "datetimeHour" : "date";
+
+  const query = `
+    query Trend($account: String!, $start: Time!, $end: Time!) {
+      viewer {
+        accounts(filter: { accountTag: $account }) {
+          aiInferenceAdaptiveGroups(
+            limit: 1000
+            filter: { datetime_geq: $start, datetime_leq: $end }
+          ) {
+            count
+            sum { totalNeurons }
+            dimensions { ${bucketField} }
+          }
+        }
+      }
+    }`;
+
+  try {
+    const res = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        variables: { account, start: start.toISOString(), end: end.toISOString() },
+      }),
+    });
+
+    const body = (await res.json()) as {
+      errors?: { message: string }[];
+      data?: {
+        viewer?: {
+          accounts?: {
+            aiInferenceAdaptiveGroups?: {
+              count?: number;
+              sum?: { totalNeurons?: number };
+              dimensions?: Record<string, string | undefined>;
+            }[];
+          }[];
+        };
+      };
+    };
+
+    if (body.errors?.length) return [];
+
+    const groups = body.data?.viewer?.accounts?.[0]?.aiInferenceAdaptiveGroups ?? [];
+    const byBucket = new Map<string, WorkersAiTrendPoint>();
+    for (const g of groups) {
+      const bucket = g.dimensions?.[bucketField];
+      if (!bucket) continue;
+      const row = byBucket.get(bucket) ?? { bucket, neurons: 0, requests: 0 };
+      row.neurons += g.sum?.totalNeurons ?? 0;
+      row.requests += g.count ?? 0;
+      byBucket.set(bucket, row);
+    }
+    return [...byBucket.values()];
+  } catch {
+    return [];
+  }
+}
+
+
+export async function workersAiTrend(range: "today" | "7d"): Promise<WorkersAiTrendPoint[]> {
+  const creds = cloudflareCredentials();
+  if (!creds.length) return [];
+
+  const perAccount = await Promise.all(creds.map((c) => accountTrend(c, range)));
+
+  const merged = new Map<string, WorkersAiTrendPoint>();
+  for (const points of perAccount) {
+    for (const p of points) {
+      const row = merged.get(p.bucket) ?? { bucket: p.bucket, neurons: 0, requests: 0 };
+      row.neurons += p.neurons;
+      row.requests += p.requests;
+      merged.set(p.bucket, row);
+    }
+  }
+
+  const end = new Date();
+  const buckets: string[] = [];
+  if (range === "today") {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    for (let h = new Date(start); h <= end; h.setUTCHours(h.getUTCHours() + 1)) {
+      buckets.push(new Date(h).toISOString().slice(0, 13) + ":00:00Z");
+    }
+  } else {
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(end);
+      d.setUTCDate(d.getUTCDate() - i);
+      buckets.push(d.toISOString().slice(0, 10));
+    }
+  }
+
+  return buckets.map((b) => merged.get(b) ?? { bucket: b, neurons: 0, requests: 0 });
 }

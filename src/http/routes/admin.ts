@@ -30,7 +30,7 @@ import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../mo
 import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, type BodyLayout } from "../../infra/mail/mailer.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
-import { workersAiUsage } from "../../modules/orbit/cloudflare-ai.js";
+import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 
  
@@ -326,6 +326,14 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     cloudinary,
     workersAi,
   });
+});
+
+/** Neuron usage over time, for the AI-usage tab's trend chart — its own
+ * request rather than riding along on `/db/stats`, so the tab's table can
+ * render before this second Cloudflare round trip finishes. */
+router.get("/workers-ai/trend", async (req: AuthedRequest, res: Response) => {
+  const range = req.query.range === "7d" ? "7d" : "today";
+  res.json({ points: await workersAiTrend(range) });
 });
 
 
