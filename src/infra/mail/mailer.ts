@@ -19,12 +19,14 @@ import {
 } from "./templates/welcome.js";
 import { installSnippetHtml } from "./templates/install-snippet.js";
 import { seoAuditHtml } from "./templates/seo-audit.js";
+import { coldInviteHtml } from "./templates/cold-invite.js";
 
 /** Which banner each designed layout carries. "plain" and "invite" have none. */
 const LAYOUT_BANNERS: Partial<Record<BodyLayout, BannerName>> = {
   install: "install-snippet",
   welcome: "welcome",
   feature: "seo-audit",
+  invite: "cold-invite",
 };
 
 /** Gap between messages. Slow enough that Gmail doesn't read a batch as a burst. */
@@ -533,7 +535,7 @@ export function renderBody(
 
   switch (layout) {
     case "invite":
-      return inviteHtml(text, cta);
+      return coldInviteHtml(text, cta);
     case "install":
       return installSnippetHtml(text, cta);
     case "welcome":
@@ -573,99 +575,6 @@ function intro(text: string): string {
  * saying different things. Six rather than nine: an invite is a first
  * impression, and the tail of a nine-item list is read by nobody.
  */
-const INVITE_FEATURES: { title: string; body: string }[] = [
-  {
-    title: "Live in 3 seconds",
-    body: "Visitors, pageviews and active sessions stream in as they happen — no overnight batch, no sampling.",
-  },
-  {
-    title: "Cookieless by design",
-    body: "Visitors are a rotating daily hash. Nothing persists in the browser, so no consent banner is required.",
-  },
-  {
-    title: "Sub-kilobyte tracker",
-    body: "One async script tag. React and Next route changes report themselves with zero extra code.",
-  },
-  {
-    title: "SEO audits built in",
-    body: "Lighthouse-backed audits on any page you track: meta tags, structured data, broken links, Core Web Vitals.",
-  },
-  {
-    title: "Dashboards you can share",
-    body: "Publish a read-only view at a link anyone can open. You choose which panels are visible.",
-  },
-  {
-    title: "An API, not just a UI",
-    body: "Every number in the dashboard is reachable over REST with an API key. Build your own views, or resell them.",
-  },
-];
-
-/**
- * A feature as a table row.
- *
- * An emerald dot rather than an icon font or an image per feature: six more
- * CID attachments would bloat every invite, and icon fonts do not render in
- * most mail clients.
- */
-function featureRow({ title, body }: { title: string; body: string }): string {
-  return `<tr>
-    <td style="padding:0 0 18px;vertical-align:top;width:18px">
-      <div style="width:7px;height:7px;border-radius:50%;background:${C.accent};margin-top:6px"></div>
-    </td>
-    <td style="padding:0 0 18px;vertical-align:top">
-      <p style="margin:0;font-size:14px;font-weight:600;color:${C.text};letter-spacing:-0.1px">${escapeHtml(title)}</p>
-      <p style="margin:4px 0 0;font-size:13px;line-height:1.6;color:${C.dim}">${escapeHtml(body)}</p>
-    </td>
-  </tr>`;
-}
-
-export function inviteHtml(
-  intro: string,
-  cta: { label: string; href: string }
-): string {
-  const paragraphs = escapeHtml(intro)
-    .split(/\n{2,}/)
-    .map((block, i) => {
-      const html = block.replace(/\n/g, "<br>");
-      const style =
-        i === 0
-          ? `margin:0 0 14px;font-size:16px;font-weight:600;color:${C.text};line-height:1.55;letter-spacing:-0.2px`
-          : `margin:0 0 14px;${T.body}`;
-      return `<p style="${style}">${html}</p>`;
-    })
-    .join("");
-
-  const action = /^https?:\/\//i.test(cta.href)
-    ? button(escapeHtml(cta.label), escapeAttr(cta.href))
-    : "";
-
-  return shell(
-    `${paragraphs}
-
-    <div style="margin:${S.section}px 0;height:1px;background:${C.line}"></div>
-
-    <p style="margin:0 0 ${S.block}px;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:${C.faint}">
-      What you get
-    </p>
-
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-      ${INVITE_FEATURES.map(featureRow).join("")}
-    </table>
-
-    <!-- The caveats sit above the button, not below it. A paragraph after the
-         call to action competes with the one thing this message is asking for,
-         and the demo link in particular is an invitation to not sign up. -->
-    <p style="margin:6px 0 0;font-size:13.5px;line-height:1.65;color:${C.dim}">
-      Free to start, and the tracker is one line — or try the
-      <a href="${escapeAttr(LINKS.site)}" style="color:${C.accent};text-decoration:none;font-weight:600">live demo</a>
-      first, which needs no account at all.
-    </p>
-
-    ${action}`,
-    "You received this because someone thought Quantalog would be useful to you."
-  );
-}
-
 /** Escape a URL for use inside a double-quoted HTML attribute. */
 function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");

@@ -39,7 +39,8 @@ export type BannerName =
   | "plan-end"
   | "welcome"
   | "install-snippet"
-  | "seo-audit";
+  | "seo-audit"
+  | "cold-invite";
 
 export type Theme = { accent: string; accentDeep: string; wash: string; edge: string };
 
@@ -53,6 +54,7 @@ export const THEMES: Record<BannerName, Theme> = {
   welcome: { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   "install-snippet": { accent: "#0891b2", accentDeep: "#0e7490", wash: "#f3f8fb", edge: "#d8e9f1" },
   "seo-audit": { accent: "#16a34a", accentDeep: "#15803d", wash: "#f5fbf1", edge: "#dcefd0" },
+  "cold-invite": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
 };
 
 const LOGO_CID = "quantalog-logo";
