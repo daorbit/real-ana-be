@@ -673,7 +673,13 @@ function escapeAttr(s: string): string {
 
 
 export function forBrowser(html: string): string {
-  return html.replace(`cid:${LOGO_CID}`, LOGO_DATA_URI);
+
+  return html
+    .replace(`cid:${LOGO_CID}`, LOGO_DATA_URI)
+    .replace(/cid:quantalog-banner-([a-z-]+)/g, (whole, name: string) => {
+      const part = bannerAttachment(name as BannerName);
+      return part ? `data:image/jpeg;base64,${part.content.toString("base64")}` : whole;
+    });
 }
 
 
