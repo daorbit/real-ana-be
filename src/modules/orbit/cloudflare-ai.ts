@@ -272,6 +272,20 @@ export async function cloudflareGenerateImage(
 }
 
 
+/** One model's activity today on one account, for the admin card's breakdown
+ * table — what's actually spending the neuron budget and how much of it is
+ * failing. */
+export type WorkersAiModelUsage = {
+  modelId: string;
+  requests: number;
+  failed: number;
+  inputTokens: number;
+  outputTokens: number;
+  neurons: number;
+  /** Average inference time across this model's requests today, ms. */
+  avgLatencyMs: number;
+};
+
 export type WorkersAiUsage = {
   /** "Primary" for CLOUDFLARE_*, "Fallback" for NO_REPLY_MAIL_CLOUDFLARE_* —
    * lets the admin card tell the two accounts apart. */
@@ -279,6 +293,9 @@ export type WorkersAiUsage = {
   neuronsToday: number;
   dailyLimit: number;
   unavailable?: string;
+  /** Per-model breakdown, most active first. Empty when there's nothing to
+   * show yet or the account's `unavailable`. */
+  models: WorkersAiModelUsage[];
 };
 
 const WORKERS_AI_DAILY_NEURONS = 10_000;
@@ -298,7 +315,14 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
             limit: 1000
             filter: { datetime_geq: $start, datetime_leq: $end }
           ) {
-            sum { totalNeurons }
+            count
+            sum {
+              totalNeurons
+              totalInputTokens
+              totalOutputTokens
+              totalInferenceTimeMs
+            }
+            dimensions { modelId errorCode }
           }
         }
       }
@@ -326,7 +350,16 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
       data?: {
         viewer?: {
           accounts?: {
-            aiInferenceAdaptiveGroups?: { sum?: { totalNeurons?: number } }[];
+            aiInferenceAdaptiveGroups?: {
+              count?: number;
+              sum?: {
+                totalNeurons?: number;
+                totalInputTokens?: number;
+                totalOutputTokens?: number;
+                totalInferenceTimeMs?: number;
+              };
+              dimensions?: { modelId?: string; errorCode?: number };
+            }[];
           }[];
         };
       };
@@ -338,6 +371,7 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
         neuronsToday: 0,
         dailyLimit: WORKERS_AI_DAILY_NEURONS,
         unavailable: body.errors[0].message,
+        models: [],
       };
     }
 
@@ -348,13 +382,49 @@ async function accountUsage(label: string, creds: CloudflareCreds): Promise<Work
       0,
     );
 
-    return { label, neuronsToday, dailyLimit: WORKERS_AI_DAILY_NEURONS };
+    // Cloudflare returns one row per (model, errorCode) combination for the
+    // day — a success row and a failure row for the same model are separate
+    // entries — so they're merged here into one row per model.
+    const byModel = new Map<string, WorkersAiModelUsage>();
+    for (const g of groups) {
+      const modelId = g.dimensions?.modelId;
+      if (!modelId) continue;
+      const requests = g.count ?? 0;
+      const failed = g.dimensions?.errorCode ? requests : 0;
+
+      const row = byModel.get(modelId) ?? {
+        modelId,
+        requests: 0,
+        failed: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        neurons: 0,
+        avgLatencyMs: 0,
+      };
+      const priorTimeMs = row.avgLatencyMs * row.requests;
+
+      row.requests += requests;
+      row.failed += failed;
+      row.inputTokens += g.sum?.totalInputTokens ?? 0;
+      row.outputTokens += g.sum?.totalOutputTokens ?? 0;
+      row.neurons += g.sum?.totalNeurons ?? 0;
+      row.avgLatencyMs = row.requests
+        ? (priorTimeMs + (g.sum?.totalInferenceTimeMs ?? 0)) / row.requests
+        : 0;
+
+      byModel.set(modelId, row);
+    }
+
+    const models = [...byModel.values()].sort((a, b) => b.requests - a.requests);
+
+    return { label, neuronsToday, dailyLimit: WORKERS_AI_DAILY_NEURONS, models };
   } catch (e) {
     return {
       label,
       neuronsToday: 0,
       dailyLimit: WORKERS_AI_DAILY_NEURONS,
       unavailable: e instanceof Error ? e.message : "analytics request failed",
+      models: [],
     };
   }
 }
