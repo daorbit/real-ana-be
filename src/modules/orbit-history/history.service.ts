@@ -25,6 +25,8 @@ export type RecordedTurn = {
   failed?: boolean;
   /** A generated image's Cloudinary URL, on an assistant turn that drew one. */
   imageUrl?: string;
+  /** The analytics snapshot this answer was based on, when it pulled one. */
+  dataDigest?: unknown;
 };
 
 function titleFrom(question: string): string {
@@ -103,6 +105,7 @@ export async function recordExchange(args: {
         content: turn.reply.slice(0, MAX_CONTENT_CHARS),
         imageUrl: turn.imageUrl || undefined,
         suggestions: cleanSuggestions(turn.suggestions),
+        dataDigest: turn.dataDigest ?? undefined,
         failed: Boolean(turn.failed),
         model: turn.model ?? "",
         modelLabel: turn.modelLabel ?? "",
@@ -190,7 +193,7 @@ export async function readConversation(workspaceId: string, conversationId: stri
 
   const messages = await OrbitMessage.find({ conversationId: convo._id })
     .sort({ seq: 1 })
-    .select("seq role content imageUrl suggestions failed modelLabel createdAt")
+    .select("seq role content imageUrl suggestions dataDigest failed modelLabel createdAt")
     .lean();
 
   return {
@@ -206,6 +209,7 @@ export async function readConversation(workspaceId: string, conversationId: stri
       content: m.content,
       imageUrl: m.imageUrl || undefined,
       suggestions: m.suggestions ?? [],
+      dataDigest: m.dataDigest ?? undefined,
       failed: Boolean(m.failed),
       modelLabel: m.modelLabel || undefined,
       createdAt: m.createdAt,
@@ -213,13 +217,7 @@ export async function readConversation(workspaceId: string, conversationId: stri
   };
 }
 
-/**
- * Hide a conversation from the workspace's list.
- *
- * A soft delete: the turns stay for a support question about a bad answer, and
- * the sweep that removes them for real is a separate deliberate job. Returns
- * false when there was nothing to delete.
- */
+
 export async function deleteConversation(workspaceId: string, conversationId: string) {
   const id = asObjectId(conversationId);
   if (!id) return false;
@@ -231,8 +229,7 @@ export async function deleteConversation(workspaceId: string, conversationId: st
   return result.modifiedCount > 0;
 }
 
-/** Hide several conversations at once. Invalid ids are dropped rather than
- * failing the whole batch — the browser's selection is trusted, not blindly. */
+
 export async function deleteConversations(workspaceId: string, conversationIds: string[]) {
   const ids = conversationIds.map(asObjectId).filter((id): id is Types.ObjectId => id != null);
   if (!ids.length) return 0;
@@ -244,10 +241,7 @@ export async function deleteConversations(workspaceId: string, conversationIds: 
   return result.modifiedCount;
 }
 
-/**
- * Rename a conversation. The title is generated from the first question, which
- * is often not what the thread turned out to be about.
- */
+
 export async function renameConversation(
   workspaceId: string,
   conversationId: string,

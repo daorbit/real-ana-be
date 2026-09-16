@@ -364,6 +364,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       modelLabel: result.modelLabel,
       latencyMs: Date.now() - startedAt,
       imageUrl: generatedImageUrl,
+      dataDigest: result.dataDigest,
     },
   });
 
@@ -375,9 +376,14 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     model: result.model,
     modelLabel: result.modelLabel,
     imageUrl: generatedImageUrl,
-    // Not persisted to history — recomputed live each time the digest is
-    // wanted, so a table stays fresh rather than showing figures as they
-    // stood when a saved conversation was first answered.
+    // Stored with the turn, not recomputed on read.
+    //
+    // This used to be deliberately unsaved, on the reasoning that a live table
+    // stays fresh — but nothing ever refetched it, so reopening a thread simply
+    // lost the table. Freshness was also the wrong goal: the prose above it
+    // quotes these exact figures, so replacing them with today's would leave an
+    // answer arguing with its own evidence. The panel captions it with the date
+    // it was taken instead.
     dataDigest: result.dataDigest,
     /** The thread this landed in. Null when it could not be stored. */
     conversationId: savedId,
