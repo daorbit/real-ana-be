@@ -282,7 +282,7 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     }),
     workersAiUsage().catch((e) => {
       console.error("[admin] workers-ai usage failed:", e instanceof Error ? e.message : e);
-      return null;
+      return [];
     }),
   ]);
 
