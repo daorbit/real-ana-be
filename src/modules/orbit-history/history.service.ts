@@ -2,25 +2,12 @@ import { Types } from "mongoose";
 import { OrbitConversation } from "./models/OrbitConversation.js";
 import { OrbitMessage } from "./models/OrbitMessage.js";
 
-/**
- * Saving and reading Orbit conversations for a workspace.
- *
- * Every write here is best-effort. A transcript is a record of something that
- * already happened successfully — the user has their answer on screen — so a
- * database problem must never turn a working answer into a failed request. The
- * recording functions swallow their own errors and log; callers do not await
- * them for correctness and have nothing useful to do if they fail.
- *
- * Reads are the opposite: a list or a transcript that silently comes back empty
- * because of an error looks like deleted data, so those throw normally.
- */
 
-/** Matches the route's own per-turn cap, so stored text is what history carries. */
 const MAX_CONTENT_CHARS = 4000;
 
 const MAX_TITLE_CHARS = 160;
 
-/** Follow-ups per answer. The panel renders three; the cap is slack, not policy. */
+
 const MAX_SUGGESTIONS = 8;
 
 const MAX_SUGGESTION_CHARS = 200;
@@ -57,15 +44,6 @@ function asObjectId(raw: string): Types.ObjectId | null {
   return Types.ObjectId.isValid(raw) ? new Types.ObjectId(raw) : null;
 }
 
-/**
- * Load the conversation a question belongs to, or start a new one.
- *
- * The id comes from the browser, so ownership is re-checked here rather than
- * trusted: a conversation is only continued when it belongs to the workspace
- * the request is scoped to and has not been deleted. Anything else silently
- * starts a new thread — the alternative is failing a question the user is
- * waiting on over a stale id in a tab left open since yesterday.
- */
 async function openConversation(
   workspaceId: string,
   userId: string,
@@ -93,21 +71,12 @@ async function openConversation(
   });
 }
 
-/**
- * Persist one exchange: the question and whatever came back, answer or error.
- *
- * Returns the conversation id so the route can hand it to the browser, which
- * sends it with the next question to continue the thread. Returns null when
- * nothing could be stored — the caller carries on either way, and the browser
- * simply keeps the conversation in memory as it always did.
- */
+
 export async function recordExchange(args: {
   workspaceId: string;
   userId: string;
   conversationId?: string;
   question: string;
-  /** A user-attached image, already uploaded — its Cloudinary URL, not the
-   * data URL that was sent to the model. */
   imageUrl?: string;
   turn: RecordedTurn;
 }): Promise<string | null> {
@@ -141,9 +110,7 @@ export async function recordExchange(args: {
       },
     ]);
 
-    // `$inc` rather than a read-modify-write: two questions sent from two tabs
-    // at once would otherwise both write the same count and lose a turn's
-    // worth of ordering.
+
     await OrbitConversation.updateOne(
       { _id: convo._id },
       {
@@ -158,27 +125,35 @@ export async function recordExchange(args: {
 
     return String(convo._id);
   } catch (e) {
-    // Logged, not thrown: the answer is already on its way to the user, and a
-    // failed write is our problem rather than theirs.
+
     console.error("[orbit-history] could not record exchange —", e);
     return null;
   }
 }
 
-/**
- * A workspace's conversations, most recently active first.
- *
- * Header fields only — this is the sidebar list, and the turns are read when
- * one is opened.
- */
-export async function listConversations(workspaceId: string, limit = LIST_LIMIT) {
-  const rows = await OrbitConversation.find({ workspaceId, deletedAt: null })
+
+export async function listConversations(
+  workspaceId: string,
+  opts: { limit?: number; before?: string } = {},
+) {
+  const limit = Math.min(Math.max(opts.limit ?? LIST_LIMIT, 1), LIST_LIMIT);
+
+  const filter: Record<string, unknown> = { workspaceId, deletedAt: null };
+
+  if (opts.before) {
+    const cursor = new Date(opts.before);
+    if (!Number.isNaN(cursor.getTime())) {
+      filter.lastMessageAt = { $lt: cursor };
+    }
+  }
+
+  const rows = await OrbitConversation.find(filter)
     .sort({ lastMessageAt: -1 })
-    .limit(Math.min(Math.max(limit, 1), LIST_LIMIT))
+    .limit(limit)
     .select("title messageCount lastMessageAt lastModelLabel createdAt userId")
     .lean();
 
-  return rows.map((r) => ({
+  const conversations = rows.map((r) => ({
     id: String(r._id),
     title: r.title,
     messageCount: r.messageCount,
@@ -187,6 +162,12 @@ export async function listConversations(workspaceId: string, limit = LIST_LIMIT)
     createdAt: r.createdAt,
     userId: r.userId ? String(r.userId) : null,
   }));
+
+  // Fewer rows than asked for means there is nothing further back.
+  const nextCursor =
+    rows.length === limit ? rows[rows.length - 1].lastMessageAt.toISOString() : null;
+
+  return { conversations, nextCursor };
 }
 
 /**
@@ -248,6 +229,19 @@ export async function deleteConversation(workspaceId: string, conversationId: st
     { $set: { deletedAt: new Date() } },
   );
   return result.modifiedCount > 0;
+}
+
+/** Hide several conversations at once. Invalid ids are dropped rather than
+ * failing the whole batch — the browser's selection is trusted, not blindly. */
+export async function deleteConversations(workspaceId: string, conversationIds: string[]) {
+  const ids = conversationIds.map(asObjectId).filter((id): id is Types.ObjectId => id != null);
+  if (!ids.length) return 0;
+
+  const result = await OrbitConversation.updateMany(
+    { _id: { $in: ids }, workspaceId, deletedAt: null },
+    { $set: { deletedAt: new Date() } },
+  );
+  return result.modifiedCount;
 }
 
 /**

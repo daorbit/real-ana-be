@@ -3,6 +3,7 @@ export {
   listConversations,
   readConversation,
   deleteConversation,
+  deleteConversations,
   renameConversation,
 } from "./history.service.js";
 export type { RecordedTurn } from "./history.service.js";

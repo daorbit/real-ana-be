@@ -17,6 +17,7 @@ import {
   listConversations,
   readConversation,
   deleteConversation,
+  deleteConversations,
   renameConversation,
 } from "../../modules/orbit-history/index.js";
 import { planLimit } from "../plan-limit.js";
@@ -400,9 +401,12 @@ router.get("/conversations", async (req: AuthedRequest, res: Response) => {
   if (!ws) return;
 
   const limit = Number(req.query.limit);
-  res.json({
-    conversations: await listConversations(ws.id, Number.isFinite(limit) ? limit : undefined),
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+  const { conversations, nextCursor } = await listConversations(ws.id, {
+    limit: Number.isFinite(limit) ? limit : undefined,
+    before: cursor,
   });
+  res.json({ conversations, nextCursor });
 });
 
 /** One conversation with its turns, for restoring it into the panel. */
@@ -451,6 +455,24 @@ router.delete("/conversations/:id", async (req: AuthedRequest, res: Response) =>
   if (!removed) return res.status(404).json({ error: "Conversation not found." });
 
   res.json({ ok: true });
+});
+
+/** Cap on one bulk-delete request — a "select all" on a very long list still
+ * has to fit in one call without either side choking on it. */
+const MAX_BULK_DELETE = 100;
+
+/** Remove several conversations from the list at once. */
+router.post("/conversations/bulk-delete", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
+
+  const ids = Array.isArray(req.body?.ids)
+    ? req.body.ids.filter((id: unknown): id is string => typeof id === "string").slice(0, MAX_BULK_DELETE)
+    : [];
+  if (!ids.length) return res.status(400).json({ error: "Nothing to delete." });
+
+  const deleted = await deleteConversations(ws.id, ids);
+  res.json({ ok: true, deleted });
 });
 
 export default router;
