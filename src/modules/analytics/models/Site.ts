@@ -15,6 +15,8 @@ const siteSchema = new Schema(
     // Required for web sites only; app sites use bundleId/packageName instead.
     domain: { type: String, default: "" },
     framework: { type: String, default: "other" }, // react | vue | angular | svelte | other
+    /** One-line "what's this site for?" answer from onboarding, if given. */
+    purpose: { type: String, default: "", maxlength: 140 },
     /** iOS bundle id / Android package name — app sites only. */
     bundleId: { type: String, default: "" },
     siteId: { type: String, required: true, unique: true, index: true }, // public tracking key

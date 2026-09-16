@@ -8,6 +8,7 @@ import { Competitor } from "../../modules/seo/models/Competitor.js";
 import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
 import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
 import {
   computeStats,
@@ -191,7 +192,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "editor");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const { name, platform, domain, framework, bundleId, trackerOptions } = req.body ?? {};
+  const { name, platform, domain, framework, bundleId, trackerOptions, purpose } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
   // Web sites are still domain-bound (that's what the tracker snippet installs
   // against); app sites are identified by bundleId instead.
@@ -211,8 +212,41 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     bundleId: bundleId ?? "",
     siteId: nanoid(16),
     trackerOptions: parseTrackerOptions(trackerOptions),
+    purpose: typeof purpose === "string" ? purpose.trim().slice(0, 140) : "",
   });
   res.status(201).json(site);
+});
+
+/**
+ * One-shot, free, ungated: a short headline/description for the onboarding
+ * "you're ready" screen, personalized to the site just created. Never blocks
+ * onboarding — the caller falls back to static copy on a 503/502/timeout.
+ */
+router.post("/:wid/onboarding-ai/copy", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+
+  if (!onboardingCopyReady()) {
+    return res.status(503).json({ error: "onboarding copy is not configured" });
+  }
+
+  const { siteName, domain, framework, purpose } = req.body ?? {};
+  if (typeof siteName !== "string" || !siteName.trim()) {
+    return res.status(400).json({ error: "siteName required" });
+  }
+  if (typeof purpose === "string" && purpose.length > 140) {
+    return res.status(400).json({ error: "purpose too long" });
+  }
+
+  const result = await generateOnboardingCopy({
+    siteName,
+    domain: typeof domain === "string" ? domain : "",
+    framework: typeof framework === "string" ? framework : "",
+    purpose: typeof purpose === "string" ? purpose : "",
+  });
+
+  if (!result.ok) return res.status(502).json({ error: "could not generate copy" });
+  res.json({ readyHeadline: result.readyHeadline, readyDescription: result.readyDescription });
 });
 
 // List sites in workspace
