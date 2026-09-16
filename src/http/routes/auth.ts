@@ -7,7 +7,7 @@ import { Membership } from "../../modules/workspace/models/Membership.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { PasswordReset } from "../../modules/identity/models/PasswordReset.js";
-import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChangedEmail } from "../../infra/mail/mailer.js";
+import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChangedEmail, sendWelcomeEmail } from "../../infra/mail/mailer.js";
 import { getDemoDailyLimit } from "../../config/AppSetting.js";
 import { tryStartDemo } from "../../modules/billing/demo-limit.js";
 import { googleConfigured, verifyGoogleCredential } from "../../infra/http-client/google-auth.js";
@@ -239,18 +239,15 @@ function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 
-/**
- * Start a signup: stash it as pending and email a code.
- *
- * No user row is created here. That is the point of the flow — an address that
- * is never verified leaves nothing behind, so it stays available to whoever
- * actually owns it.
- *
- * The response is deliberately the same whether or not the email is already
- * registered. Differing here would turn signup into an oracle for "does this
- * person have an account", which is exactly the enumeration this endpoint
- * should not offer.
- */
+
+function welcomeInBackground(email: string, name?: string): void {
+  if (!mailConfigured()) return;
+
+  void sendWelcomeEmail({ email, name }).catch((e: unknown) => {
+    console.error("[auth] welcome email failed:", e instanceof Error ? e.message : e);
+  });
+}
+
 router.post("/signup", async (req, res) => {
   try {
     const { email, password, name } = req.body ?? {};
@@ -400,6 +397,8 @@ router.post("/signup/verify", async (req, res) => {
     });
     await pending.deleteOne();
 
+    welcomeInBackground(user.email, user.name);
+
     const token = signToken(user.id);
     res.status(201).json({ token, user: await publicUser(user) });
   } catch {
@@ -543,6 +542,7 @@ router.post("/google", async (req, res) => {
         avatarUrl: profile.picture,
       });
       created = true;
+      welcomeInBackground(user.email, user.name);
     } else if (!user.googleId) {
       // An existing password account linking Google for the first time. The
       // avatar is only filled in if empty, so a picture the user chose here is

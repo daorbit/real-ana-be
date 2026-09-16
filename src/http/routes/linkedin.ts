@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
 import { SocialPostRun } from "../../modules/social/models/SocialPostRun.js";
 import { User } from "../../modules/identity/models/User.js";
+import { mailConfigured, sendWelcomeEmail } from "../../infra/mail/mailer.js";
 import {
   UNAUTHORIZED_SCOPE_ERROR,
   buildAuthorizeUrl,
@@ -300,7 +301,7 @@ async function resolveLoginUser(profile: {
   const [first, ...rest] = profile.name.split(" ");
   // No passwordHash, and `role` left to the schema default — a LinkedIn signup
   // can no more ask to be an admin than a password signup can.
-  return User.create({
+  const user = await User.create({
     email: profile.email,
     name: profile.name || profile.email.split("@")[0],
     firstName: profile.givenName || first || "",
@@ -308,6 +309,16 @@ async function resolveLoginUser(profile: {
     linkedinId: profile.sub,
     avatarUrl: profile.picture,
   });
+
+  // Not awaited: the account exists and the sign-in is about to succeed, so an
+  // SMTP failure must not turn it into an error the user sees.
+  if (mailConfigured()) {
+    void sendWelcomeEmail({ email: user.email, name: user.name }).catch((e: unknown) => {
+      console.error("[linkedin] welcome email failed:", e instanceof Error ? e.message : e);
+    });
+  }
+
+  return user;
 }
 
 /**

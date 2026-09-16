@@ -11,7 +11,12 @@ import { passwordChangeHtml, passwordChangeText } from "./templates/password-cha
 import { inviteHtml as workspaceInviteBody, inviteText as workspaceInviteTextBody } from "./templates/invite.js";
 import { paymentReceivedHtml, paymentReceivedText } from "./templates/payment-received.js";
 import { planEndHtml, planEndText } from "./templates/plan-end.js";
-import { welcomeHtml as welcomeBody } from "./templates/welcome.js";
+import {
+  welcomeHtml as welcomeBody,
+  welcomeText,
+  signupWelcomeIntro,
+  signupWelcomeCta,
+} from "./templates/welcome.js";
 import { installSnippetHtml } from "./templates/install-snippet.js";
 import { seoAuditHtml } from "./templates/seo-audit.js";
 
@@ -247,6 +252,24 @@ export async function sendPasswordChangedEmail(to: Recipient): Promise<void> {
   );
 }
 
+/**
+ * Sent once, when an account is first created.
+ *
+ * Fired from every path that creates a user — password signup, Google and
+ * LinkedIn sign-in alike — because the blocker it addresses is the same either
+ * way: someone with an account and no site on it yet.
+ */
+export async function sendWelcomeEmail(to: Recipient): Promise<void> {
+  const banner = bannerAttachment("welcome");
+
+  await sendOne(
+    to,
+    "Welcome to Quantalog",
+    welcomeText(to.name),
+    welcomeBody(signupWelcomeIntro(to.name), signupWelcomeCta()),
+    banner ? [banner] : [],
+  );
+}
 
 const LOGO_CID = "quantalog-logo";
 
