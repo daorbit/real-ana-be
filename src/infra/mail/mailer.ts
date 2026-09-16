@@ -1,4 +1,7 @@
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import nodemailer, { type Transporter } from "nodemailer";
 import { LOGO_DATA_URI } from "../../modules/seo/logo.js";
 
@@ -81,15 +84,7 @@ export type SendResult = {
   error?: string;
 };
 
-/**
- * Send one message to each recipient, sequentially.
- *
- * Each address gets its own message rather than one message with many
- * recipients: it keeps addresses from leaking to each other, and it lets
- * `{{name}}` differ per person. One failure doesn't stop the rest — a single
- * bad address in a list of forty shouldn't cost the other thirty-nine their
- * mail — so every outcome is collected and returned.
- */
+
 export async function sendBulk(
   recipients: Recipient[],
   subject: string,
@@ -190,7 +185,7 @@ export async function sendOne(
   text: string,
   html?: string,
   /** Files to send alongside the message — the logo part is added for you. */
-  attachments: { filename: string; content: Buffer; contentType?: string }[] = [],
+  attachments: { filename: string; content: Buffer; contentType?: string; cid?: string }[] = [],
   /** Extra headers, e.g. `List-Unsubscribe` on mail to people without an account. */
   headers?: Record<string, string>,
 ): Promise<void> {
@@ -226,7 +221,17 @@ It expires in ${minutes} minutes. Enter it on the signup page to finish creating
 
 If you didn't try to sign up, you can ignore this email — no account has been created.`;
 
-  await sendOne(to, `${code} is your Quantalog verification code`, text, otpHtml(code, minutes));
+  const banner = bannerAttachment();
+
+  await sendOne(
+    to,
+    `${code} is your Quantalog verification code`,
+    text,
+    otpHtml(code, minutes, to.name),
+    // The markup references the banner by cid, so the part has to ride along —
+    // same contract as the logo.
+    banner ? [banner] : [],
+  );
 }
 
 /**
@@ -248,7 +253,15 @@ It expires in ${minutes} minutes. Enter it on the password reset page to choose 
 
 If you didn't ask to reset your password, you can ignore this email — your password has not changed, and nobody can change it without this code.`;
 
-  await sendOne(to, `${code} is your Quantalog password reset code`, text, resetHtml(code, minutes));
+  const banner = bannerAttachment();
+
+  await sendOne(
+    to,
+    `${code} is your Quantalog password reset code`,
+    text,
+    resetHtml(code, minutes, to.name),
+    banner ? [banner] : [],
+  );
 }
 
 /**
@@ -296,6 +309,76 @@ export const LOGO_ATTACHMENT = {
 
 const LOGO_IMG = `<img src="cid:${LOGO_CID}" width="28" height="28" alt="Quantalog"
   style="display:block;border:0;outline:none;text-decoration:none;width:28px;height:28px">`;
+
+/**
+ * The illustrated header strip the code emails open with.
+ *
+ * A CID part for the same reason the logo is one: Gmail drops `data:` URIs out
+ * of `<img src>`, and a remote URL would be blocked until the recipient clicks
+ * "show images" — on a message whose whole job is to be read in four seconds,
+ * the banner would arrive as a grey box.
+ */
+const BANNER_CID = "quantalog-banner";
+
+/** Read once and kept — the file never changes between sends. */
+let bannerPart: { filename: string; content: Buffer; cid: string; contentType: string } | null = null;
+
+/**
+ * The banner as a MIME part, or null when the file isn't there.
+ *
+ * Resolved relative to this module so it works from `src` under tsx and from
+ * `dist` after a build, and null-tolerant on purpose: a missing image should
+ * cost the header strip, not the verification code someone is waiting on.
+ */
+function bannerAttachment() {
+  if (bannerPart) return bannerPart;
+
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    // dist/infra/mail -> dist -> package root
+    path.join(here, "..", "..", "..", "public", "email-banner.jpg"),
+    path.join(process.cwd(), "public", "email-banner.jpg"),
+  ];
+
+  for (const file of candidates) {
+    try {
+      bannerPart = {
+        filename: "email-banner.jpg",
+        content: readFileSync(file),
+        cid: BANNER_CID,
+        contentType: "image/jpeg",
+      };
+      return bannerPart;
+    } catch {
+      // Try the next location.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * The warm accent the code emails use.
+ *
+ * Separate from `C` rather than replacing it: the orange is the identity of the
+ * transactional messages — the ones that have to look unmistakably like they
+ * came from us, because they are the ones phishing imitates — while receipts,
+ * broadcasts and reports keep the emerald they already ship with.
+ */
+const O = {
+  /**
+   * The top of the page wash.
+   *
+   * Barely there on purpose. A wash strong enough to read as orange competes
+   * with the banner it is supposed to be continuing, and turns the white code
+   * box into the second-brightest thing on the page instead of the first.
+   */
+  washTop: "#fff7f0",
+  /** The banner's own wash. Also the code box's edge, which needs to be seen. */
+  tint: "#ffe6d2",
+  accent: "#f97316",
+  accentDeep: "#ea580c",
+} as const;
 
 /**
  * The shell every outgoing message shares: logo, card, footer.
@@ -592,39 +675,170 @@ export function shell(
 </div>`;
 }
 
+/* ------------------------------- code emails ------------------------------ */
+
+/**
+ * The code emails' own shell: branded row, illustrated banner, letter body.
+ *
+ * Separate from `shell` rather than a flag on it. These two messages are the
+ * ones a reader has to trust instantly — a signup code and a password reset —
+ * and what earns that is looking like a specific product rather than a generic
+ * grey card. Everything else (receipts, broadcasts, reports) is read by someone
+ * who already knows who we are, and gains nothing from a header illustration.
+ *
+ * Left-aligned throughout: this one has a greeting and real sentences, and
+ * centred prose stops being readable the moment there is more than a line of it.
+ */
+/**
+ * The face the code emails set in.
+ *
+ * Inter first for the clients that have it locally, then the platform UI faces,
+ * then Helvetica. No webfont: `@font-face` is stripped by most mail clients, so
+ * a remote Inter would be a download that buys nothing and a flash of fallback
+ * where it half-works.
+ */
+const FONT = `Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif`;
+
+function codeShell(inner: string, tagline: string[] = ["Secure", "Private", "Insightful"]): string {
+  const banner = bannerAttachment();
+
+  // No card: the message sits straight on the page. The border and radius were
+  // drawing a box around a message that is already the only thing on screen.
+  //
+  // The page itself carries a warm wash that picks up where the banner's own
+  // gradient stops, so the illustration reads as part of the message rather
+  // than a sticker on white. `background-color` is set first as the fallback:
+  // Outlook's Word engine drops `background-image` entirely, and a gradient
+  // with no flat colour behind it would fail to the client's default white.
+  return `<div style="background-color:${O.washTop};background-image:linear-gradient(180deg,${O.washTop} 0%,${C.card} 260px);padding:28px 16px;font-family:${FONT}">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto">
+    <tr><td style="padding:0">
+
+      <!-- Wordmark left, the three-word promise right. -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 18px">
+        <tr>
+          <td style="vertical-align:middle">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+              <td style="padding-right:8px;vertical-align:middle">${LOGO_IMG}</td>
+              <td style="vertical-align:middle;font-size:19px;font-weight:700;color:${C.text};letter-spacing:-0.4px">Quantalog</td>
+            </tr></table>
+          </td>
+          <td align="right" style="vertical-align:middle;font-size:12px;color:${C.faint};white-space:nowrap">
+            ${tagline.join(`<span style="color:${C.line}"> &nbsp;·&nbsp; </span>`)}
+          </td>
+        </tr>
+      </table>
+
+      ${
+        banner
+          ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 22px">
+        <tr><td style="font-size:0;line-height:0">
+          <img src="cid:${BANNER_CID}" width="600" alt=""
+            style="display:block;border:0;outline:none;text-decoration:none;width:100%;max-width:600px;height:auto;border-radius:10px">
+        </td></tr>
+      </table>`
+          : ""
+      }
+
+      ${inner}
+
+      <div style="margin-top:22px;padding-top:16px;border-top:1px solid ${C.line}">
+        <p style="margin:0;font-size:12.5px;line-height:1.6">
+          <a href="${LINKS.app}" style="color:${O.accentDeep};text-decoration:none;font-weight:600">Dashboard</a>
+          <span style="color:${C.line}"> &nbsp;·&nbsp; </span>
+          <a href="${LINKS.docs}" style="color:${O.accentDeep};text-decoration:none;font-weight:600">Docs</a>
+          <span style="color:${C.line}"> &nbsp;·&nbsp; </span>
+          <a href="${LINKS.site}" style="color:${O.accentDeep};text-decoration:none;font-weight:600">Website</a>
+        </p>
+      </div>
+    </td></tr>
+  </table>
+</div>`;
+}
+
+/**
+ * The code itself, in the banner's warm tint.
+ *
+ * Digits are spaced with padding on each character rather than
+ * `letter-spacing`, which pads the right edge too and pushes the group off
+ * centre. 28px is large enough to read off a phone held next to a laptop, which
+ * is the actual usage.
+ *
+ * The block hugs its content instead of filling the width: a full-width bar
+ * around six characters reads as an empty input field waiting to be typed into.
+ */
+function codeBox(code: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:14px 0 0">
+    <!-- White with a warm edge, not the tint: the page behind it is now warm
+         too, and a tinted block on a tinted page had no edge at all. -->
+    <tr><td align="center" style="background:${C.card};border:1px solid ${O.tint};border-radius:10px;padding:16px 22px">
+      <div style="font-size:28px;font-weight:700;line-height:1.2;color:${C.text};white-space:nowrap;font-family:${FONT}">${code
+        .split("")
+        .map((ch) => `<span style="padding:0 3px">${escapeHtml(ch)}</span>`)
+        .join("")}</div>
+    </td></tr>
+  </table>`;
+}
+
+/** When the code dies. Plain small type — a drawn clock icon was decoration. */
+function expiryLine(minutes: number): string {
+  return `<p style="margin:10px 0 0;font-size:12.5px;line-height:1.6;color:${C.faint}">This code expires in ${minutes} minutes.</p>`;
+}
+
+/** A left-aligned body paragraph, at the size the code emails set prose. */
+function codeParagraph(html: string, top: number = 10): string {
+  return `<p style="margin:${top}px 0 0;font-size:14.5px;line-height:1.65;color:${C.dim}">${html}</p>`;
+}
+
 /**
  * The signup code.
  *
- * Centred and short. Someone reads this for about four seconds with the signup
- * page still open in another window, so it is a heading, a line telling them
- * where the code goes, the code, and the one caveat that matters.
- *
- * The footer is the minimal one: offering Dashboard and Docs links to an
- * account that does not exist yet is two ways to leave the flow.
+ * Short and in order: who it's for, what was asked for, the code, when it dies,
+ * and the one caveat. Someone reads this with the signup page still open in
+ * another window, so nothing is above the code that isn't needed to trust it.
  */
-export function otpHtml(code: string, minutes: number): string {
-  return shell(
-    `${heading("Verify your account")}
-     ${paragraph("Enter this code on the signup page to finish creating your account.")}
-     ${codePanel(code, minutes)}
-     ${footnote(
-       "If you didn't request this code, you can safely ignore this email — no account has been created.",
-     )}`,
-    undefined,
-    "minimal",
+export function otpHtml(code: string, minutes: number, name?: string): string {
+  return codeShell(
+    // No heading: the banner already says "Your verification code is waiting",
+    // and repeating it in text underneath was the same sentence twice in two
+    // sizes.
+    `${codeParagraph(`Hello${name ? ` ${escapeHtml(name)}` : ""},`, 0)}
+     ${codeParagraph("We received a request to verify your Quantalog account. Here is your one-time password (OTP):")}
+
+     ${codeBox(code)}
+     ${expiryLine(minutes)}
+
+     ${codeParagraph(
+       `If you didn't request this, you can safely ignore this email. No account has been created.`,
+       18,
+     )}
+     ${/* No leading em dash: Gmail reads "-- " and "— Name" as a signature
+          delimiter and collapses everything from there into a "..." stub, which
+          hid the closing line and the footer links. */ ""}
+     ${codeParagraph(`The Quantalog Team`, 10)}`,
   );
 }
 
-export function resetHtml(code: string, minutes: number): string {
-  return shell(
-    `${heading("Reset your password")}
-     ${paragraph("Enter this code on the password reset page to choose a new password.")}
-     ${codePanel(code, minutes)}
-     ${footnote(
-       "If you didn't ask to reset your password, ignore this email — your password has not changed, and nobody can change it without this code.",
-     )}`,
-    undefined,
-    "minimal",
+/**
+ * The password reset code.
+ *
+ * Same shape as the signup code, different reassurance: the line that matters
+ * here is that the password has not changed, which is the whole reason someone
+ * reads a reset email they did not ask for.
+ */
+export function resetHtml(code: string, minutes: number, name?: string): string {
+  return codeShell(
+    `${codeParagraph(`Hello${name ? ` ${escapeHtml(name)}` : ""},`, 0)}
+     ${codeParagraph("We received a request to reset the password on your Quantalog account. Here is your one-time password (OTP):")}
+
+     ${codeBox(code)}
+     ${expiryLine(minutes)}
+
+     ${codeParagraph(
+       "If you didn't ask to reset your password, ignore this email. Your password has not changed, and nobody can change it without this code.",
+       18,
+     )}
+     ${codeParagraph(`The Quantalog Team`, 10)}`,
   );
 }
 
