@@ -973,55 +973,6 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
-router.post("/recover-with-totp", async (req, res) => {
-  try {
-    const email = String(req.body?.email ?? "").trim().toLowerCase();
-    const code = String(req.body?.code ?? "").trim().replace(/\s+/g, "");
-    const password = String(req.body?.password ?? "");
-    if (!email || !code || !password)
-      return res.status(400).json({ error: "email, code and password required" });
-
-    const invalid = passwordError(password);
-    if (invalid) return res.status(400).json({ error: invalid });
-
-    const user = await User.findOne({ email });
-    // Same "invalid code" either way an emailed reset would give a generic
-    // failure for a bad code — an account with no 2FA has no authenticator
-    // credential to check, so it is refused exactly like a wrong one.
-    if (!user || !user.totpEnabled || !user.totpSecretEnc)
-      return res.status(401).json({ error: "invalid code" });
-
-    const secret = decryptSecret(user.totpSecretEnc);
-    const totpOk = secret ? await verifyTotpCode(code, secret) : false;
-
-    let usedBackupCode = false;
-    if (!totpOk) {
-      const hashes = user.totpBackupCodeHashes ?? [];
-      let matchedIndex = -1;
-      for (let i = 0; i < hashes.length; i++) {
-        if (await bcrypt.compare(code.toUpperCase(), hashes[i])) {
-          matchedIndex = i;
-          break;
-        }
-      }
-      if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
-      user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
-      usedBackupCode = true;
-    }
-
-    user.passwordHash = await bcrypt.hash(password, 10);
-    await user.save();
-
-    sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
-      console.error("[recover-with-totp] change notice failed:", (e as Error)?.message)
-    );
-
-    const token = signToken(user.id);
-    res.json({ token, user: await publicUser(user), backupCodeUsed: usedBackupCode });
-  } catch {
-    res.status(500).json({ error: "could not reset the password" });
-  }
-});
 
 
 router.post("/forgot-password/resend", async (req, res) => {

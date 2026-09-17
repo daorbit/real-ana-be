@@ -185,6 +185,22 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
 });
 
 
+ 
+router.post("/users/:userId/2fa/disable", async (req: AuthedRequest, res: Response) => {
+  const target = await User.findById(req.params.userId);
+  if (!target) return res.status(404).json({ error: "user not found" });
+  if (!target.totpEnabled) return res.status(400).json({ error: "2fa is already off for this account" });
+
+  target.totpEnabled = false;
+  target.totpSecretEnc = "";
+  target.totpBackupCodeHashes = [];
+  await target.save();
+
+  console.log(`[admin] ${req.userId} disabled 2fa for user ${target.id} (${target.email})`);
+
+  res.json({ ok: true });
+});
+
 router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, res: Response) => {
   const ws = await Workspace.findById(req.params.workspaceId).select("_id");
   if (!ws) return res.status(404).json({ error: "workspace not found" });
