@@ -3,23 +3,7 @@ import { bannerShell, bannerAttachment } from "../../infra/mail/templates/shared
 import type { SeoRow } from "./report-xlsx.js";
 import type { Digest } from "./digest.js";
 
-/**
- * The scheduled report email itself.
- *
- * Most recipients of this message have no account and never will — they're a
- * client, a manager, someone the owner added. Two consequences run through
- * everything below:
- *
- *  - the numbers have to be readable in the body, because a recipient who has
- *    to open a spreadsheet to learn whether traffic went up will stop opening
- *    the mail;
- *  - every message carries a working unsubscribe, in the body and in the
- *    `List-Unsubscribe` header. Mail to people who never signed up is exactly
- *    what spam filters are built to catch, and an unsubscribe link is the
- *    difference between a report and a complaint.
- */
 
-/** `delta` is null when there was no previous period to compare against. */
 type Metric = { label: string; value: string; delta?: number | null };
 
 export type ReportEmailInput = {
@@ -56,61 +40,44 @@ function deltaText(delta: number | null | undefined): string {
   return `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}%`;
 }
 
-/**
- * Metrics as a two-column table rather than flex or grid.
- *
- * Outlook renders neither, and a report that arrives as a single column of
- * unaligned numbers in the client half of corporate recipients use is not
- * worth the nicer markup elsewhere.
- */
+
 function metricGrid(metrics: Metric[]): string {
-  const cells = metrics.map((m) =>
+  const rowCount = Math.ceil(metrics.length / 2);
+  const cells = metrics.map((m, i) =>
     statTile(
       escapeHtml(m.label),
       escapeHtml(m.value),
       deltaText(m.delta) || undefined,
-      m.delta === null || m.delta === undefined || m.delta === 0 ? "flat" : m.delta > 0 ? "up" : "down"
+      m.delta === null || m.delta === undefined || m.delta === 0 ? "flat" : m.delta > 0 ? "up" : "down",
+
+      Math.floor(i / 2) === rowCount - 1,
     )
   );
 
   const rows: string[] = [];
   for (let i = 0; i < cells.length; i += 2) {
-    // Pad an odd final row so the last metric stays in a half-width column
-    // instead of stretching across the whole table.
+
     const pair = cells.slice(i, i + 2);
     if (pair.length === 1) pair.push('<td width="50%"></td>');
-    // A spacer column between the two tiles: `border-spacing` is unreliable in
-    // Outlook, and margins on a `td` do nothing at all.
-    rows.push(`<tr>${pair[0]}<td width="12" style="font-size:0;line-height:0">&nbsp;</td>${pair[1]}</tr>`);
-    rows.push(`<tr><td colspan="3" height="12" style="font-size:0;line-height:0">&nbsp;</td></tr>`);
+
+    rows.push(`<tr>${pair[0]}<td width="20" style="font-size:0;line-height:0">&nbsp;</td>${pair[1]}</tr>`);
   }
 
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 12px">
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 22px">
     ${rows.join("")}
   </table>`;
 }
 
-/**
- * A breakdown as bar rows — the stand-in for a chart.
- *
- * Bars are drawn as table cells with a percentage width, so they need no image
- * and appear the moment the message opens. An image would be hidden behind the
- * client's "show images" prompt, which for an email whose entire content is
- * numbers is the wrong thing to hide.
- *
- * Shares are normalised against the largest row rather than the total: the
- * point is comparing rows with each other, and against a total the top row of
- * a long tail would be a sliver.
- */
+
 function breakdown(title: string, rows: { label: string; value: number }[], format: (n: number) => string): string {
   if (!rows.length) return "";
   const top = rows.slice(0, 5);
   const max = Math.max(...top.map((r) => r.value), 1);
 
+
   return `
-    <p style="margin:0 0 8px;font-size:13px;font-weight:600;color:${C.text}">${escapeHtml(title)}</p>
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="panel"
-      style="background:${C.panel};border-radius:10px;margin:0 0 20px">
+    <p style="margin:0 0 2px;padding-top:16px;border-top:1px solid ${C.line};font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:${C.faint}">${escapeHtml(title)}</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 8px">
       ${top.map((r) => barRow(escapeHtml(r.label), format(r.value), (r.value / max) * 100)).join("")}
     </table>`;
 }
@@ -150,19 +117,7 @@ function seoBlock(seo: SeoRow[]): string {
     </table>`;
 }
 
-/**
- * The plain-language read of the period, above the numbers.
- *
- * Placed first because it is the only part most recipients will read, and set
- * on a tinted panel so it is visibly commentary rather than another figure —
- * the reader should never have to wonder whether a sentence is measured or
- * interpreted. The recommendation is given its own line for the same reason it
- * was parsed out separately: it is the part someone might act on.
- *
- * Returns nothing at all when there is no digest, so a report that could not
- * get one looks exactly like a report from before this existed — no empty
- * panel, no apology, no gap.
- */
+
 function digestBlock(digest: Digest | undefined): string {
   if (!digest) return "";
 
@@ -267,8 +222,7 @@ async function sendReport(
           ]
         : []),
     ],
-    // Gmail and Outlook surface this as a one-click unsubscribe button above
-    // the message, which is where people look before reaching for "spam".
+
     { "List-Unsubscribe": `<${input.unsubscribeUrl}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
   );
 }

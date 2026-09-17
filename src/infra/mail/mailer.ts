@@ -446,40 +446,52 @@ export function codePanel(code: string, minutes: number): string {
 }
 
 
-export function statTile(label: string, value: string, delta?: string, tone: "up" | "down" | "flat" = "flat"): string {
+export function statTile(
+  label: string,
+  value: string,
+  delta?: string,
+  tone: "up" | "down" | "flat" = "flat",
+  lastRow = false,
+): string {
   const toneColor = tone === "up" ? C.accent : tone === "down" ? C.danger : C.faint;
-  return `<td width="50%" class="panel" style="padding:16px 18px;background:${C.panel};border-radius:10px;vertical-align:top">
-    <div style="font-size:11px;letter-spacing:0.8px;text-transform:uppercase;color:${C.faint};font-weight:700">${label}</div>
-    <div style="font-size:22px;font-weight:700;color:${C.text};line-height:1.3;padding-top:4px">${value}</div>
-    ${delta ? `<div style="font-size:12.5px;font-weight:600;color:${toneColor};padding-top:2px">${delta}</div>` : ""}
+  // A hairline border rather than a filled panel: six solid-grey boxes read as
+  // a wall of cards, where a thin rule around white space reads as a clean
+  // number grid — the same numbers, without the box-y feel.
+  return `<td width="50%" style="padding:14px 4px;vertical-align:top;${lastRow ? "" : `border-bottom:1px solid ${C.line};`}">
+    <div style="font-size:10.5px;letter-spacing:0.7px;text-transform:uppercase;color:${C.faint};font-weight:600">${label}</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px"><tr>
+      <td style="font-size:21px;font-weight:700;color:${C.text};line-height:1;letter-spacing:-0.2px">${value}</td>
+      ${delta ? `<td style="padding-left:8px;font-size:12px;font-weight:600;color:${toneColor}">${delta}</td>` : ""}
+    </tr></table>
   </td>`;
 }
 
 
 export function barRow(label: string, value: string, pct: number): string {
   const width = Math.max(2, Math.min(100, Math.round(pct)));
+  // A 3px track rather than 7px, and the label above the bar instead of beside
+  // it — three columns squeezed a long page path into 150px of ellipsis; one
+  // column gives the path room to actually be read.
   return `<tr>
-    <td style="padding:7px 0 7px 14px;font-size:13px;color:${C.dim};white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis">${label}</td>
-    <td style="padding:7px 10px;width:100%">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${C.line};border-radius:3px">
-        <tr><td style="width:${width}%;height:7px;background:${C.accent};border-radius:3px;font-size:0;line-height:0">&nbsp;</td><td style="font-size:0;line-height:0">&nbsp;</td></tr>
+    <td style="padding:11px 0">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+        <tr>
+          <td style="font-size:12.5px;color:${C.dim};padding-bottom:6px">${label}</td>
+          <td style="font-size:12.5px;font-weight:600;color:${C.text};text-align:right;padding-bottom:6px;white-space:nowrap">${value}</td>
+        </tr>
+        <tr><td colspan="2">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${C.line};border-radius:2px">
+            <tr><td style="width:${width}%;height:3px;background:${C.accent};border-radius:2px;font-size:0;line-height:0">&nbsp;</td><td style="font-size:0;line-height:0">&nbsp;</td></tr>
+          </table>
+        </td></tr>
       </table>
     </td>
-    <td style="padding:7px 14px 7px 0;font-size:13px;font-weight:600;color:${C.text};text-align:right;white-space:nowrap">${value}</td>
   </tr>`;
 }
 
-/**
- * A call-to-action button.
- *
- * A table with a background colour rather than a styled `<a>`: Outlook renders
- * the anchor's padding inconsistently, and a link that looks like plain text is
- * the difference between a message that converts and one that doesn't.
- */
+
 export function button(label: string, href: string): string {
-  // Centred in its own full-width row rather than sitting wherever the previous
-  // block left the cursor — on a centred message a left-hugging button is the
-  // one element off the page's axis.
+
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0"><tr><td align="center">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
       <td align="center" style="background:${C.accentDeep};border-radius:8px;mso-padding-alt:11px 22px">
@@ -547,10 +559,7 @@ export function shell(
     </td></tr>
 
     ${
-      // Only list mail carries a line under the card now — and it is there to
-      // hold an unsubscribe link, not to explain itself. Everything else ends
-      // at the card, which is what "quantalog.daorbit.in" repeated under a
-      // message already signed Quantalog was adding nothing to.
+
       reason
         ? `<tr><td style="padding:${S.section}px 8px 0;text-align:center">
       <p style="margin:0;font-size:11.5px;line-height:1.7;color:${C.faint}">${reason}</p>
@@ -583,8 +592,7 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
     })
     .join("");
 
-  // Only render a button for an http(s) target — an admin-supplied `javascript:`
-  // or `data:` href would be a scripting vector in whatever client opens it.
+
   const action =
     cta && /^https?:\/\//i.test(cta.href)
       ? button(escapeHtml(cta.label), escapeAttr(cta.href))
@@ -648,13 +656,7 @@ export function renderBody(
   }
 }
 
-/**
- * Renders the author's own opening paragraphs.
- *
- * Shared by every designed layout: each one is "the admin's words, then
- * something built". The first block carries the greeting and gets a heading's
- * weight without being marked up as one the author didn't write.
- */
+
 function intro(text: string): string {
   return escapeHtml(text)
     .split(/\n{2,}/)
@@ -669,14 +671,7 @@ function intro(text: string): string {
     .join("");
 }
 
-/**
- * The features an invite leads with.
- *
- * Condensed from the landing page's feature grid so the two cannot drift into
- * saying different things. Six rather than nine: an invite is a first
- * impression, and the tail of a nine-item list is read by nobody.
- */
-/** Escape a URL for use inside a double-quoted HTML attribute. */
+
 function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
@@ -833,19 +828,7 @@ export function invoiceHtml(invoice: {
   );
 }
 
-/* ------------------------------ newsletter -------------------------------- */
 
-/**
- * Sent when someone subscribes from the marketing site.
- *
- * Deliberately short. The visitor gave one field and expects one thing back —
- * confirmation that it worked — so anything beyond that is a cold email to
- * someone who has not agreed to one yet.
- *
- * The footer reason is overridden for the same reason the contact receipt
- * overrides it: a subscriber has no account, and the default line would say
- * they do.
- */
 export function newsletterAckHtml(): string {
   return shell(
     `${heading("You're on the list.")}
@@ -880,13 +863,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/**
- * An invitation to join a workspace.
- *
- * The workspace name and who sent it carry the whole message: an invite that
- * doesn't say what you're joining or who asked reads as phishing, which is
- * exactly how a legitimate one gets deleted.
- */
+
 export async function sendWorkspaceInviteEmail(
   to: Recipient,
   invite: {
