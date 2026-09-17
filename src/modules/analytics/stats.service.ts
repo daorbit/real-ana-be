@@ -809,6 +809,16 @@ async function channels(match: Match) {
                 },
                 then: "Organic Search",
               },
+              {
+                case: {
+                  $or: [
+                    has("chatgpt.com", "$_host"), has("perplexity.ai", "$_host"),
+                    has("claude.ai", "$_host"), has("gemini.google.", "$_host"),
+                    has("copilot.microsoft.", "$_host"),
+                  ],
+                },
+                then: "AI Referral",
+              },
               { case: { $ne: ["$_host", ""] }, then: "Referral" },
             ],
             default: "Direct",
