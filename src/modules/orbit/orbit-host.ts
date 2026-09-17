@@ -115,11 +115,27 @@ export const quantalogOrbitHost: OrbitHost = {
     await spendQuota(workspaceId, "orbit");
   },
 
-  dataSummary(workspaceId) {
-    return workspaceDataSummary(workspaceId);
+  dataSummary(workspaceId, question) {
+    return workspaceDataSummary(workspaceId, question);
   },
 
-  dataDigest(workspaceId) {
-    return workspaceDataDigest(workspaceId);
+  dataDigest(workspaceId, question) {
+    return workspaceDataDigest(workspaceId, question);
   },
+};
+
+/**
+ * Same entitlement/tier as `quantalogOrbitHost` — so "why did this change"
+ * still only reaches the models a workspace's plan allows — but quota is
+ * never checked or spent.
+ *
+ * For a short, single-purpose call that isn't a chat question: charging it
+ * from the monthly question pool would mean glancing at a handful of stat
+ * cards spends real quota just to understand your own dashboard. Protected
+ * instead by its own, more generous rate limit at the route level.
+ */
+export const unmeteredOrbitHost: OrbitHost = {
+  entitlement: quantalogOrbitHost.entitlement,
+  hasQuota: async () => true,
+  spendQuota: async () => {},
 };

@@ -421,7 +421,7 @@ export async function askOrbit(
   ) {
     try {
       prompt = orbitPromptWithData(
-        await host.dataSummary(tenantId),
+        await host.dataSummary(tenantId, question),
         knowledge,
         pages,
       );
@@ -429,7 +429,7 @@ export async function askOrbit(
       // implement one without the other, and a failure here should not cost
       // the question its prose answer.
       if (host.dataDigest) {
-        dataDigest = await host.dataDigest(tenantId).catch(() => undefined);
+        dataDigest = await host.dataDigest(tenantId, question).catch(() => undefined);
       }
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);

@@ -107,7 +107,7 @@ export type OrbitHost = {
    * The host decides what is safe to send to a model provider. Orbit only
    * places it in the prompt.
    */
-  dataSummary?(tenantId: string): Promise<string>;
+  dataSummary?(tenantId: string, question?: string): Promise<string>;
 
   /**
    * The same figures as `dataSummary`, as data rather than prose, for the
@@ -119,5 +119,5 @@ export type OrbitHost = {
    * `OrbitAnswer.dataDigest` when the call that produced an answer also fetched
    * it.
    */
-  dataDigest?(tenantId: string): Promise<unknown>;
+  dataDigest?(tenantId: string, question?: string): Promise<unknown>;
 };

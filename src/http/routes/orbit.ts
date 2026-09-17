@@ -10,8 +10,10 @@ import {
 } from "../../modules/orbit/index.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { quotaSummary } from "../../modules/billing/quota.service.js";
-import { effectiveOrbitPlan, quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
+import { effectiveOrbitPlan, quantalogOrbitHost, unmeteredOrbitHost } from "../../modules/orbit/orbit-host.js";
 import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
+import { explainMetricChange, type ExplainMetric } from "../../modules/orbit/explain.js";
+import { Site } from "../../modules/analytics/models/Site.js";
 import {
   recordExchange,
   listConversations,
@@ -391,6 +393,80 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     // after the spend, so it is the figure the next question will face.
     remaining: await remainingQuestions(ws.id, plan),
   });
+});
+
+const VALID_EXPLAIN_METRICS = new Set<ExplainMetric>([
+  "visitors", "pageviews", "sessions", "bounceRate",
+  "avgSessionMs", "avgTimeOnPageMs", "pagesPerSession",
+]);
+
+/** Its own, more generous limit than chat's `hourlyBurst` — a single short
+ * targeted call, not a full question, so it shouldn't be bound by a number
+ * tuned for that. */
+const EXPLAIN_HOURLY_LIMIT = 30;
+
+/**
+ * "Why did this change?" — explains one metric's move over the caller's own
+ * current dashboard range. Free: no quota spend, gated only by its own rate
+ * limit and the workspace's data-access entitlement.
+ */
+router.post("/explain", async (req: AuthedRequest, res: Response) => {
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Orbit is not available on this server." });
+  }
+
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const plan = await effectiveOrbitPlan(ws.id);
+  if (!plan.dataAccess) {
+    return planLimit(res, "Explaining a metric needs a plan with data access.", {
+      kind: "orbit_data_access",
+    }, "plan_required");
+  }
+
+  if (rateLimited(`${ws.id}:explain`, EXPLAIN_HOURLY_LIMIT)) {
+    return res.status(429).json({ error: "That is a lot of explanations in one hour. Try again later." });
+  }
+
+  const siteId = typeof req.body?.siteId === "string" ? req.body.siteId : "";
+  const metric = req.body?.metric as ExplainMetric;
+  const rangeKey = typeof req.body?.range === "string" ? req.body.range : "7d";
+
+  if (!siteId) return res.status(400).json({ error: "No site specified." });
+  if (!VALID_EXPLAIN_METRICS.has(metric)) return res.status(400).json({ error: "Unknown metric." });
+
+  const site = await Site.findOne({ siteId, workspaceId: ws.id }).select("siteId");
+  if (!site) return res.status(404).json({ error: "Site not found." });
+
+  const hungUp = new AbortController();
+  const onClose = () => hungUp.abort();
+  req.on("close", onClose);
+
+  let result;
+  try {
+    result = await explainMetricChange({
+      siteId,
+      metric,
+      rangeKey,
+      from: req.body?.from,
+      to: req.body?.to,
+      compare: req.body?.compare,
+      compareFrom: req.body?.compareFrom,
+      compareTo: req.body?.compareTo,
+      host: unmeteredOrbitHost,
+      tenantId: ws.id,
+      signal: hungUp.signal,
+    });
+  } finally {
+    req.off("close", onClose);
+  }
+
+  if (hungUp.signal.aborted) return;
+
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  res.json({ reply: result.reply });
 });
 
 /**

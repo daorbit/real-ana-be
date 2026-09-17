@@ -1,30 +1,7 @@
-/**
- * The workspace summary Orbit is allowed to answer from, on plans that include
- * data access.
- *
- * Deliberately a small, fixed digest rather than a query interface. Orbit is a
- * support assistant, and the questions data access exists to answer — "why is
- * traffic down", "which page lost visitors" — are all answered by headline
- * totals, their change against the previous period, and a handful of top rows.
- * Handing a model the ability to ask arbitrary questions of the event
- * collection would be a much larger feature with a much larger blast radius,
- * and none of it is needed to answer those.
- *
- * What is *not* here matters as much as what is. No visitor hashes, no IPs, no
- * per-event rows, nothing that identifies a person: this text is sent to a
- * third-party model, so it carries aggregates only. A model provider receiving
- * "/pricing had 412 views" is a different thing from one receiving a visitor
- * log, and only the first is defensible on a support feature.
- *
- * The digest also carries the site's SEO standing and how it compares to any
- * tracked competitors, which is what lets Orbit answer "how do we beat them"
- * from real gaps rather than generic advice. That data is of a different kind
- * but the same sensitivity: the workspace's own audit findings, and public
- * page content already fetched from competitor sites. Still no visitor data.
- */
 
 import { Site } from "../analytics/models/Site.js";
-import { computeStats } from "../analytics/stats.service.js";
+import { computeStats, resolveWindow } from "../analytics/stats.service.js";
+import { parseQuestionRange } from "./date-range.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
 import { Competitor } from "../seo/models/Competitor.js";
 import { snapshotFromReport, type CompareSnapshot } from "../seo/competitor.js";
@@ -44,16 +21,7 @@ function topList(label: string, rows: Row[] | undefined): string {
   return `${label}: ${top.map((r) => `${r.key} (${r.count})`).join(", ")}`;
 }
 
-/**
- * The same 7-day figures as `workspaceDataSummary`'s text, as data instead of
- * prose.
- *
- * For the chat panel to render as a stat row/table under an answer that used
- * them — a person scanning "Visitors: 412 (+8%)" in a paragraph has to parse
- * it back out; showing the same numbers as a small table saves that step.
- * Still only the aggregates the text digest already carries: nothing here
- * that isn't also being sent to the model.
- */
+
 export type OrbitDataDigestSite = {
   domain: string;
   visitors: number;
@@ -73,6 +41,9 @@ export type OrbitDataDigestSite = {
 
 export type OrbitDataDigest = {
   sites: OrbitDataDigestSite[];
+  /** Human-readable range the figures cover, e.g. "the last 7 days" or "last
+   * month" — echoed so the table's caption matches what was actually asked. */
+  rangeLabel?: string;
 };
 
 /** A delta as a signed percentage, or nothing when there is no prior period to compare. */
@@ -85,21 +56,9 @@ function change(value: number | null | undefined): string {
 /** Competitors summarised per site. More than this and the digest crowds out the rest. */
 const MAX_COMPETITORS_SUMMARISED = 3;
 
-/** Gap bullets carried per competitor, highest-value first. */
 const MAX_RECOMMENDATIONS = 3;
 
-/**
- * The SEO standing for one site: your latest audit, and how you compare to the
- * competitors tracked against it.
- *
- * This is what lets Orbit answer "how do we beat them" with the actual gaps
- * rather than generic advice. The comparison is the same `compareSnapshots`
- * the Compare page draws, so Orbit cannot quote a different verdict than the
- * one on screen.
- *
- * Everything here is either the workspace's own audit or public page content
- * fetched from a competitor's site. No visitor data of any kind.
- */
+
 async function seoSummary(siteId: string): Promise<string> {
   const report = await SeoReport.findOne({ siteId }).sort({ createdAt: -1 });
   if (!report?.get("data")) return "";
@@ -159,29 +118,20 @@ async function seoSummary(siteId: string): Promise<string> {
   return lines.join("\n");
 }
 
-/**
- * A plain-text digest of one workspace's last 7 days, or empty when there is
- * nothing to report.
- *
- * Returns "" rather than a "no data" sentence when the workspace tracks no
- * sites: an empty string leaves the base prompt's "you cannot read their
- * analytics" rule in force, which is the honest answer when there is genuinely
- * nothing to read.
- */
-export async function workspaceDataSummary(workspaceId: string): Promise<string> {
+
+export async function workspaceDataSummary(workspaceId: string, question?: string): Promise<string> {
   const sites = await Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES);
   if (!sites.length) return "";
+
+  const { rangeKey, from, to, label } = parseQuestionRange(question ?? "");
 
   const blocks: string[] = [];
 
   for (const site of sites) {
-    // Seven days rather than the dashboard's default: a support question about
-    // a trend needs enough window to show one, and 24h is mostly noise on a
-    // small site.
-    const stats = await computeStats([site.siteId as string], "7d");
+    const stats = await computeStats([site.siteId as string], rangeKey, undefined, resolveWindow(rangeKey, from, to));
 
     const lines = [
-      `Site ${site.domain} — last 7 days:`,
+      `Site ${site.domain} — ${label}:`,
       `Visitors: ${stats.visitors}${change(stats.deltas?.visitors)}`,
       `Pageviews: ${stats.pageviews}${change(stats.deltas?.pageviews)}`,
       `Sessions: ${stats.sessions}${change(stats.deltas?.sessions)}`,
@@ -203,25 +153,17 @@ export async function workspaceDataSummary(workspaceId: string): Promise<string>
   return blocks.join("\n\n");
 }
 
-/**
- * The structured counterpart to `workspaceDataSummary`, for rendering the
- * same 7-day figures as a table in the chat panel instead of re-parsing them
- * out of the prose sent to the model.
- *
- * A second, separate fetch rather than returned alongside the text: this
- * runs only when a question was actually answered from the digest (`ask.ts`
- * calls it after `wantsData` and a successful answer), while the text is
- * built unconditionally inside the prompt path. Keeping them apart means the
- * panel never pays for a table nobody asked a data question toward.
- */
-export async function workspaceDataDigest(workspaceId: string): Promise<OrbitDataDigest> {
+
+export async function workspaceDataDigest(workspaceId: string, question?: string): Promise<OrbitDataDigest> {
   const sites = await Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES);
   if (!sites.length) return { sites: [] };
+
+  const { rangeKey, from, to, label } = parseQuestionRange(question ?? "");
 
   const digest: OrbitDataDigestSite[] = [];
 
   for (const site of sites) {
-    const stats = await computeStats([site.siteId as string], "7d");
+    const stats = await computeStats([site.siteId as string], rangeKey, undefined, resolveWindow(rangeKey, from, to));
 
     digest.push({
       domain: site.domain as string,
@@ -241,5 +183,5 @@ export async function workspaceDataDigest(workspaceId: string): Promise<OrbitDat
     });
   }
 
-  return { sites: digest };
+  return { sites: digest, rangeLabel: label };
 }
