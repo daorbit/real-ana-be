@@ -824,23 +824,41 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
   res.json(await publicUser(user));
 });
 
+
+router.post("/me/password", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    const currentPassword = String(req.body?.currentPassword ?? "");
+    const newPassword = String(req.body?.newPassword ?? "");
+
+    if (user.passwordHash) {
+      if (!currentPassword) return res.status(400).json({ error: "current password required" });
+      const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+      if (!ok) return res.status(401).json({ error: "current password is incorrect" });
+    }
+
+    const invalid = passwordError(newPassword);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    user.passwordHash = await bcrypt.hash(newPassword, 10);
+    await user.save();
+
+    sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
+      console.error("[change-password] notice failed:", (e as Error)?.message)
+    );
+
+    res.json(await publicUser(user));
+  } catch {
+    res.status(500).json({ error: "could not update the password" });
+  }
+});
+
 /** Avatars are 200x200 on delivery, so there is no reason to accept a poster. */
 const MAX_AVATAR_BYTES = 3 * 1024 * 1024;
 
-/**
- * Upload a profile picture.
- *
- * The image arrives as a base64 data URL in the JSON body rather than as
- * multipart form data. That keeps the endpoint dependency-free (no multer) and
- * means nothing is ever written to disk — which matters on a serverless target
- * where the filesystem is read-only. The cost is base64's ~33% overhead on a
- * file that is already capped at a few megabytes.
- *
- * Saving is immediate: the new URL is written to the user here rather than
- * returned for the settings form to submit later. An upload is an explicit act
- * with a visible result, and leaving it unsaved would strand a file in
- * Cloudinary that nothing references if the user then walked away.
- */
+
 router.post("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
   try {
     if (!cloudinaryConfigured())
@@ -863,10 +881,7 @@ router.post("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedReques
       // The timestamp makes each upload a new asset rather than an overwrite, so
       // a CDN or browser holding the old URL never serves the old picture.
       publicId: `avatar-${user.id}-${Date.now()}`,
-      // The client crops to an exact 200×200 square before uploading, so this
-      // only normalises quality. A `c_fill,g_face` here would re-crop what the
-      // user deliberately framed, and a `w_200` would be a no-op. The bound
-      // stays as a backstop for anything posting to this endpoint directly.
+
       transformation: "c_limit,h_200,w_200/q_auto",
     });
 
