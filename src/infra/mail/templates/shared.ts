@@ -41,7 +41,8 @@ export type BannerName =
   | "install-snippet"
   | "seo-audit"
   | "cold-invite"
-  | "two-factor-backup-codes";
+  | "two-factor-backup-codes"
+  | "report";
 
 export type Theme = { accent: string; accentDeep: string; wash: string; edge: string };
 
@@ -57,6 +58,7 @@ export const THEMES: Record<BannerName, Theme> = {
   "seo-audit": { accent: "#16a34a", accentDeep: "#15803d", wash: "#f5fbf1", edge: "#dcefd0" },
   "cold-invite": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   "two-factor-backup-codes": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
+  report: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
 };
 
 const LOGO_CID = "quantalog-logo";

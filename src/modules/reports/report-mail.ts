@@ -1,4 +1,5 @@
-import { sendOne, shell, button, mailConfigured, statTile, barRow, C } from "../../infra/mail/mailer.js";
+import { sendOne, button, mailConfigured, statTile, barRow, C } from "../../infra/mail/mailer.js";
+import { bannerShell, bannerAttachment } from "../../infra/mail/templates/shared.js";
 import type { SeoRow } from "./report-xlsx.js";
 import type { Digest } from "./digest.js";
 
@@ -213,7 +214,8 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
     `Unsubscribe: ${input.unsubscribeUrl}`,
   ].join("\n");
 
-  const html = shell(
+  const html = bannerShell(
+    "report",
     `${
       input.isTest
         ? `<p style="margin:0 0 20px;padding:11px 14px;background:#eff6ff;border-radius:8px;font-size:13px;line-height:1.6;color:#1d4ed8">
@@ -228,11 +230,13 @@ export async function sendReportEmail(input: ReportEmailInput): Promise<void> {
      ${breakdown("Top pages", input.topPages ?? [], (n) => n.toLocaleString("en-US"))}
      ${seoBlock(input.seo)}
      ${input.xlsx ? `<p style="margin:0 0 20px;font-size:12.5px;color:${C.faint}">The full breakdown is attached as a spreadsheet.</p>` : ""}
-     ${input.dashboardUrl ? button("Open live dashboard", input.dashboardUrl) : button("Open Quantalog", appUrl())}`,
-    // This is the one message that must keep a line under the card: most
-    // recipients never signed up for anything, and the unsubscribe link is what
-    // separates a report from a spam complaint.
-    `Someone shares their Quantalog reports with you. <a href="${input.unsubscribeUrl}" style="color:${C.faint}">Unsubscribe</a>.`
+     ${input.dashboardUrl ? button("Open live dashboard", input.dashboardUrl) : button("Open Quantalog", appUrl())}
+     <!-- Kept inside the card, unlike the other templates' line-under-the-card
+          reason: most recipients of this one never signed up for anything, and
+          the unsubscribe link is what separates a report from a spam complaint. -->
+     <p style="margin:22px 0 0;font-size:11.5px;line-height:1.7;color:${C.faint};text-align:center">
+       Someone shares their Quantalog reports with you. <a href="${input.unsubscribeUrl}" style="color:${C.faint}">Unsubscribe</a>.
+     </p>`,
   );
 
   await sendReport(input, title, text, html);
@@ -244,20 +248,25 @@ async function sendReport(
   text: string,
   html: string
 ): Promise<void> {
+  const banner = bannerAttachment("report");
+
   await sendOne(
     { email: input.to },
     subject,
     text,
     html,
-    input.xlsx
-      ? [
-          {
-            filename: `${slug(input.workspaceName)}-report.xlsx`,
-            content: input.xlsx,
-            contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          },
-        ]
-      : [],
+    [
+      ...(banner ? [banner] : []),
+      ...(input.xlsx
+        ? [
+            {
+              filename: `${slug(input.workspaceName)}-report.xlsx`,
+              content: input.xlsx,
+              contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+          ]
+        : []),
+    ],
     // Gmail and Outlook surface this as a one-click unsubscribe button above
     // the message, which is where people look before reaching for "spam".
     { "List-Unsubscribe": `<${input.unsubscribeUrl}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
