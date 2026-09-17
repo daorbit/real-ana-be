@@ -1249,19 +1249,26 @@ export async function compareBreakdown(
     ),
   ]);
 
+ 
+  const normalise = (key: string | null | undefined) => key || "(none)";
+
   const prevByKey = new Map<string, number>();
   for (const r of previousRows as { key: string; count: number }[]) {
-    prevByKey.set(r.key ?? "", r.count);
+    const key = normalise(r.key);
+    prevByKey.set(key, (prevByKey.get(key) ?? 0) + r.count);
   }
 
-  const rows: BreakdownComparisonRow[] = (currentRows as { key: string; count: number }[]).map(
-    (r) => {
-      const key = r.key ?? "";
-      const previous = prevByKey.get(key) ?? 0;
-      prevByKey.delete(key);
-      return { key, count: r.count, previous, delta: delta(r.count, previous) };
-    },
-  );
+  const currentByKey = new Map<string, number>();
+  for (const r of currentRows as { key: string; count: number }[]) {
+    const key = normalise(r.key);
+    currentByKey.set(key, (currentByKey.get(key) ?? 0) + r.count);
+  }
+
+  const rows: BreakdownComparisonRow[] = [...currentByKey].map(([key, count]) => {
+    const previous = prevByKey.get(key) ?? 0;
+    prevByKey.delete(key);
+    return { key, count, previous, delta: delta(count, previous) };
+  });
 
   for (const [key, previous] of prevByKey) {
     rows.push({ key, count: 0, previous, delta: delta(0, previous) });
