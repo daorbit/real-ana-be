@@ -8,6 +8,7 @@ import { bannerAttachment, type BannerName } from "./templates/shared.js";
 import { verificationCodeHtml, verificationCodeText } from "./templates/verification-code.js";
 import { passwordResetHtml, passwordResetText } from "./templates/password-reset.js";
 import { passwordChangeHtml, passwordChangeText } from "./templates/password-change.js";
+import { bannerShell, greetingLine, line as bannerLine, signOff, warningPanel, escapeHtml as escapeHtmlShared } from "./templates/shared.js";
 import { twoFactorBackupCodesHtml, twoFactorBackupCodesText } from "./templates/two-factor-backup-codes.js";
 import { inviteHtml as workspaceInviteBody, inviteText as workspaceInviteTextBody } from "./templates/invite.js";
 import { paymentReceivedHtml, paymentReceivedText } from "./templates/payment-received.js";
@@ -254,6 +255,48 @@ export async function sendTwoFactorBackupCodesEmail(to: Recipient, codes: string
     twoFactorBackupCodesHtml(codes, to.name),
     banner ? [banner] : [],
   );
+}
+
+/**
+ * Sent whenever a superadmin resets a security setting on someone's account
+ * (2FA, screen lock) on their behalf, typically after a support request from
+ * someone who lost their authenticator or PIN. Same shell as the password-
+ * change notice, for the same reason: a security downgrade that happened
+ * without the account holder typing anything themselves is exactly the kind
+ * of change worth a receipt.
+ */
+export async function sendAdminSecurityResetEmail(to: Recipient, what: string): Promise<void> {
+  const banner = bannerAttachment("password-change");
+
+  await sendOne(
+    to,
+    `${what} on your Quantalog account`,
+    adminSecurityResetText(what, to.name),
+    adminSecurityResetHtml(what, to.name),
+    banner ? [banner] : [],
+  );
+}
+
+function adminSecurityResetHtml(what: string, name?: string): string {
+  return bannerShell(
+    "password-change",
+    `${greetingLine(name)}
+     ${bannerLine(`${escapeHtmlShared(what)} by our support team, at your request.`)}
+     ${warningPanel(
+       `<strong style="color:${C.text}">If you didn't ask for this</strong>, contact support right away — someone reaching us with your details could be trying to take over your account.`,
+     )}
+     ${signOff()}`,
+  );
+}
+
+function adminSecurityResetText(what: string, name?: string): string {
+  return `Hello${name?.trim() ? ` ${name.trim()}` : ""},
+
+${what} by our support team, at your request.
+
+If you didn't ask for this, contact support right away — someone reaching us with your details could be trying to take over your account.
+
+The Quantalog Team`;
 }
 
 export async function sendPasswordChangedEmail(to: Recipient): Promise<void> {

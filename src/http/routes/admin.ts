@@ -27,7 +27,7 @@ import { accountBillingSummary } from "../../modules/billing/quota.service.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { CURRENCIES } from "../../modules/billing/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../modules/billing/fx.js";
-import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, type BodyLayout } from "../../infra/mail/mailer.js";
+import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, sendAdminSecurityResetEmail, type BodyLayout } from "../../infra/mail/mailer.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
@@ -59,7 +59,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
 
   const [users, total] = await Promise.all([
     User.find(filter)
-      .select("email name role avatarUrl createdAt")
+      .select("email name role avatarUrl createdAt totpEnabled screenLockEnabled")
       .sort({ createdAt: -1 })
       .skip((page - 1) * USERS_PAGE_SIZE)
       .limit(USERS_PAGE_SIZE),
@@ -135,6 +135,8 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
         role: u.role,
         avatarUrl: u.avatarUrl ?? "",
         createdAt: u.get("createdAt"),
+        totpEnabled: Boolean(u.totpEnabled),
+        screenLockEnabled: Boolean(u.screenLockEnabled),
         workspaceCount: wsByUser.get(u.id) ?? 0,
         siteCount: sitesByUser.get(u.id) ?? 0,
         eventCount: eventsByUser.get(u.id)?.n ?? 0,
@@ -186,6 +188,12 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
 
 
  
+/**
+ * Support-side recovery for someone who lost their authenticator app and used
+ * up their backup codes: superadmin can turn 2FA off for them, never see it.
+ * Codes and secrets are hashed/encrypted at rest specifically so no one,
+ * admin included, can read them back — resetting is the only lever here.
+ */
 router.post("/users/:userId/2fa/disable", async (req: AuthedRequest, res: Response) => {
   const target = await User.findById(req.params.userId);
   if (!target) return res.status(404).json({ error: "user not found" });
@@ -197,6 +205,38 @@ router.post("/users/:userId/2fa/disable", async (req: AuthedRequest, res: Respon
   await target.save();
 
   console.log(`[admin] ${req.userId} disabled 2fa for user ${target.id} (${target.email})`);
+
+  sendAdminSecurityResetEmail(
+    { email: target.email, name: target.name },
+    "Two-factor authentication was turned off",
+  ).catch((e) => console.error("[admin] 2fa-disable notice failed:", (e as Error)?.message));
+
+  res.json({ ok: true });
+});
+
+/**
+ * Same recovery, for someone locked out of the idle screen lock with no
+ * working PIN or TOTP left. Clears the PIN, the lock flag, and any lock in
+ * effect right now — the user sets a fresh PIN (or turns the lock back on)
+ * next time they're in Settings.
+ */
+router.post("/users/:userId/screen-lock/reset", async (req: AuthedRequest, res: Response) => {
+  const target = await User.findById(req.params.userId);
+  if (!target) return res.status(404).json({ error: "user not found" });
+  if (!target.screenLockEnabled && !target.pinHash)
+    return res.status(400).json({ error: "this account has no screen lock or PIN set" });
+
+  target.screenLockEnabled = false;
+  target.pinHash = "";
+  target.lockedAt = null;
+  await target.save();
+
+  console.log(`[admin] ${req.userId} reset the screen lock for user ${target.id} (${target.email})`);
+
+  sendAdminSecurityResetEmail(
+    { email: target.email, name: target.name },
+    "Your screen lock and PIN were reset",
+  ).catch((e) => console.error("[admin] screen-lock-reset notice failed:", (e as Error)?.message));
 
   res.json({ ok: true });
 });
