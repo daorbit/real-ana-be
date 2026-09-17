@@ -89,18 +89,7 @@ async function publicUser(user: InstanceType<typeof User>) {
     /** False for social-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
     totpEnabled: Boolean(user.totpEnabled),
-    /**
-     * How this account came to exist.
-     *
-     * Derived rather than stored, so accounts created before this field existed
-     * report something sensible instead of nothing. A password is the strongest
-     * signal — it can only have been set deliberately by the account's owner —
-     * so it wins; after that, whichever provider is linked.
-     *
-     * Note this is "how they can sign in", not a marketing attribution: an
-     * account that signed up with Google and later set a password reports
-     * `email`, because that is now the primary way in.
-     */
+
     signupSource: user.passwordHash
       ? "email"
       : user.googleId
@@ -108,34 +97,12 @@ async function publicUser(user: InstanceType<typeof User>) {
         : user.linkedinId
           ? "linkedin"
           : "email",
-    // No billing here. A plan belongs to a workspace, not to an account, so it
-    // travels with the workspace (see `GET /api/workspaces`) — this endpoint
-    // answers "who am I", and an account that can reach a workspace it does not
-    // own has no account-level plan to report at all.
-    //
-    // Access, though, *is* a property of the person: which workspaces this
-    // account can open and what it may do in each. It rides along here so the
-    // client knows both before it has fetched anything workspace-shaped —
-    // deciding where to land, and whether to show the "you've been invited"
-    // prompt, are questions asked at sign-in.
+
     ...(await accessSummary(user.id)),
   };
 }
 
-/**
- * The workspaces this account can reach, and the invitations still waiting for
- * it.
- *
- * Two lists rather than one with a flag, because they are different things: a
- * membership is access that exists, an invitation is an offer that has not been
- * taken up and confers nothing until it is. Collapsing them into one array with
- * `accepted: false` invites a client to treat a pending invite as a workspace
- * it can open, which it cannot.
- *
- * Deliberately thin — id, name, role. The full workspace objects, with their
- * plans and usage, come from `GET /api/workspaces`; duplicating them here would
- * mean two copies of the same state going stale at different rates.
- */
+
 async function accessSummary(userId: string) {
   const memberships = await Membership.find({ userId }).select("workspaceId role").lean();
 
@@ -342,12 +309,7 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-/**
- * Finish a signup by proving the code, creating the real account.
- *
- * This is the only path that writes to `users` for a new signup, so a token
- * only ever exists for an address someone demonstrably reads.
- */
+
 router.post("/signup/verify", async (req, res) => {
   try {
     const email = String(req.body?.email ?? "").trim().toLowerCase();
@@ -358,10 +320,6 @@ router.post("/signup/verify", async (req, res) => {
 
     const pending = await PendingSignup.findOne({ email });
 
-    // No pending record is a different situation from an expired one, and
-    // saying "expired" for it sends people to resend a code that was never
-    // sent. It happens when the address is already registered (signup answers
-    // identically either way, by design) or when the signup was never started.
     if (!pending) {
       return res.status(400).json({
         error: "no signup is in progress for that address — it may already be registered, so try logging in",
@@ -421,13 +379,7 @@ router.post("/signup/verify", async (req, res) => {
   }
 });
 
-/**
- * Send a fresh code for a signup already in progress.
- *
- * A new code replaces the old one and resets the attempt counter — otherwise a
- * resend would inherit a nearly-exhausted budget and fail for no reason the
- * user can see.
- */
+
 router.post("/signup/resend", async (req, res) => {
   try {
     const email = String(req.body?.email ?? "").trim().toLowerCase();
@@ -477,14 +429,6 @@ router.post("/login", async (req, res) => {
     if (!email || !password)
       return res.status(400).json({ error: "email, password required" });
 
-    // The challenge is checked before the address is looked up, let alone the
-    // password compared: the point of it is to keep automated traffic away from
-    // the credential check entirely, and doing the lookup first would leak
-    // whether an account exists to a caller that never passed the challenge.
-    //
-    // Skipped only where no secret is set — a local checkout without Turnstile
-    // configured still logs in, exactly as it did before this existed. Any
-    // deployment with the secret present fails closed.
     if (turnstileConfigured()) {
       const check = await verifyTurnstileToken(turnstileToken, req.ip);
       if (!check.ok)
@@ -525,13 +469,7 @@ router.post("/login", async (req, res) => {
   }
 });
 
-/**
- * Second login step for an account with 2FA on.
- *
- * Accepts either a live TOTP code or an unused backup code — same route,
- * since both prove the same thing and a client showing two separate boxes
- * for "code" would just be asking the user to know which kind they have.
- */
+
 router.post("/2fa/verify", async (req, res) => {
   try {
     const { pendingToken, code } = req.body ?? {};
@@ -576,13 +514,7 @@ router.post("/2fa/verify", async (req, res) => {
   }
 });
 
-/**
- * Start enrolling 2FA: generates a secret and returns the otpauth URL as a
- * QR code, but does not turn anything on yet. Nothing is written to the
- * user document until `/2fa/enable` proves the app was set up correctly —
- * saving the secret here would risk locking someone out over a QR code they
- * never actually scanned.
- */
+
 router.post("/2fa/setup", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -599,13 +531,7 @@ router.post("/2fa/setup", requireAuth, async (req: AuthedRequest, res) => {
   }
 });
 
-/**
- * Finish enrolling 2FA: proves the secret from `/2fa/setup` was scanned and
- * works, then turns it on and mints the recovery codes. The secret is passed
- * back in rather than held server-side between the two calls — there is no
- * session state for an in-progress setup, and a raw secret only needs to
- * exist encrypted, in the one document it belongs to.
- */
+
 router.post("/2fa/enable", requireAuth, async (req: AuthedRequest, res) => {
   try {
     const { secret, code } = req.body ?? {};
@@ -658,18 +584,7 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
   }
 });
 
-/**
- * Sign in (or sign up) with Google.
- *
- * One endpoint for both, because Google has already proved the address: there
- * is nothing left for an OTP round-trip to establish, so a first-time Google
- * user gets an account here and now.
- *
- * Matching on verified email is what links a Google sign-in to an account that
- * originally signed up with a password. That is only safe because
- * `verifyGoogleCredential` refuses unverified addresses — otherwise anyone could
- * make a Google account claiming someone else's email and walk into theirs.
- */
+
 router.post("/google", async (req, res) => {
   try {
     if (!googleConfigured())
@@ -733,24 +648,6 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
 });
 
 
-/**
- * Enter the read-only public demo.
- *
- * This mints a token and nothing else: the demo has no database presence at
- * all. Every figure the demo shows is generated in the browser from fixtures,
- * so a visitor looking around costs no queries, writes no rows, and cannot
- * touch anyone's data. The token exists purely so the client can recognise a
- * demo session (and so the write guard can refuse it if a request ever is
- * made).
- */
-/**
- * The caller's address.
- *
- * `trust proxy` is on, so Express has already resolved the forwarding chain;
- * this only normalises the IPv4-mapped IPv6 form ("::ffff:1.2.3.4") so the same
- * caller doesn't count as two different addresses. The value is used to look up
- * a counter in memory and is never stored.
- */
 function clientIp(req: Request): string {
   const raw = req.ip ?? req.socket.remoteAddress ?? "";
   return raw.replace(/^::ffff:/, "") || "unknown";
@@ -777,14 +674,7 @@ router.post("/demo", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * Update the signed-in user's profile.
- *
- * Email and role are deliberately not editable here: email is the login
- * identity (changing it needs a verification flow) and role is granted, never
- * requested. Everything else is optional — an omitted field is left alone,
- * which is what lets the form send only what changed.
- */
+
 router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
@@ -918,23 +808,7 @@ router.delete("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequ
   }
 });
 
-/* --------------------------- password reset ------------------------------- */
 
-/**
- * Password reset, by the same six-digit code the signup flow uses.
- *
- * A code rather than a link, for one reason: a reset link is a bearer token
- * that lives in a URL, and URLs end up in browser history, referrer headers,
- * chat previews and corporate mail scanners that fetch every link they see.
- * A code has to be read by a person and typed back, which none of those do.
- *
- * The rule running through all three routes below: the response never reveals
- * whether an account exists. `POST /forgot-password` answers identically for a
- * registered address and an unknown one, because the alternative is a free
- * membership oracle for anyone with a list of emails.
- */
-
-/** Validation for the new password only — reuses the signup rules. */
 function passwordError(password: string): string | null {
   if (password.length < 8) return "password must be at least 8 characters";
   if (password.length > 72) return "password must be 72 characters or fewer";
@@ -943,12 +817,6 @@ function passwordError(password: string): string | null {
   return null;
 }
 
-/**
- * Start a reset: send a code to the address, if it belongs to an account.
- *
- * Always answers 202. Whether a code was actually sent is deliberately not
- * observable — see the note above.
- */
 router.post("/forgot-password", async (req, res) => {
   const accepted = { pending: true, expiresInMinutes: OTP_TTL_MINUTES };
 
@@ -1035,13 +903,7 @@ router.post("/forgot-password", async (req, res) => {
   }
 });
 
-/**
- * Finish a reset: prove the code, set the new password.
- *
- * Deliberately one step rather than two. Exchanging the code for a short-lived
- * token first would create a second credential to leak, and gains nothing —
- * the user already has the new password in hand by the time they submit.
- */
+
 router.post("/reset-password", async (req, res) => {
   try {
     const email = String(req.body?.email ?? "").trim().toLowerCase();
@@ -1098,16 +960,12 @@ router.post("/reset-password", async (req, res) => {
     await user.save();
     await pending.deleteOne();
 
-    // The one thing that turns a silent takeover into a noticed one. Not
-    // awaited into the response: the password is already changed, and a mail
-    // outage must not read as a failed reset the user would repeat.
+
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
       console.error("[reset] change notice failed:", (e as Error)?.message)
     );
 
-    // Signed straight in. They have just proved control of the inbox and set
-    // the password; sending them to a login form to type it again is friction
-    // with no security value.
+ 
     const token = signToken(user.id);
     res.json({ token, user: await publicUser(user) });
   } catch {
@@ -1115,13 +973,57 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
-/**
- * Send a fresh reset code.
- *
- * Same shape as the signup resend, and the same anti-enumeration rule as
- * `/forgot-password` — which is why it answers 202 rather than 404 for an
- * address with no reset in progress.
- */
+router.post("/recover-with-totp", async (req, res) => {
+  try {
+    const email = String(req.body?.email ?? "").trim().toLowerCase();
+    const code = String(req.body?.code ?? "").trim().replace(/\s+/g, "");
+    const password = String(req.body?.password ?? "");
+    if (!email || !code || !password)
+      return res.status(400).json({ error: "email, code and password required" });
+
+    const invalid = passwordError(password);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const user = await User.findOne({ email });
+    // Same "invalid code" either way an emailed reset would give a generic
+    // failure for a bad code — an account with no 2FA has no authenticator
+    // credential to check, so it is refused exactly like a wrong one.
+    if (!user || !user.totpEnabled || !user.totpSecretEnc)
+      return res.status(401).json({ error: "invalid code" });
+
+    const secret = decryptSecret(user.totpSecretEnc);
+    const totpOk = secret ? await verifyTotpCode(code, secret) : false;
+
+    let usedBackupCode = false;
+    if (!totpOk) {
+      const hashes = user.totpBackupCodeHashes ?? [];
+      let matchedIndex = -1;
+      for (let i = 0; i < hashes.length; i++) {
+        if (await bcrypt.compare(code.toUpperCase(), hashes[i])) {
+          matchedIndex = i;
+          break;
+        }
+      }
+      if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
+      user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
+      usedBackupCode = true;
+    }
+
+    user.passwordHash = await bcrypt.hash(password, 10);
+    await user.save();
+
+    sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
+      console.error("[recover-with-totp] change notice failed:", (e as Error)?.message)
+    );
+
+    const token = signToken(user.id);
+    res.json({ token, user: await publicUser(user), backupCodeUsed: usedBackupCode });
+  } catch {
+    res.status(500).json({ error: "could not reset the password" });
+  }
+});
+
+
 router.post("/forgot-password/resend", async (req, res) => {
   const accepted = { pending: true, expiresInMinutes: OTP_TTL_MINUTES };
 
