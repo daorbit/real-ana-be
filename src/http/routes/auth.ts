@@ -489,7 +489,8 @@ router.post("/2fa/verify", async (req, res) => {
 
     const cleanCode = String(code).replace(/\s+/g, "");
     const secret = decryptSecret(user.totpSecretEnc);
-    const totpOk = secret ? await verifyTotpCode(cleanCode, secret) : false;
+
+    const totpOk = secret && /^\d{6}$/.test(cleanCode) ? await verifyTotpCode(cleanCode, secret) : false;
 
     if (totpOk) {
       const token = signToken(user.id);
@@ -740,8 +741,10 @@ router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) =>
     let ok = false;
 
     if (totpCode && user.totpEnabled && user.totpSecretEnc) {
+      const cleanCode = String(totpCode).replace(/\s+/g, "");
       const secret = decryptSecret(user.totpSecretEnc);
-      ok = secret ? await verifyTotpCode(String(totpCode).replace(/\s+/g, ""), secret) : false;
+
+      ok = Boolean(secret) && /^\d{6}$/.test(cleanCode) ? await verifyTotpCode(cleanCode, secret!) : false;
     } else if (pin && user.pinHash) {
       ok = await bcrypt.compare(String(pin), user.pinHash);
     }
