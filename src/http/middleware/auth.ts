@@ -72,6 +72,13 @@ export function requireAuth(
   }
 }
 
+export const requireUnlocked = asyncHandler<AuthedRequest>(async (req, res, next) => {
+  if (req.isDemo) return next();
+  const user = await User.findById(req.userId).select("lockedAt");
+  if (user?.lockedAt) return res.status(423).json({ error: "screen is locked", locked: true });
+  next();
+});
+
 const DEMO_COMPUTE_ALLOW = [/\/funnel$/];
 
 export function blockDemoWrites(

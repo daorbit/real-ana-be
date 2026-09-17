@@ -89,6 +89,9 @@ async function publicUser(user: InstanceType<typeof User>) {
     /** False for social-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
     totpEnabled: Boolean(user.totpEnabled),
+    screenLockEnabled: Boolean(user.screenLockEnabled),
+    hasPin: Boolean(user.pinHash),
+    locked: Boolean(user.lockedAt),
 
     signupSource: user.passwordHash
       ? "email"
@@ -581,6 +584,173 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "could not disable 2fa" });
+  }
+});
+
+function pinError(pin: string): string | null {
+  if (!/^\d{4,8}$/.test(pin)) return "PIN must be 4 to 8 digits";
+  return null;
+}
+
+/** Per-account unlock attempt counter, in memory only. A lock screen is a
+ * short-lived, single-process concern — losing counts on a restart or in a
+ * multi-instance deploy just means an attacker gets a fresh window, not a
+ * free pass, so this doesn't need to be durable or shared like the account
+ * data above. */
+const unlockAttempts = new Map<string, { count: number; lockedUntil: number }>();
+const MAX_UNLOCK_ATTEMPTS = 5;
+const UNLOCK_COOLDOWN_MS = 15 * 60 * 1000;
+
+function checkUnlockThrottle(userId: string): number | null {
+  const entry = unlockAttempts.get(userId);
+  if (entry && entry.lockedUntil > Date.now()) return entry.lockedUntil;
+  return null;
+}
+
+function recordUnlockFailure(userId: string): void {
+  const entry = unlockAttempts.get(userId) ?? { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= MAX_UNLOCK_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + UNLOCK_COOLDOWN_MS;
+    entry.count = 0;
+  }
+  unlockAttempts.set(userId, entry);
+}
+
+function clearUnlockFailures(userId: string): void {
+  unlockAttempts.delete(userId);
+}
+
+/** Sets or replaces the screen-lock PIN. Requires the current PIN once one
+ * exists, same "prove you still control this" rule as password/2FA changes;
+ * the very first PIN needs no proof since there is nothing yet to protect. */
+router.post("/me/pin", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    const currentPin = String(req.body?.currentPin ?? "");
+    const newPin = String(req.body?.newPin ?? "");
+
+    if (user.pinHash) {
+      if (!currentPin) return res.status(400).json({ error: "current PIN required" });
+      if (!(await bcrypt.compare(currentPin, user.pinHash)))
+        return res.status(401).json({ error: "current PIN is incorrect" });
+    }
+
+    const invalid = pinError(newPin);
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    user.pinHash = await bcrypt.hash(newPin, 10);
+    await user.save();
+
+    res.json(await publicUser(user));
+  } catch {
+    res.status(500).json({ error: "could not update the PIN" });
+  }
+});
+
+/** Turns the idle screen lock on. A PIN is mandatory unless TOTP is already
+ * enabled — unlocking has to have at least one working method, and TOTP alone
+ * covers that. */
+router.post("/me/screen-lock/enable", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    const pin = req.body?.pin !== undefined ? String(req.body.pin) : "";
+
+    if (!user.totpEnabled && !user.pinHash) {
+      if (!pin) return res.status(400).json({ error: "a PIN is required unless 2FA is already on" });
+      const invalid = pinError(pin);
+      if (invalid) return res.status(400).json({ error: invalid });
+      user.pinHash = await bcrypt.hash(pin, 10);
+    }
+
+    user.screenLockEnabled = true;
+    await user.save();
+
+    res.json(await publicUser(user));
+  } catch {
+    res.status(500).json({ error: "could not enable the screen lock" });
+  }
+});
+
+/** Turns the screen lock off. Requires the current password, same security-
+ * downgrade rule as disabling 2FA. */
+router.post("/me/screen-lock/disable", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  try {
+    const { password } = req.body ?? {};
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+
+    if (!user.passwordHash || !(await bcrypt.compare(password ?? "", user.passwordHash)))
+      return res.status(401).json({ error: "incorrect password" });
+
+    user.screenLockEnabled = false;
+    user.lockedAt = null;
+    await user.save();
+
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "could not disable the screen lock" });
+  }
+});
+
+/** Called by the client's idle timer. Flips the server-side lock flag that
+ * `requireUnlocked` checks on every subsequent request — the enforcement
+ * lives here, not in whatever overlay the client happens to render. */
+router.post("/lock", requireAuth, async (req: AuthedRequest, res: Response) => {
+  if (req.isDemo) return res.json({ ok: true });
+  try {
+    const user = await User.findById(req.userId).select("screenLockEnabled");
+    if (!user) return res.status(404).json({ error: "not found" });
+    if (!user.screenLockEnabled) return res.json({ ok: true, locked: false });
+
+    await User.updateOne({ _id: req.userId }, { lockedAt: new Date() });
+    res.json({ ok: true, locked: true });
+  } catch {
+    res.status(500).json({ error: "could not lock" });
+  }
+});
+
+/** Clears the lock flag once the PIN or a live TOTP code checks out. */
+router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) => {
+  if (req.isDemo) return res.json({ ok: true });
+  try {
+    const userId = req.userId!;
+    const throttledUntil = checkUnlockThrottle(userId);
+    if (throttledUntil)
+      return res.status(429).json({
+        error: "too many attempts — try again later",
+        retryAt: new Date(throttledUntil).toISOString(),
+      });
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+    if (!user.lockedAt) return res.json({ ok: true });
+
+    const { pin, totpCode } = req.body ?? {};
+    let ok = false;
+
+    if (totpCode && user.totpEnabled && user.totpSecretEnc) {
+      const secret = decryptSecret(user.totpSecretEnc);
+      ok = secret ? await verifyTotpCode(String(totpCode).replace(/\s+/g, ""), secret) : false;
+    } else if (pin && user.pinHash) {
+      ok = await bcrypt.compare(String(pin), user.pinHash);
+    }
+
+    if (!ok) {
+      recordUnlockFailure(userId);
+      return res.status(401).json({ error: "incorrect PIN or code" });
+    }
+
+    clearUnlockFailures(userId);
+    user.lockedAt = null;
+    await user.save();
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "could not unlock" });
   }
 });
 

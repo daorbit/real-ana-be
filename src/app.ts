@@ -39,6 +39,7 @@ import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 import { dashboardCors } from "./http/middleware/cors.js";
+import { requireUnlocked } from "./http/middleware/auth.js";
 
 const app = express();
 // Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
@@ -143,13 +144,7 @@ app.get("/tracker.js", openCors, (_req, res) => {
   res.sendFile(path.join(publicDir, "tracker.js"));
 });
 
-// Interactive documentation for the platform API below.
-//
-// Open CORS and no auth of its own: the page is public reference material, and
-// the key a reader pastes into "Authorize" is sent to `/v1` — which does check
-// it — not to this route. Serving it from the API's own origin is what lets
-// "Try it out" work at all: the browser calls the same host it loaded the page
-// from, so there is no preflight to fail and no key to proxy through us.
+
 const openApiSpec = buildOpenApiSpec();
 app.get("/openapi.json", openCors, (_req: Request, res: Response) => {
   res.json(openApiSpec);
@@ -196,110 +191,76 @@ app.use("/api/public/plans", openCors, plansPublicRoutes);
 // links above — most recipients have no account, and requiring one to stop
 // receiving mail is how a report turns into a spam complaint.
 app.use("/api/public/reports", openCors, reportsPublicRoutes);
-// Inbound messages — the marketing site's contact form, the newsletter dialog
-// and the in-app help form — are da-forms forms now, posting to forms.daorbit.in
-// and read in that product's entries view. Nothing writes ContactMessage here
-// any more, so the model, its three routes and the admin inbox are all gone.
-// Orbit on the marketing site — unauthenticated pre-sales chat, Cloudflare-only
-// models, rate-limited per IP. Separate from the workspace-metered in-app
-// assistant at /api/workspaces/:wid/orbit.
+
 app.use("/api/public/orbit", openCors, orbitPublicRoutes);
-// LinkedIn account connection and publishing. Mounted before `/api/auth` so
-// its paths win. The router applies CORS per route rather than taking it here:
-// its two redirect endpoints are browser navigations (one from a
-// `window.location` assignment, one from linkedin.com) which send no Origin the
-// dashboard allowlist would accept, while `/status`, `/post` and disconnect are
-// ordinary dashboard fetches that need it.
+
 app.use("/api/auth/linkedin", linkedinRoutes);
 
-// Instagram account connection. Same router mounted twice, deliberately.
-//
-// `/api/auth/instagram` is where the dashboard's own fetches go, matching every
-// other route here. The bare `/auth/instagram` is what Meta was given: the
-// redirect, deauthorize and data-deletion URLs registered in the developer
-// portal carry no `/api` prefix, and Meta compares the redirect URI as a string
-// — it cannot be corrected on our side without re-registering, and the portal's
-// values are also referenced by the app's published privacy policy.
-//
-// The router applies CORS per route rather than taking it here, for the same
-// reason as LinkedIn above: the OAuth endpoints are browser navigations and
-// server-to-server callbacks that send no Origin the dashboard allowlist would
-// accept, while `/status` and disconnect are ordinary dashboard fetches.
 app.use("/api/auth/instagram", instagramRoutes);
 app.use("/auth/instagram", instagramRoutes);
 
-// Google Business Profile connection and review data. Mounted before
-// `/api/auth` so its paths win, for the same reason as LinkedIn above.
-//
-// The router applies CORS per route rather than taking it here: the two OAuth
-// endpoints are browser navigations (one from a `window.location` assignment,
-// one from accounts.google.com) which send no Origin the dashboard allowlist
-// would accept, while everything below them is an ordinary dashboard fetch that
-// needs it.
 app.use("/api/auth/google-business", googleReviewsRoutes);
 
 // Scheduled social posts. Scoped to the signed-in user rather than a workspace
 // prefix: a schedule publishes with that user's own LinkedIn token.
-app.use("/api/social/posts", dashboardCors, socialPostRoutes);
+app.use("/api/social/posts", dashboardCors, requireUnlocked, socialPostRoutes);
 
-// Dashboard API (restricted origin + JWT inside route modules)
+// Dashboard API (restricted origin + JWT inside route modules). Not
+// `requireUnlocked`: this router is where /lock, /unlock and the account's own
+// settings live, so it has to stay reachable while the screen is locked — the
+// individual data-bearing routes below are the ones the lock actually guards.
 app.use("/api/auth", dashboardCors, authRoutes);
 // Before the general workspace router: both mount on the same prefix, and the
 // composer's two routes are specific paths that a later `/:wid/...` pattern
 // could otherwise shadow.
-app.use("/api/workspaces", dashboardCors, socialAiRoutes);
-app.use("/api/workspaces", dashboardCors, workspaceRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, socialAiRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, workspaceRoutes);
 // Mints the short-lived token the embedded forms service needs before it will
 // hand over or change a workspace's payment credentials. Same prefix, same
 // membership check as everything else here.
-app.use("/api/workspaces", dashboardCors, formsTokenRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, formsTokenRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.
-app.use("/api/workspaces", dashboardCors, seoRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, seoRoutes);
 // Competitor tracking keeps the `/seo/competitors` paths but lives in its own
 // router: it is the only place the server fetches a host the user typed, and
 // that is worth being able to read in one file.
-app.use("/api/workspaces", dashboardCors, competitorRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorRoutes);
 // The AI reading of a comparison, kept separate: it is the only competitor
 // endpoint that costs a model call, carries its own rate limit, and disappears
 // entirely when the Cloudflare credentials are unset.
-app.use("/api/workspaces", dashboardCors, competitorBriefRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorBriefRoutes);
 // Scheduled email reports, same prefix and same ownership check.
-app.use("/api/workspaces/:wid/reports", dashboardCors, reportRoutes);
+app.use("/api/workspaces/:wid/reports", dashboardCors, requireUnlocked, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
-app.use("/api/workspaces/:wid/segments", dashboardCors, segmentRoutes);
-app.use("/api/workspaces/:wid/branding", dashboardCors, brandingRoutes);
-app.use("/api/workspaces/:wid/media", dashboardCors, mediaRoutes);
-app.use("/api/workspaces/:wid/markers", dashboardCors, markerRoutes);
+app.use("/api/workspaces/:wid/segments", dashboardCors, requireUnlocked, segmentRoutes);
+app.use("/api/workspaces/:wid/branding", dashboardCors, requireUnlocked, brandingRoutes);
+app.use("/api/workspaces/:wid/media", dashboardCors, requireUnlocked, mediaRoutes);
+app.use("/api/workspaces/:wid/markers", dashboardCors, requireUnlocked, markerRoutes);
 // Who else can reach this workspace, and pending invitations to it.
-app.use("/api/workspaces/:wid/members", dashboardCors, memberRoutes);
+app.use("/api/workspaces/:wid/members", dashboardCors, requireUnlocked, memberRoutes);
 // Accepting an invitation. Not under /workspaces: the recipient has no access
 // to the workspace yet, which is the whole point of the link.
-app.use("/api/invites", dashboardCors, inviteRoutes);
-app.use("/api/sites", dashboardCors, statsRoutes);
+app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
+app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
 // Orbit AI, the in-app assistant. The in-app support form it used to hand over
 // to is now a da-forms form embedded on the Help page, which posts to da-forms
 // rather than here.
 // Mounted under a workspace because Orbit is now metered against one: the AI
 // tier, its question quota, and its addon credits all live on the workspace's
 // subscription, the same as audits and crawls.
-app.use("/api/workspaces/:wid/orbit", dashboardCors, orbitRoutes);
-app.use("/api/admin", dashboardCors, adminRoutes);
-app.use("/api/billing", dashboardCors, billingRoutes);
+app.use("/api/workspaces/:wid/orbit", dashboardCors, requireUnlocked, orbitRoutes);
+app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
+app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —
 // the signature check in the route itself is the credential.
 app.use("/api/webhooks", webhookRoutes);
 // Vercel Cron: same reasoning as the webhooks above — never called from a
 // browser, and `CRON_SECRET` in the route is the credential.
 app.use("/api/cron", cronRoutes);
-// The lead capture service asking what a workspace's plan allows. Server to
-// server, so no CORS and no JWT — `FORMS_SERVICE_SECRET` in the route is the
-// credential, as with the two above.
+
 app.use("/api/internal/forms", formsInternalRoutes);
 
-// Both must stay last: the 404 only fires once every router has declined the
-// path, and the error handler only receives what the routers above pass to
-// `next`. Anything mounted after them would be unreachable.
 app.use(notFoundHandler);
 app.use(errorHandler);
 
