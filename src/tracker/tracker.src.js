@@ -1,0 +1,699 @@
+(function () {
+  "use strict";
+
+
+  var VERSION = 8;
+
+
+  function findScript() {
+    var s = document.currentScript;
+    if (s && s.getAttribute("data-site")) return s;
+    return document.querySelector("script[data-site]");
+  }
+
+  var script = findScript();
+  if (!script) return;
+
+  var siteId = script.getAttribute("data-site");
+  if (!siteId) return;
+
+  var src = script.src || "";
+  var i = src.indexOf("/tracker.js");
+  var origin = i > -1 ? src.slice(0, i) : "";
+  var endpoint = origin + "/api/collect";
+
+
+  function opt(name) {
+    return script.getAttribute("data-" + name);
+  }
+
+  function optList(name) {
+    var raw = opt(name);
+    if (!raw) return [];
+    return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+ 
+  if (opt("dnt") === "on") {
+    var dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+    if (dnt === "1" || dnt === "yes") return;
+  }
+
+  var hashMode = opt("hash") === "on";
+
+
+  var domainOverwrite = opt("domain") || "";
+
+ 
+ 
+  var allowedParams = optList("allowed-params");
+
+  var ignoreRules = optList("ignore-pages").map(function (pattern) {
+    var escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp("^" + escaped + "$");
+  });
+
+  function ignored(path) {
+    for (var n = 0; n < ignoreRules.length; n++) {
+      if (ignoreRules[n].test(path)) return true;
+    }
+    return false;
+  }
+
+ 
+  function currentPath() {
+    var path = location.pathname;
+
+    if (hashMode && location.hash) {
+      path = "/" + location.hash.replace(/^#\/?/, "");
+    }
+
+    if (allowedParams.length) {
+      var q = new URLSearchParams(location.search);
+      var kept = new URLSearchParams();
+      allowedParams.forEach(function (k) {
+        if (q.has(k)) kept.set(k, q.get(k));
+      });
+      var qs = kept.toString();
+      if (qs) path += "?" + qs;
+    }
+
+    return path;
+  }
+
+
+  var SESSION_TTL = 30 * 60 * 1000;
+  var SKEY = "_va_sess_" + siteId;
+
+  function uid() {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  function session() {
+    var now = Date.now();
+    var raw;
+    try {
+      raw = JSON.parse(sessionStorage.getItem(SKEY) || "null");
+    } catch (e) {
+      raw = null;
+    }
+    if (!raw || now - raw.last > SESSION_TTL) {
+      raw = { id: uid(), start: now, last: now, views: 0, entry: currentPath() };
+    }
+    raw.last = now;
+    try {
+      sessionStorage.setItem(SKEY, JSON.stringify(raw));
+    } catch (e) {
+      /* storage disabled — session degrades to per-pageview */
+    }
+    return raw;
+  }
+
+  function bumpViews() {
+    var s = session();
+    s.views += 1;
+    try {
+      sessionStorage.setItem(SKEY, JSON.stringify(s));
+    } catch (e) {}
+    return s;
+  }
+
+  /* ------------------------------------------------------------------
+   * Static client context — cheap, read once.
+   * ------------------------------------------------------------------ */
+  function context() {
+    var tz = "";
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch (e) {}
+    return {
+      screenW: window.screen ? window.screen.width : 0,
+      screenH: window.screen ? window.screen.height : 0,
+      viewportW: window.innerWidth || 0,
+      viewportH: window.innerHeight || 0,
+      language: navigator.language || "",
+      timezone: tz,
+    };
+  }
+
+ 
+  var AKEY = "_va_attr_" + siteId;
+
+  /** Ad click ids, in the order we prefer them when several are present. */
+  var CLICK_ID_PARAMS = ["gclid", "gbraid", "wbraid", "fbclid", "msclkid", "li_fat_id", "ttclid", "twclid"];
+
+  function readAttribution() {
+    var q = new URLSearchParams(location.search);
+    var clickId = "";
+    for (var i = 0; i < CLICK_ID_PARAMS.length; i++) {
+      var v = q.get(CLICK_ID_PARAMS[i]);
+      if (v) {
+        clickId = CLICK_ID_PARAMS[i] + ":" + v;
+        break;
+      }
+    }
+    return {
+      source: q.get("utm_source") || "",
+      medium: q.get("utm_medium") || "",
+      campaign: q.get("utm_campaign") || "",
+      term: q.get("utm_term") || "",
+      content: q.get("utm_content") || "",
+      clickId: clickId,
+      referrer: document.referrer || "",
+    };
+  }
+
+  function attribution() {
+    var stored;
+    try {
+      stored = JSON.parse(sessionStorage.getItem(AKEY) || "null");
+    } catch (e) {
+      stored = null;
+    }
+
+    // The session id drives expiry: a new session re-attributes from scratch,
+    // so a visitor returning 30 minutes later via a different campaign is not
+    // credited to the old one.
+    var sid = session().id;
+    if (stored && stored.sid === sid) return stored.attr;
+
+    var attr = readAttribution();
+
+    // A fresh session with no campaign and no referrer inherits nothing —
+    // stored as-is so later events in the session stay consistently "direct".
+    try {
+      sessionStorage.setItem(AKEY, JSON.stringify({ sid: sid, attr: attr }));
+    } catch (e) {
+      /* storage disabled — attribution degrades to per-event, landing hit only */
+    }
+    return attr;
+  }
+
+  /**
+   * The attribution payload sent with every event. Kept under the `utm` key
+   * for wire compatibility with older collectors.
+   */
+  function utm() {
+    var a = attribution();
+
+    // A same-session internal referrer is noise; only the landing one matters.
+    var ref = a.referrer;
+    if (ref && ref.indexOf(location.origin) === 0) ref = "";
+
+    return {
+      source: a.source,
+      medium: a.medium,
+      campaign: a.campaign,
+      term: a.term,
+      content: a.content,
+      clickId: a.clickId,
+      landingReferrer: ref,
+    };
+  }
+
+  /* ------------------------------------------------------------------
+   * Transport
+   * sendBeacon with an application/json Blob triggers a CORS preflight,
+   * which beacons cannot perform — the request is silently dropped.
+   * text/plain is CORS-safelisted, so no preflight is needed.
+   * ------------------------------------------------------------------ */
+  function transmit(body) {
+    if (navigator.sendBeacon) {
+      var ok = navigator.sendBeacon(
+        endpoint,
+        new Blob([body], { type: "text/plain;charset=UTF-8" })
+      );
+      if (ok) return;
+    }
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body: body,
+      keepalive: true,
+      mode: "cors",
+      credentials: "omit",
+    }).catch(function () {});
+  }
+
+ 
+  var BATCH_MS = 1000;
+  var BATCH_MAX = 10;
+
+  var queue = [];
+  var queueTimer = null;
+
+  function envelope(events) {
+    var now = Date.now();
+    var out = [];
+    for (var n = 0; n < events.length; n++) {
+      var e = events[n].payload;
+      e.t = now - events[n].queuedAt;
+      out.push(e);
+    }
+    return JSON.stringify({ siteId: siteId, v: VERSION, events: out });
+  }
+
+  function sendQueue() {
+    if (queueTimer) {
+      clearTimeout(queueTimer);
+      queueTimer = null;
+    }
+    if (!queue.length) return;
+    var batch = queue;
+    queue = [];
+    transmit(envelope(batch));
+  }
+
+  /** Queue an event for the next flush. */
+  function post(payload) {
+    queue.push({ payload: payload, queuedAt: Date.now() });
+    if (queue.length >= BATCH_MAX) return sendQueue();
+    if (!queueTimer) queueTimer = setTimeout(sendQueue, BATCH_MS);
+  }
+
+  /**
+   * Send this event and everything queued before it, right now.
+   *
+   * For the exit paths, where a timer would never fire. Ordering matters: the
+   * event joins the queue first so a pageview queued moments earlier is not
+   * left behind by its own engagement record.
+   */
+  function sendNow(payload) {
+    queue.push({ payload: payload, queuedAt: Date.now() });
+    sendQueue();
+  }
+
+  /* ------------------------------------------------------------------
+   * Engagement: measure how long the page was actually *visible*, so a
+   * backgrounded tab doesn't inflate time-on-page.
+   * ------------------------------------------------------------------ */
+  var visibleMs = 0;
+  var visibleSince = document.visibilityState === "visible" ? Date.now() : 0;
+  var lastPath = null;
+  var currentView = null; // { path, startedAt }
+
+  function accumulate() {
+    if (visibleSince) {
+      visibleMs += Date.now() - visibleSince;
+      visibleSince = 0;
+    }
+  }
+
+ 
+  var maxScroll = 0;
+  var scrollQueued = false;
+  // Elements already counted as seen on this page — see the impression block.
+
+  function measureScroll() {
+    scrollQueued = false;
+    var doc = document.documentElement;
+    var body = document.body;
+    var height = Math.max(
+      doc.scrollHeight, body ? body.scrollHeight : 0,
+      doc.offsetHeight, body ? body.offsetHeight : 0
+    );
+    var viewport = window.innerHeight || doc.clientHeight || 0;
+    // A page shorter than the viewport is fully seen the moment it loads.
+    if (height <= viewport) {
+      maxScroll = 100;
+      return;
+    }
+    var scrolled = window.pageYOffset || doc.scrollTop || 0;
+    var pct = Math.round(((scrolled + viewport) / height) * 100);
+    if (pct > maxScroll) maxScroll = Math.min(100, pct);
+  }
+
+  window.addEventListener(
+    "scroll",
+    function () {
+      // Scroll fires far faster than the page can repaint; one sample per frame
+      // is plenty and keeps the handler off the critical path.
+      if (scrollQueued) return;
+      scrollQueued = true;
+      requestAnimationFrame(measureScroll);
+    },
+    { passive: true }
+  );
+
+  measureScroll();
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") {
+      if (!visibleSince) visibleSince = Date.now();
+    } else {
+      accumulate();
+      flush(); // a hidden tab may never come back — report what we have
+      // `flush` is a no-op once the engagement record has gone out, but events
+      // queued after it are still waiting on a timer this tab may never live to
+      // run. Drain them here too.
+      sendQueue();
+    }
+  });
+
+ 
+  var vitals = {};
+
+  function observeVital(type, handler, opts) {
+    if (typeof PerformanceObserver !== "function") return;
+    try {
+      var po = new PerformanceObserver(function (list) {
+        try {
+          handler(list.getEntries());
+        } catch (e) {
+          /* a bad entry must not take the page down */
+        }
+      });
+      po.observe(opts || { type: type, buffered: true });
+    } catch (e) {
+      /* this browser does not support the entry type */
+    }
+  }
+
+ 
+  observeVital("largest-contentful-paint", function (entries) {
+    var last = entries[entries.length - 1];
+    if (last) vitals.lcp = Math.round(last.startTime);
+  });
+ 
+  var clsValue = 0;
+  observeVital("layout-shift", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].hadRecentInput) clsValue += entries[i].value;
+    }
+    vitals.cls = Math.round(clsValue * 1000) / 1000;
+  });
+
+  // INP: worst interaction latency. Approximated by the longest event duration,
+  // which is what the metric is built on.
+  var worstInp = 0;
+  observeVital("event", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      var d = entries[i].duration;
+      if (d > worstInp) {
+        worstInp = d;
+        vitals.inp = Math.round(d);
+      }
+    }
+  }, { type: "event", buffered: true, durationThreshold: 40 });
+
+  observeVital("paint", function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].name === "first-contentful-paint") {
+        vitals.fcp = Math.round(entries[i].startTime);
+      }
+    }
+  });
+
+  // TTFB comes from the navigation timing entry rather than an observer.
+  try {
+    var nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+    if (nav && nav.responseStart > 0) vitals.ttfb = Math.round(nav.responseStart);
+  } catch (e) {
+    /* navigation timing unavailable */
+  }
+
+  /** Snapshot of what has been measured, or null when nothing has. */
+  function vitalsPayload() {
+    var out = {};
+    var any = false;
+    for (var k in vitals) {
+      if (Object.prototype.hasOwnProperty.call(vitals, k) && vitals[k] != null) {
+        out[k] = vitals[k];
+        any = true;
+      }
+    }
+    return any ? out : null;
+  }
+
+  // Send the engagement record for the page we are leaving.
+  var flushed = false;
+  function flush() {
+    if (!currentView || flushed) return;
+    accumulate();
+    var s = session();
+    // Sent immediately, not queued: this fires as the page goes away, and a
+    // batch waiting on a timer would never be sent.
+    sendNow({
+      siteId: siteId,
+      type: "engagement",
+      path: currentView.path,
+      sessionId: s.id,
+      durationMs: visibleMs,
+      // bounce = the session ended with only one pageview
+      bounce: s.views <= 1,
+      isExit: true,
+      scrollDepth: maxScroll,
+      // Piggybacked on the engagement beacon rather than sent separately, so
+      // vitals cost no extra request.
+      vitals: vitalsPayload(),
+      utm: utm(),
+    });
+    flushed = true;
+  }
+
+  // `flush` reports the engagement record; `sendQueue` covers the case where it
+  // already went out and later events are still queued.
+  function exit() {
+    flush();
+    sendQueue();
+  }
+
+  window.addEventListener("pagehide", exit);
+  window.addEventListener("beforeunload", exit);
+
+  /* ------------------------------------------------------------------
+   * Pageview
+   * ------------------------------------------------------------------ */
+  function pageview() {
+    var path = currentPath();
+
+    // SPA routers can fire several history events for a single navigation.
+    // Compare the resolved path, not location.pathname — under hash routing
+    // every route shares one pathname and only the hash tells them apart.
+    if (path === lastPath) return;
+
+    // An ignored page is not reported, and does not end the previous page's
+    // engagement either — as far as the numbers go, it was never visited.
+    if (ignored(path)) return;
+
+    // Leaving the previous in-SPA page: report its engagement first.
+    if (currentView) {
+      accumulate();
+      var prev = session();
+      post({
+        siteId: siteId,
+        type: "engagement",
+        path: currentView.path,
+        sessionId: prev.id,
+        durationMs: visibleMs,
+        bounce: false, // they navigated on, so it isn't a bounce
+        isExit: false,
+        scrollDepth: maxScroll,
+        utm: utm(),
+      });
+    }
+
+    lastPath = path;
+    visibleMs = 0;
+    visibleSince = document.visibilityState === "visible" ? Date.now() : 0;
+    flushed = false;
+
+    // A new page starts unscrolled, and its height is not the old page's.
+    maxScroll = 0;
+    // The router may not have painted the new page yet, so measure after it has.
+    setTimeout(measureScroll, 0);
+
+    var s = bumpViews();
+    currentView = { path: path, startedAt: Date.now() };
+
+    var ctx = context();
+    post({
+      siteId: siteId,
+      type: "pageview",
+      path: path,
+      hostname: domainOverwrite,
+      referrer: document.referrer,
+      sessionId: s.id,
+      isEntry: s.views === 1,
+      entryPath: s.entry,
+      screenW: ctx.screenW,
+      screenH: ctx.screenH,
+      viewportW: ctx.viewportW,
+      viewportH: ctx.viewportH,
+      language: ctx.language,
+      timezone: ctx.timezone,
+      utm: utm(),
+    });
+  }
+
+  pageview();
+
+  // SPA route changes: Next.js and friends drive the history API.
+  var push = history.pushState;
+  history.pushState = function () {
+    push.apply(this, arguments);
+    setTimeout(pageview, 0);
+  };
+  var replace = history.replaceState;
+  history.replaceState = function () {
+    replace.apply(this, arguments);
+    setTimeout(pageview, 0);
+  };
+  window.addEventListener("popstate", function () {
+    setTimeout(pageview, 0);
+  });
+  // Hash routers never touch the history API, so nothing above fires for them.
+  if (hashMode) {
+    window.addEventListener("hashchange", function () {
+      setTimeout(pageview, 0);
+    });
+  }
+
+
+  var trackClicks = script.getAttribute("data-clicks") !== "off";
+
+  function label(el) {
+    // An explicit name always wins over whatever text happens to be inside.
+    var explicit =
+      el.getAttribute("data-va-cta") ||
+      el.getAttribute("aria-label") ||
+      el.id ||
+      "";
+    if (explicit) return explicit.slice(0, 120);
+    var text = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+    return text.slice(0, 120);
+  }
+
+  function trackable(target) {
+    // Walk up from the clicked node: the user may have hit an icon inside a button.
+    for (var el = target; el && el !== document.body; el = el.parentElement) {
+      if (el.hasAttribute && el.hasAttribute("data-va-ignore")) return null;
+      if (!el.tagName) continue;
+      var tag = el.tagName.toLowerCase();
+      var isCta =
+        tag === "button" ||
+        tag === "a" ||
+        el.getAttribute("role") === "button" ||
+        el.hasAttribute("data-va-cta") ||
+        (tag === "input" && (el.type === "submit" || el.type === "button"));
+      if (isCta) return { el: el, tag: tag };
+    }
+    return null;
+  }
+
+  // File extensions that count as a download rather than a page navigation.
+  var DOWNLOAD_RE = /\.(pdf|zip|rar|7z|gz|tar|dmg|exe|msi|pkg|deb|csv|xlsx?|docx?|pptx?|mp3|mp4|mov|avi|wav|json|xml|txt|apk)($|\?)/i;
+
+  // Classify a link: "download" for a file, "outbound" for another host, or
+  // null for an ordinary in-site link. Falls back to null on a bad/relative URL.
+  function linkKind(href) {
+    if (!href) return null;
+    try {
+      var url = new URL(href, location.href);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+      if (DOWNLOAD_RE.test(url.pathname)) return "download";
+      if (url.host !== location.host) return "outbound";
+    } catch (e) {}
+    return null;
+  }
+
+  if (trackClicks) {
+    document.addEventListener(
+      "click",
+      function (e) {
+        var hit = trackable(e.target);
+        if (!hit) return;
+
+        var href = hit.el.getAttribute("href") || "";
+        // Outbound links and downloads are the same click event, retagged so the
+        // dashboard can report "where people go when they leave" separately.
+        var kind = hit.tag === "a" ? linkKind(href) : null;
+
+        var s = session();
+        post({
+          siteId: siteId,
+          type: "click",
+          path: location.pathname, // the page the CTA was clicked on
+          sessionId: s.id,
+          clickText: label(hit.el),
+          clickTag: kind || hit.tag,
+          clickId: hit.el.getAttribute("data-va-cta") || hit.el.id || "",
+          clickHref: href,
+          utm: utm(),
+        });
+      },
+      true // capture, so a handler that stops propagation can't hide the click
+    );
+  }
+
+
+  var trackErrors = script.getAttribute("data-errors") !== "off";
+
+  if (trackErrors) {
+    // Don't drown a genuinely broken page in identical reports.
+    var errorsSent = 0;
+    var ERROR_CAP = 10;
+
+    function reportError(message) {
+      if (errorsSent >= ERROR_CAP) return;
+      errorsSent++;
+      var msg = String(message || "Error").replace(/\s+/g, " ").trim().slice(0, 200);
+      var s = session();
+      post({
+        siteId: siteId,
+        type: "error",
+        name: msg,
+        path: location.pathname,
+        sessionId: s.id,
+      });
+    }
+
+    window.addEventListener("error", function (e) {
+      // Resource load failures (img/script 404) surface here with no message —
+      // report those as a broken-resource error rather than a script error.
+      if (e && e.message) reportError(e.message);
+      else if (e && e.target && e.target.src) reportError("Failed to load " + e.target.src);
+    }, true);
+
+    window.addEventListener("unhandledrejection", function (e) {
+      var r = e && e.reason;
+      reportError((r && (r.message || r)) || "Unhandled promise rejection");
+    });
+  }
+
+
+  var appUserId = "";
+
+  /* ------------------------------------------------------------------
+   * Public API
+   * ------------------------------------------------------------------ */
+  window.rta = {
+
+    identify: function (userId) {
+      appUserId = userId ? String(userId) : "";
+    },
+
+    reset: function () {
+      appUserId = "";
+    },
+
+
+    track: function (action, opts) {
+      if (!appUserId) return;
+      opts = opts || {};
+      var s = session();
+      post({
+        siteId: siteId,
+        type: "custom",
+        name: action,
+        appUserId: appUserId,
+        source: opts.source || "",
+        destination: opts.destination || "",
+        path: location.pathname,
+        sessionId: s.id,
+        props: opts.props || undefined,
+        utm: utm(),
+      });
+    },
+  };
+})();

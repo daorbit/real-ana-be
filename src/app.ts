@@ -1,7 +1,9 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
+import compression from "compression";
 import path from "path";
 import { fileURLToPath } from "url";
+import { TRACKER_VERSION } from "./modules/analytics/stats.service.js";
 import authRoutes from "./http/routes/auth.js";
 import linkedinRoutes from "./http/routes/linkedin.js";
 import instagramRoutes from "./http/routes/instagram.js";
@@ -136,13 +138,24 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 app.use("/api/collect", openCors, collectRoutes);
 app.use("/api/track", openCors, trackRoutes);
 
-// Serve embeddable tracker.js
+// Serve embeddable tracker.js — gzipped, and cached for as long as this
+// build's TRACKER_VERSION is current. A version bump changes the ETag
+// (Express derives it from the file's own mtime/size, which the build script
+// updates every time it regenerates this file), so a stale cached copy is
+// never served past a real change.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
-app.get("/tracker.js", openCors, (_req, res) => {
-  res.type("application/javascript");
-  res.sendFile(path.join(publicDir, "tracker.js"));
-});
+app.get(
+  "/tracker.js",
+  openCors,
+  compression(),
+  (_req, res) => {
+    res.type("application/javascript");
+    res.set("Cache-Control", "public, max-age=86400, must-revalidate");
+    res.set("X-Tracker-Version", String(TRACKER_VERSION));
+    res.sendFile(path.join(publicDir, "tracker.js"));
+  },
+);
 
 
 const openApiSpec = buildOpenApiSpec();

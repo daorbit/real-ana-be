@@ -5,8 +5,9 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "dev": "npm run build:tracker && tsx watch src/index.ts",
+    "build": "npm run build:tracker && tsc",
+    "build:tracker": "node scripts/build-tracker.mjs",
     "start": "npm run build && node dist/index.js",
     "start:dist": "node dist/index.js",
     "backfill:events": "tsx scripts/backfill-event-usage.ts",
@@ -19,6 +20,7 @@
     "axios": "^1.18.1",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.10",
@@ -46,6 +49,7 @@
     "@types/pdfkit": "^0.17.6",
     "@types/qrcode": "^1.5.6",
     "@types/swagger-ui-express": "^4.1.8",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }
