@@ -18,6 +18,7 @@ import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-clie
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
+import { sendTwoFactorBackupCodesEmail } from "../../infra/mail/mailer.js";
 import {
   signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
   signPending2faToken, verifyPending2faToken,
@@ -555,8 +556,13 @@ router.post("/2fa/enable", requireAuth, async (req: AuthedRequest, res) => {
     user.totpBackupCodeHashes = hashes;
     await user.save();
 
-    // Shown once, in the clear, right here — this is the only moment the
-    // plaintext codes exist outside the user's own record of them.
+    // Shown once, in the clear, right here in the response — and mailed once,
+    // too, so a codes list lost by closing the tab too soon isn't gone for
+    // good.
+    sendTwoFactorBackupCodesEmail({ email: user.email, name: user.name }, backupCodes).catch((e) =>
+      console.error("[2fa-enable] backup codes email failed:", (e as Error)?.message)
+    );
+
     res.json({ backupCodes });
   } catch {
     res.status(500).json({ error: "could not enable 2fa" });

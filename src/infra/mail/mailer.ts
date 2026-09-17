@@ -8,6 +8,7 @@ import { bannerAttachment, type BannerName } from "./templates/shared.js";
 import { verificationCodeHtml, verificationCodeText } from "./templates/verification-code.js";
 import { passwordResetHtml, passwordResetText } from "./templates/password-reset.js";
 import { passwordChangeHtml, passwordChangeText } from "./templates/password-change.js";
+import { twoFactorBackupCodesHtml, twoFactorBackupCodesText } from "./templates/two-factor-backup-codes.js";
 import { inviteHtml as workspaceInviteBody, inviteText as workspaceInviteTextBody } from "./templates/invite.js";
 import { paymentReceivedHtml, paymentReceivedText } from "./templates/payment-received.js";
 import { planEndHtml, planEndText } from "./templates/plan-end.js";
@@ -238,6 +239,19 @@ export async function sendResetEmail(
     `${code} is your Quantalog password reset code`,
     passwordResetText(code, minutes, to.name),
     passwordResetHtml(code, minutes, to.name),
+    banner ? [banner] : [],
+  );
+}
+
+
+export async function sendTwoFactorBackupCodesEmail(to: Recipient, codes: string[]): Promise<void> {
+  const banner = bannerAttachment("two-factor-backup-codes");
+
+  await sendOne(
+    to,
+    "Your Quantalog two-factor backup codes",
+    twoFactorBackupCodesText(codes, to.name),
+    twoFactorBackupCodesHtml(codes, to.name),
     banner ? [banner] : [],
   );
 }
