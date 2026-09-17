@@ -588,7 +588,7 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
 });
 
 function pinError(pin: string): string | null {
-  if (!/^\d{4,8}$/.test(pin)) return "PIN must be 4 to 8 digits";
+  if (!/^\d{4}$/.test(pin)) return "PIN must be 4 digits";
   return null;
 }
 
