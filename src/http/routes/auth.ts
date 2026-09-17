@@ -18,7 +18,7 @@ import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-clie
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
-import { sendTwoFactorBackupCodesEmail } from "../../infra/mail/mailer.js";
+import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail } from "../../infra/mail/mailer.js";
 import {
   signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
   signPending2faToken, verifyPending2faToken,
@@ -32,6 +32,39 @@ function randomBackupCode(): string {
   const part = () =>
     Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join("");
   return `${part()}-${part()}`;
+}
+
+/**
+ * A generic per-key attempt counter, in memory only. Covers both 2FA-at-login
+ * verification and the screen-lock unlock — anything where a bcrypt/TOTP
+ * compare is the only gate and there is no captcha in front of it, unlike
+ * `/login` which has Turnstile. Losing counts on a restart, or having them
+ * miss across instances in a multi-process deploy, just gives an attacker a
+ * fresh window rather than a free pass, so this doesn't need to be durable or
+ * shared like the account data it's protecting.
+ */
+const attemptCounters = new Map<string, { count: number; lockedUntil: number }>();
+const MAX_ATTEMPTS = 5;
+const ATTEMPT_COOLDOWN_MS = 15 * 60 * 1000;
+
+function checkAttemptThrottle(key: string): number | null {
+  const entry = attemptCounters.get(key);
+  if (entry && entry.lockedUntil > Date.now()) return entry.lockedUntil;
+  return null;
+}
+
+function recordAttemptFailure(key: string): void {
+  const entry = attemptCounters.get(key) ?? { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + ATTEMPT_COOLDOWN_MS;
+    entry.count = 0;
+  }
+  attemptCounters.set(key, entry);
+}
+
+function clearAttemptFailures(key: string): void {
+  attemptCounters.delete(key);
 }
 
 /**
@@ -427,6 +460,9 @@ router.post("/signup/resend", async (req, res) => {
   }
 });
 
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCK_MS = 12 * 60 * 60 * 1000;
+
 router.post("/login", async (req, res) => {
   try {
     const { email, password, turnstileToken } = req.body ?? {};
@@ -448,6 +484,18 @@ router.post("/login", async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ error: "invalid credentials" });
+
+    // Locked from a previous run of wrong passwords — refused outright, since
+    // letting a correct password through here would make the lock pointless
+    // against someone who eventually guesses right.
+    if (user.loginLockedUntil && user.loginLockedUntil.getTime() > Date.now()) {
+      return res.status(423).json({
+        error: "too many failed attempts — this account is temporarily locked",
+        locked: true,
+        lockedUntil: user.loginLockedUntil.toISOString(),
+      });
+    }
+
     // A Google-only account has no password to compare against. Say so plainly:
     // "invalid credentials" would send someone hunting for a password that was
     // never set.
@@ -457,7 +505,30 @@ router.post("/login", async (req, res) => {
         google: true,
       });
     const ok = await bcrypt.compare(password, user.passwordHash);
-    if (!ok) return res.status(401).json({ error: "invalid credentials" });
+    if (!ok) {
+      user.loginFailCount = (user.loginFailCount ?? 0) + 1;
+      if (user.loginFailCount >= LOGIN_MAX_ATTEMPTS) {
+        const until = new Date(Date.now() + LOGIN_LOCK_MS);
+        user.loginLockedUntil = until;
+        user.loginFailCount = 0;
+        await user.save();
+        sendAccountLockedEmail({ email: user.email, name: user.name }, until).catch((e) =>
+          console.error("[login] account-locked notice failed:", (e as Error)?.message)
+        );
+        return res.status(423).json({
+          error: "too many failed attempts — this account is temporarily locked",
+          locked: true,
+          lockedUntil: until.toISOString(),
+        });
+      }
+      await user.save();
+      return res.status(401).json({ error: "invalid credentials" });
+    }
+
+    if (user.loginFailCount) {
+      user.loginFailCount = 0;
+      await user.save();
+    }
 
     // Password proven, but that is only the first factor on an account with
     // 2FA on. A pending token stands in for a session until the code step
@@ -483,6 +554,14 @@ router.post("/2fa/verify", async (req, res) => {
     const userId = verifyPending2faToken(pendingToken);
     if (!userId) return res.status(401).json({ error: "invalid or expired login attempt" });
 
+    const throttleKey = `2fa:${userId}`;
+    const throttledUntil = checkAttemptThrottle(throttleKey);
+    if (throttledUntil)
+      return res.status(429).json({
+        error: "too many attempts — try again later",
+        retryAt: new Date(throttledUntil).toISOString(),
+      });
+
     const user = await User.findById(userId);
     if (!user || !user.totpEnabled || !user.totpSecretEnc)
       return res.status(401).json({ error: "invalid or expired login attempt" });
@@ -493,6 +572,7 @@ router.post("/2fa/verify", async (req, res) => {
     const totpOk = secret && /^\d{6}$/.test(cleanCode) ? await verifyTotpCode(cleanCode, secret) : false;
 
     if (totpOk) {
+      clearAttemptFailures(throttleKey);
       const token = signToken(user.id);
       return res.json({ token, user: await publicUser(user) });
     }
@@ -508,10 +588,14 @@ router.post("/2fa/verify", async (req, res) => {
         break;
       }
     }
-    if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
+    if (matchedIndex === -1) {
+      recordAttemptFailure(throttleKey);
+      return res.status(401).json({ error: "invalid code" });
+    }
 
     user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
     await user.save();
+    clearAttemptFailures(throttleKey);
     const token = signToken(user.id);
     res.json({ token, user: await publicUser(user), backupCodeUsed: true });
   } catch {
@@ -597,35 +681,6 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
 function pinError(pin: string): string | null {
   if (!/^\d{4}$/.test(pin)) return "PIN must be 4 digits";
   return null;
-}
-
-/** Per-account unlock attempt counter, in memory only. A lock screen is a
- * short-lived, single-process concern — losing counts on a restart or in a
- * multi-instance deploy just means an attacker gets a fresh window, not a
- * free pass, so this doesn't need to be durable or shared like the account
- * data above. */
-const unlockAttempts = new Map<string, { count: number; lockedUntil: number }>();
-const MAX_UNLOCK_ATTEMPTS = 5;
-const UNLOCK_COOLDOWN_MS = 15 * 60 * 1000;
-
-function checkUnlockThrottle(userId: string): number | null {
-  const entry = unlockAttempts.get(userId);
-  if (entry && entry.lockedUntil > Date.now()) return entry.lockedUntil;
-  return null;
-}
-
-function recordUnlockFailure(userId: string): void {
-  const entry = unlockAttempts.get(userId) ?? { count: 0, lockedUntil: 0 };
-  entry.count += 1;
-  if (entry.count >= MAX_UNLOCK_ATTEMPTS) {
-    entry.lockedUntil = Date.now() + UNLOCK_COOLDOWN_MS;
-    entry.count = 0;
-  }
-  unlockAttempts.set(userId, entry);
-}
-
-function clearUnlockFailures(userId: string): void {
-  unlockAttempts.delete(userId);
 }
 
 /** Sets or replaces the screen-lock PIN. Requires the current PIN once one
@@ -726,7 +781,8 @@ router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) =>
   if (req.isDemo) return res.json({ ok: true });
   try {
     const userId = req.userId!;
-    const throttledUntil = checkUnlockThrottle(userId);
+    const throttleKey = `unlock:${userId}`;
+    const throttledUntil = checkAttemptThrottle(throttleKey);
     if (throttledUntil)
       return res.status(429).json({
         error: "too many attempts — try again later",
@@ -750,11 +806,11 @@ router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) =>
     }
 
     if (!ok) {
-      recordUnlockFailure(userId);
+      recordAttemptFailure(throttleKey);
       return res.status(401).json({ error: "incorrect PIN or code" });
     }
 
-    clearUnlockFailures(userId);
+    clearAttemptFailures(throttleKey);
     user.lockedAt = null;
     await user.save();
     res.json({ ok: true });

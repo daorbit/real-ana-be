@@ -25,6 +25,12 @@ const userSchema = new Schema(
     pinHash: { type: String, default: "" },
     screenLockEnabled: { type: Boolean, default: false },
     lockedAt: { type: Date, default: null },
+    /** Consecutive wrong-password attempts at /login. Reset on a correct one. */
+    loginFailCount: { type: Number, default: 0 },
+    /** Set once loginFailCount hits the limit; /login refuses the account
+     * outright until this passes, regardless of whether the password is
+     * actually correct. */
+    loginLockedUntil: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -299,6 +299,50 @@ If you didn't ask for this, contact support right away — someone reaching us w
 The Quantalog Team`;
 }
 
+/** Sent the moment five wrong passwords in a row trip the 12-hour login lock
+ * — the account holder should hear about this from us before they hear it
+ * from the login screen, and if it wasn't them trying, this is the signal
+ * that someone else has their password. */
+export async function sendAccountLockedEmail(to: Recipient, lockedUntil: Date): Promise<void> {
+  const banner = bannerAttachment("password-change");
+  const until = lockedUntil.toLocaleString("en-GB", {
+    day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
+  });
+
+  await sendOne(
+    to,
+    "Your Quantalog account is temporarily locked",
+    accountLockedText(until, to.name),
+    accountLockedHtml(until, to.name),
+    banner ? [banner] : [],
+  );
+}
+
+function accountLockedHtml(until: string, name?: string): string {
+  return bannerShell(
+    "password-change",
+    `${greetingLine(name)}
+     ${bannerLine("Five wrong passwords in a row were entered on your Quantalog account, so sign-in has been paused for 12 hours as a precaution.")}
+     ${warningPanel(
+       `<strong style="color:${C.text}">Locked until ${escapeHtmlShared(until)}.</strong> If this wasn't you, your password may be known to someone else — change it as soon as the lock lifts.`,
+     )}
+     ${bannerLine("If it was you, there's nothing to do — sign-in opens again on its own once the lock passes.", 18)}
+     ${signOff()}`,
+  );
+}
+
+function accountLockedText(until: string, name?: string): string {
+  return `Hello${name?.trim() ? ` ${name.trim()}` : ""},
+
+Five wrong passwords in a row were entered on your Quantalog account, so sign-in has been paused for 12 hours as a precaution.
+
+Locked until ${until}. If this wasn't you, your password may be known to someone else — change it as soon as the lock lifts.
+
+If it was you, there's nothing to do — sign-in opens again on its own once the lock passes.
+
+The Quantalog Team`;
+}
+
 export async function sendPasswordChangedEmail(to: Recipient): Promise<void> {
   const banner = bannerAttachment("password-change");
 
