@@ -1,6 +1,9 @@
 import { Router, Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
+import QRCode from "qrcode";
+import { encryptSecret, decryptSecret } from "../../shared/utils/crypto-box.js";
+import { generateTotpSecret, totpKeyUri, verifyTotpCode } from "../../shared/utils/totp.js";
 import { User } from "../../modules/identity/models/User.js";
 import { PendingSignup } from "../../modules/identity/models/PendingSignup.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
@@ -15,9 +18,20 @@ import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-clie
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
-import { signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import {
+  signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
+  signPending2faToken, verifyPending2faToken,
+} from "../middleware/auth.js";
 
 const router = Router();
+
+/** A recovery code in the `XXXX-XXXX` shape people expect from this kind of list. */
+function randomBackupCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I — easy to misread
+  const part = () =>
+    Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join("");
+  return `${part()}-${part()}`;
+}
 
 /**
  * The demo session's stand-in user id.
@@ -74,6 +88,7 @@ async function publicUser(user: InstanceType<typeof User>) {
     linkedinLinked: Boolean(user.linkedinId),
     /** False for social-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
+    totpEnabled: Boolean(user.totpEnabled),
     /**
      * How this account came to exist.
      *
@@ -495,10 +510,151 @@ router.post("/login", async (req, res) => {
       });
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return res.status(401).json({ error: "invalid credentials" });
+
+    // Password proven, but that is only the first factor on an account with
+    // 2FA on. A pending token stands in for a session until the code step
+    // clears it — the client never sees a real token until then.
+    if (user.totpEnabled) {
+      return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
+    }
+
     const token = signToken(user.id);
     res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "login failed" });
+  }
+});
+
+/**
+ * Second login step for an account with 2FA on.
+ *
+ * Accepts either a live TOTP code or an unused backup code — same route,
+ * since both prove the same thing and a client showing two separate boxes
+ * for "code" would just be asking the user to know which kind they have.
+ */
+router.post("/2fa/verify", async (req, res) => {
+  try {
+    const { pendingToken, code } = req.body ?? {};
+    if (!pendingToken || !code)
+      return res.status(400).json({ error: "pendingToken, code required" });
+
+    const userId = verifyPending2faToken(pendingToken);
+    if (!userId) return res.status(401).json({ error: "invalid or expired login attempt" });
+
+    const user = await User.findById(userId);
+    if (!user || !user.totpEnabled || !user.totpSecretEnc)
+      return res.status(401).json({ error: "invalid or expired login attempt" });
+
+    const cleanCode = String(code).replace(/\s+/g, "");
+    const secret = decryptSecret(user.totpSecretEnc);
+    const totpOk = secret ? await verifyTotpCode(cleanCode, secret) : false;
+
+    if (totpOk) {
+      const token = signToken(user.id);
+      return res.json({ token, user: await publicUser(user) });
+    }
+
+    // Not a valid live code — try it as a backup code instead. Each one is
+    // single-use, so a match is removed from the list on the spot rather
+    // than merely checked.
+    const hashes = user.totpBackupCodeHashes ?? [];
+    let matchedIndex = -1;
+    for (let i = 0; i < hashes.length; i++) {
+      if (await bcrypt.compare(cleanCode.toUpperCase(), hashes[i])) {
+        matchedIndex = i;
+        break;
+      }
+    }
+    if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
+
+    user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
+    await user.save();
+    const token = signToken(user.id);
+    res.json({ token, user: await publicUser(user), backupCodeUsed: true });
+  } catch {
+    res.status(500).json({ error: "verification failed" });
+  }
+});
+
+/**
+ * Start enrolling 2FA: generates a secret and returns the otpauth URL as a
+ * QR code, but does not turn anything on yet. Nothing is written to the
+ * user document until `/2fa/enable` proves the app was set up correctly —
+ * saving the secret here would risk locking someone out over a QR code they
+ * never actually scanned.
+ */
+router.post("/2fa/setup", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+    if (user.totpEnabled) return res.status(400).json({ error: "2fa is already on" });
+
+    const secret = generateTotpSecret();
+    const otpauth = totpKeyUri(user.email, secret);
+    const qrDataUrl = await QRCode.toDataURL(otpauth);
+
+    res.json({ secret, qrDataUrl });
+  } catch {
+    res.status(500).json({ error: "could not start 2fa setup" });
+  }
+});
+
+/**
+ * Finish enrolling 2FA: proves the secret from `/2fa/setup` was scanned and
+ * works, then turns it on and mints the recovery codes. The secret is passed
+ * back in rather than held server-side between the two calls — there is no
+ * session state for an in-progress setup, and a raw secret only needs to
+ * exist encrypted, in the one document it belongs to.
+ */
+router.post("/2fa/enable", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { secret, code } = req.body ?? {};
+    if (!secret || !code) return res.status(400).json({ error: "secret, code required" });
+
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+    if (user.totpEnabled) return res.status(400).json({ error: "2fa is already on" });
+
+    if (!(await verifyTotpCode(String(code).replace(/\s+/g, ""), secret)))
+      return res.status(400).json({ error: "that code didn't match — try the next one" });
+
+    const backupCodes = Array.from({ length: 10 }, () => randomBackupCode());
+    const hashes = await Promise.all(backupCodes.map((c) => bcrypt.hash(c, 10)));
+
+    user.totpEnabled = true;
+    user.totpSecretEnc = encryptSecret(secret);
+    user.totpBackupCodeHashes = hashes;
+    await user.save();
+
+    // Shown once, in the clear, right here — this is the only moment the
+    // plaintext codes exist outside the user's own record of them.
+    res.json({ backupCodes });
+  } catch {
+    res.status(500).json({ error: "could not enable 2fa" });
+  }
+});
+
+/** Turns 2FA off. Requires the current password — this is a security
+ * downgrade, and a stolen session token alone should not be enough to
+ * quietly remove the second factor protecting the account it belongs to. */
+router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
+  try {
+    const { password } = req.body ?? {};
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: "not found" });
+    if (!user.totpEnabled) return res.status(400).json({ error: "2fa is already off" });
+
+    if (!user.passwordHash || !(await bcrypt.compare(password ?? "", user.passwordHash)))
+      return res.status(401).json({ error: "incorrect password" });
+
+    user.totpEnabled = false;
+    user.totpSecretEnc = "";
+    user.totpBackupCodeHashes = [];
+    await user.save();
+
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "could not disable 2fa" });
   }
 });
 

@@ -24,9 +24,23 @@ export interface AuthedRequest extends Request {
 }
 
 type Payload = { userId: string; impersonatorId?: string; demo?: boolean };
+type Pending2faPayload = { userId: string; pending2fa: true };
 
 export function signToken(userId: string): string {
   return jwt.sign({ userId }, jwtSecret(), { expiresIn: "7d" });
+}
+
+export function signPending2faToken(userId: string): string {
+  return jwt.sign({ userId, pending2fa: true }, jwtSecret(), { expiresIn: "10m" });
+}
+
+export function verifyPending2faToken(token: string): string | null {
+  try {
+    const payload = jwt.verify(token, jwtSecret()) as Pending2faPayload;
+    return payload.pending2fa === true ? payload.userId : null;
+  } catch {
+    return null;
+  }
 }
 
  
