@@ -16,6 +16,7 @@ import { TRACKER_VERSION } from "../../modules/analytics/stats.service.js";
 import { hasQuota, spendQuota } from "../../modules/billing/quota.service.js";
 import { resolveAccess, isDenied, type Access } from "../../modules/workspace/access.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
+import { emitTo } from "../../modules/notifications/notify.service.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -115,6 +116,18 @@ router.post(
         data,
       });
       await spendQuota(ws.id, "audit");
+
+      // Fire-and-forget: the caller already sees the result in this response,
+      // so the bell is for whoever else on the workspace has it starred, or
+      // for this same person if they started it and moved on to something
+      // else before it finished.
+      void emitTo({
+        type: "seo.audit.done",
+        userId: req.userId as string,
+        data: { siteName: site.domain },
+        link: `/app/seo`,
+      });
+
       res.json({ report, cached: false });
     } catch (e) {
       const message = (e as Error)?.message ?? "analysis failed";
