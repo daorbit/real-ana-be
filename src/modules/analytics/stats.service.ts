@@ -686,6 +686,22 @@ async function livePages(siteIds: string[]) {
   return rows;
 }
 
+/** Where the visitors on the site right now are located. */
+async function liveCountries(siteIds: string[]) {
+  const since = new Date(Date.now() - LIVE_WINDOW_MS);
+  const rows = await Event.aggregate([
+    { $match: { siteId: { $in: siteIds }, type: "pageview", ts: { $gte: since } } },
+    { $sort: { ts: -1 } },
+    // the country each live visitor was most recently seen from
+    { $group: { _id: "$visitorHash", country: { $first: "$country" } } },
+    { $match: { country: { $nin: [null, ""] } } },
+    { $group: { _id: "$country", count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $project: { _id: 0, key: "$_id", count: 1 } },
+  ]);
+  return rows;
+}
+
 
 /**
  * Just the "online now" figures.
@@ -701,19 +717,25 @@ async function livePages(siteIds: string[]) {
  * would otherwise introduce.
  */
 export async function computeLive(siteIds: string[], filters: StatsFilter = {}) {
-  if (!siteIds.length) return { live: 0, livePages: [] as { key: string; count: number }[] };
+  if (!siteIds.length)
+    return {
+      live: 0,
+      livePages: [] as { key: string; count: number }[],
+      liveCountries: [] as { key: string; count: number }[],
+    };
 
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
-  const [visitors, pages] = await Promise.all([
+  const [visitors, pages, countries] = await Promise.all([
     Event.distinct("visitorHash", {
       siteId: { $in: siteIds },
       ts: { $gte: since },
       ...filterMatch(filters),
     }),
     livePages(siteIds),
+    liveCountries(siteIds),
   ]);
 
-  return { live: visitors.length, livePages: pages };
+  return { live: visitors.length, livePages: pages, liveCountries: countries };
 }
 
 async function channels(match: Match) {
