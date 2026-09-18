@@ -42,7 +42,8 @@ export type BannerName =
   | "seo-audit"
   | "cold-invite"
   | "two-factor-backup-codes"
-  | "report";
+  | "report"
+  | "general";
 
 export type Theme = { accent: string; accentDeep: string; wash: string; edge: string };
 
@@ -59,6 +60,7 @@ export const THEMES: Record<BannerName, Theme> = {
   "cold-invite": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   "two-factor-backup-codes": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   report: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
+  general: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
 };
 
 const LOGO_CID = "quantalog-logo";
@@ -134,7 +136,7 @@ export function bannerShell(
 
   const body = `<div bgcolor="${theme.wash}" style="background-color:${theme.wash};background-image:linear-gradient(180deg,${theme.wash} 0%,${C.card} 260px);padding:28px 16px;font-family:${FONT}">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto">
-    <tr><td bgcolor="${C.card}" style="padding:0;background-color:${C.card}">
+    <tr><td style="padding:0">
 
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 18px">
         <tr>

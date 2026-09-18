@@ -8,7 +8,7 @@ import { bannerAttachment, type BannerName } from "./templates/shared.js";
 import { verificationCodeHtml, verificationCodeText } from "./templates/verification-code.js";
 import { passwordResetHtml, passwordResetText } from "./templates/password-reset.js";
 import { passwordChangeHtml, passwordChangeText } from "./templates/password-change.js";
-import { bannerShell, greetingLine, line as bannerLine, signOff, warningPanel, escapeHtml as escapeHtmlShared } from "./templates/shared.js";
+import { bannerShell, greetingLine, line as bannerLine, signOff, warningPanel, actionButton, escapeHtml as escapeHtmlShared } from "./templates/shared.js";
 import { twoFactorBackupCodesHtml, twoFactorBackupCodesText } from "./templates/two-factor-backup-codes.js";
 import { inviteHtml as workspaceInviteBody, inviteText as workspaceInviteTextBody } from "./templates/invite.js";
 import { paymentReceivedHtml, paymentReceivedText } from "./templates/payment-received.js";
@@ -602,22 +602,22 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
   const paragraphs = blocks
     .map((block, i) => {
       const html = block.replace(/\n/g, "<br>");
-
+      const color = i === 0 ? C.text : C.dim;
       const style =
         i === 0
-          ? `margin:0 0 ${S.block}px;font-size:15.5px;font-weight:600;color:${C.text};line-height:1.6`
+          ? `margin:0 0 ${S.block}px;font-size:15.5px;font-weight:600;color:${color};line-height:1.6`
           : `margin:0 0 ${S.block}px;${T.body}`;
-      return `<p style="${style}">${html}</p>`;
+      return `<p style="${style}"><font color="${color}">${html}</font></p>`;
     })
     .join("");
 
 
   const action =
     cta && /^https?:\/\//i.test(cta.href)
-      ? button(escapeHtml(cta.label), escapeAttr(cta.href))
+      ? actionButton(escapeHtml(cta.label), escapeAttr(cta.href), "general")
       : "";
 
-  return shell(paragraphs + action);
+  return bannerShell("general", paragraphs + action);
 }
 
 
@@ -710,30 +710,19 @@ export function forBrowser(html: string): string {
 export function contactAckHtml(name: string, subject: string, message: string): string {
   const quoted = escapeHtml(message).replace(/\n/g, "<br>");
 
-
-  return shell(
-    `${heading(`Thanks, ${escapeHtml(name)} — we have your message.`, "left")}
-    ${paragraph(
-      "A person reads every message that comes through this form. You should hear back at this address within one working day.",
-      S.block,
-      "left",
-    )}
-
-    ${label("What you sent")}
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-      <tr><td class="panel" style="background:${C.panel};border-radius:10px;padding:18px 20px">
-        <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${C.faint}">Subject</p>
-        <p style="margin:0;font-size:14.5px;font-weight:600;line-height:1.5;color:${C.text}">${escapeHtml(subject)}</p>
-        <div style="height:1px;background:${C.line};margin:${S.block}px 0"></div>
-        <p style="margin:0;font-size:14px;line-height:1.75;color:${C.dim}">${quoted}</p>
-      </td></tr>
-    </table>
-
-    ${paragraph(
-      "No need to reply to this — it is just a receipt. If you remember something you left out, reply to this email and it will reach the same place.",
-      S.section,
-      "left",
-    )}`,
+  return bannerShell(
+    "general",
+    `<p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px"><font color="${C.text}">Thanks, ${escapeHtml(name)} — we have your message.</font></p>
+     ${bannerLine("A person reads every message that comes through this form. You should hear back at this address within one working day.")}
+     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:16px 0 0">
+       <tr><td bgcolor="${C.panel}" style="background:${C.panel};border-radius:10px;padding:18px 20px">
+         <p style="margin:0 0 4px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${C.faint}"><font color="${C.faint}">Subject</font></p>
+         <p style="margin:0;font-size:14.5px;font-weight:600;line-height:1.5;color:${C.text}"><font color="${C.text}">${escapeHtml(subject)}</font></p>
+         <div style="height:1px;background:${C.line};margin:16px 0"></div>
+         <p style="margin:0;font-size:14px;line-height:1.75;color:${C.dim}"><font color="${C.dim}">${quoted}</font></p>
+       </td></tr>
+     </table>
+     ${bannerLine("No need to reply to this — it is just a receipt. If you remember something you left out, reply to this email and it will reach the same place.", 18)}`,
   );
 }
 
@@ -849,19 +838,19 @@ export function invoiceHtml(invoice: {
 
 
 export function newsletterAckHtml(): string {
-  return shell(
-    `${heading("You're on the list.")}
-     ${paragraph(
+  return bannerShell(
+    "general",
+    `<p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center"><font color="${C.text}">You're on the list.</font></p>
+     ${bannerLine(
        "We write when there is something worth reading — new features, and what we learn building analytics that runs without cookies. A few times a month at most, and never a sales sequence.",
      )}
-     ${paragraph(
-       "Nothing to do from here. To stop, reply with &quot;unsubscribe&quot; and you're off the list.",
-     )}
-
-     ${button("Try the live demo", LINKS.site)}`,
-    // A subscriber has no account, and this is list mail — the line under the
-    // card is where an unsubscribe route has to stay visible.
-    "You subscribed to the Quantalog newsletter on quantalog.daorbit.in. Reply with \"unsubscribe\" to stop.",
+     ${bannerLine("Nothing to do from here. To stop, reply with &quot;unsubscribe&quot; and you're off the list.")}
+     ${actionButton("Try the live demo", LINKS.site, "general")}
+     <!-- A subscriber has no account, and this is list mail — the unsubscribe
+          route has to stay visible even without a signed-in dashboard link. -->
+     <p style="margin:22px 0 0;font-size:11.5px;line-height:1.7;color:${C.faint};text-align:center">
+       <font color="${C.faint}">You subscribed to the Quantalog newsletter on quantalog.daorbit.in. Reply with "unsubscribe" to stop.</font>
+     </p>`,
   );
 }
 
