@@ -115,6 +115,22 @@ router.post("/read-all", async (req: AuthedRequest, res: Response) => {
   res.json({ ok: true });
 });
 
+router.post("/delete", async (req: AuthedRequest, res: Response) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!ids.length) return res.status(400).json({ error: "ids is required" });
+  if (ids.length > MAX_LIMIT)
+    return res.status(400).json({ error: `no more than ${MAX_LIMIT} ids at once` });
+
+  const valid = ids
+    .map((id: unknown) => String(id))
+    .filter((id: string) => Types.ObjectId.isValid(id));
+  if (!valid.length) return res.status(400).json({ error: "no valid ids" });
+
+  await Notification.deleteMany({ _id: { $in: valid }, userId: req.userId });
+
+  res.json({ ok: true });
+});
+
 router.get("/preferences", async (req: AuthedRequest, res: Response) => {
   const overrides = await NotificationPref.find({ userId: req.userId });
   const byType = new Map(overrides.map((row) => [String(row.get("type")), row]));
