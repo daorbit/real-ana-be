@@ -1,3 +1,4 @@
+import webPushLib from "web-push";
 import { PushSubscription } from "./models/PushSubscription.js";
 import { NOTIFICATION_SPECS, type NotificationType } from "./types.js";
 
@@ -16,43 +17,21 @@ export function pushConfigured(): boolean {
 }
 
 
-let cached: { mod: WebPushLike | null } | null = null;
+let configured = false;
 
-type WebPushLike = {
-  setVapidDetails(subject: string, publicKey: string, privateKey: string): void;
-  sendNotification(
-    subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
-    payload: string,
-  ): Promise<unknown>;
-};
+function webPush(): typeof webPushLib | null {
+  if (!pushConfigured()) return null;
 
-async function webPush(): Promise<WebPushLike | null> {
-  if (cached) return cached.mod;
-
-  if (!pushConfigured()) {
-    cached = { mod: null };
-    return null;
-  }
-
-  try {
-    const specifier = "web-push";
-    const imported = (await import(/* @vite-ignore */ specifier)) as {
-      default?: WebPushLike;
-    } & WebPushLike;
-    const mod = imported.default ?? imported;
-
-    mod.setVapidDetails(
+  if (!configured) {
+    webPushLib.setVapidDetails(
       process.env.VAPID_SUBJECT as string,
       process.env.VAPID_PUBLIC_KEY as string,
       process.env.VAPID_PRIVATE_KEY as string,
     );
-    cached = { mod };
-    return mod;
-  } catch {
-    // The package is not installed. Push stays off; everything else continues.
-    cached = { mod: null };
-    return null;
+    configured = true;
   }
+
+  return webPushLib;
 }
 
 
