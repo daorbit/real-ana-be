@@ -458,10 +458,10 @@ export function statTile(
   // a wall of cards, where a thin rule around white space reads as a clean
   // number grid — the same numbers, without the box-y feel.
   return `<td width="50%" style="padding:14px 4px;vertical-align:top;${lastRow ? "" : `border-bottom:1px solid ${C.line};`}">
-    <div style="font-size:10.5px;letter-spacing:0.7px;text-transform:uppercase;color:${C.faint};font-weight:600">${label}</div>
+    <div style="font-size:10.5px;letter-spacing:0.7px;text-transform:uppercase;color:${C.faint};font-weight:600"><font color="${C.faint}">${label}</font></div>
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:5px"><tr>
-      <td style="font-size:21px;font-weight:700;color:${C.text};line-height:1;letter-spacing:-0.2px">${value}</td>
-      ${delta ? `<td style="padding-left:8px;font-size:12px;font-weight:600;color:${toneColor}">${delta}</td>` : ""}
+      <td style="font-size:21px;font-weight:700;color:${C.text};line-height:1;letter-spacing:-0.2px"><font color="${C.text}">${value}</font></td>
+      ${delta ? `<td style="padding-left:8px;font-size:12px;font-weight:600;color:${toneColor}"><font color="${toneColor}">${delta}</font></td>` : ""}
     </tr></table>
   </td>`;
 }
@@ -476,12 +476,12 @@ export function barRow(label: string, value: string, pct: number): string {
     <td style="padding:11px 0">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
         <tr>
-          <td style="font-size:12.5px;color:${C.dim};padding-bottom:6px">${label}</td>
-          <td style="font-size:12.5px;font-weight:600;color:${C.text};text-align:right;padding-bottom:6px;white-space:nowrap">${value}</td>
+          <td style="font-size:12.5px;color:${C.dim};padding-bottom:6px"><font color="${C.dim}">${label}</font></td>
+          <td style="font-size:12.5px;font-weight:600;color:${C.text};text-align:right;padding-bottom:6px;white-space:nowrap"><font color="${C.text}">${value}</font></td>
         </tr>
         <tr><td colspan="2">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${C.line};border-radius:2px">
-            <tr><td style="width:${width}%;height:3px;background:${C.accent};border-radius:2px;font-size:0;line-height:0">&nbsp;</td><td style="font-size:0;line-height:0">&nbsp;</td></tr>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${C.line}" style="background:${C.line};border-radius:2px">
+            <tr><td width="${width}%" bgcolor="${C.accent}" style="width:${width}%;height:3px;background:${C.accent};border-radius:2px;font-size:0;line-height:0">&nbsp;</td><td style="font-size:0;line-height:0">&nbsp;</td></tr>
           </table>
         </td></tr>
       </table>
@@ -512,7 +512,7 @@ export function shell(
   reason: string = DEFAULT_REASON,
   footer: ShellFooter = "product",
 ): string {
-  return `<div style="background:${C.page};padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  const body = `<div bgcolor="${C.page}" style="background:${C.page};padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
   <!--[if mso]>
   <style>
     /* Outlook's Word engine drops border-radius and renders every background
@@ -527,7 +527,7 @@ export function shell(
     <!-- One card, not three stacked panels. The header/body/footer used to be
          separate cells with their own backgrounds and shared borders, which is
          what made the message read as a stack of boxes rather than a letter. -->
-    <tr><td class="card" style="background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:${S.major}px">
+    <tr><td class="card" bgcolor="${C.card}" style="background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:${S.major}px">
 
       <!-- Logo, centred, on the card's own white. The old header sat the mark
            on its own darker band, which fought the card it was attached to. -->
@@ -568,6 +568,25 @@ export function shell(
     }
   </table>
 </div>`;
+
+  return docShell(body);
+}
+
+
+function docShell(body: string): string {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<style>
+  :root { color-scheme: light only; supported-color-schemes: light only; }
+  body { background-color:${C.page} !important; }
+</style>
+</head><body bgcolor="${C.page}" style="margin:0;padding:0;background-color:${C.page}">
+${body}
+</body></html>`;
 }
 
 /* ------------------------------- code emails ------------------------------ */

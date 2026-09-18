@@ -132,9 +132,9 @@ export function bannerShell(
   const theme = THEMES[banner];
   const part = bannerAttachment(banner);
 
-  return `<div style="background-color:${theme.wash};background-image:linear-gradient(180deg,${theme.wash} 0%,${C.card} 260px);padding:28px 16px;font-family:${FONT}">
+  const body = `<div bgcolor="${theme.wash}" style="background-color:${theme.wash};background-image:linear-gradient(180deg,${theme.wash} 0%,${C.card} 260px);padding:28px 16px;font-family:${FONT}">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:600px;margin:0 auto">
-    <tr><td style="padding:0">
+    <tr><td bgcolor="${C.card}" style="padding:0;background-color:${C.card}">
 
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 18px">
         <tr>
@@ -175,6 +175,32 @@ export function bannerShell(
     </td></tr>
   </table>
 </div>`;
+
+  return docShell(body);
+}
+
+
+/**
+ * Gmail's Android/iOS app ignores `color-scheme`/`supported-color-schemes`
+ * entirely and repaints dark regardless of the CSS `background`/`color` we
+ * set. What it does not repaint is the legacy `bgcolor` HTML attribute, so
+ * every colored table/cell in the templates below carries one alongside its
+ * `style` — belt-and-braces, since other clients still need the CSS.
+ */
+function docShell(body: string): string {
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<style>
+  :root { color-scheme: light only; supported-color-schemes: light only; }
+  body { background-color:${C.page} !important; }
+</style>
+</head><body bgcolor="${C.page}" style="margin:0;padding:0;background-color:${C.page}">
+${body}
+</body></html>`;
 }
 
 export function line(html: string, top = 10): string {
