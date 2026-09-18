@@ -28,6 +28,7 @@ import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { CURRENCIES } from "../../modules/billing/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../modules/billing/fx.js";
 import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, sendAdminSecurityResetEmail, type BodyLayout } from "../../infra/mail/mailer.js";
+import { emitToMany } from "../../modules/notifications/notify.service.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
@@ -558,6 +559,43 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
   );
   const sent = results.filter((r) => r.ok).length;
 
+  // Mirror the message into the dashboard, for recipients who have an account.
+  //
+  // Opt-in rather than automatic: this endpoint also sends cold outreach to
+  // addresses that have never signed up, and a campaign aimed at strangers has
+  // no business appearing in existing customers' notification panels. The admin
+  // composing the message is the one who knows which kind it is.
+  const alsoNotify = req.body?.notifyInApp === true;
+  let notified = 0;
+
+  if (alsoNotify) {
+    // Only addresses that actually received the mail: a notification saying
+    // "we sent you this" beside an inbox that never got it is worse than no
+    // notification.
+    const delivered = new Set(results.filter((r) => r.ok).map((r) => r.email.toLowerCase()));
+    const deliveredRecipients = recipients.filter((r) => delivered.has(r.email.toLowerCase()));
+
+    // Segment and user-id sends already carry the account id. Hand-entered
+    // addresses do not, and most of them will have no account at all — those
+    // are looked up once, in a single query, and simply produce nothing when
+    // the address is a stranger's.
+    const known = deliveredRecipients.filter((r) => r.id).map((r) => r.id as string);
+    const unresolved = deliveredRecipients.filter((r) => !r.id).map((r) => r.email);
+
+    if (unresolved.length) {
+      const found = await User.find({ email: { $in: unresolved } }).select("_id");
+      known.push(...found.map((u) => String(u._id)));
+    }
+
+    await emitToMany(known, {
+      type: "admin.message",
+      actorId: req.userId,
+      data: { subject, body, cta: readCta(req.body?.cta) ?? null },
+      link: "",
+    });
+    notified = known.length;
+  }
+
   console.log(
     `[admin] ${req.userId} emailed ${sent}/${results.length} recipients — "${subject}"`,
   );
@@ -565,6 +603,7 @@ router.post("/email/send", async (req: AuthedRequest, res: Response) => {
   res.json({
     sent,
     failed: results.length - sent,
+    notified,
 
     failures: results.filter((r) => !r.ok),
   });

@@ -10,31 +10,12 @@ import { sendWhatsAppReport } from "./report-whatsapp.js";
 import { renderReportPage } from "./report-html.js";
 import { buildDigest } from "./digest.js";
 import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
+import { emit } from "../notifications/notify.service.js";
 
-/**
- * Turning a due schedule into sent email.
- *
- * Shared by the nightly cron and the "send test now" button, so what an owner
- * previews is produced by the same code that will run unattended — a preview
- * that takes a different path is a preview that lies.
- *
- * The batching and the per-recipient error handling here both exist for the
- * same reason: this runs inside one Vercel function invocation with a hard
- * timeout, against Gmail SMTP with its own rate limits. A run that tries to do
- * everything at once fails at whatever point it runs out of time, having half
- * sent, with no record of where it stopped.
- */
 
-/** How many schedules one cron invocation will attempt. The rest wait for tomorrow. */
 const BATCH_LIMIT = 25;
 
-/**
- * What a schedule asked to have in its report.
- *
- * Named rather than written inline at each `schedule.get("include")`: the same
- * cast appeared in three places, and a field added to the model but missed in
- * one of them is a silently ignored setting.
- */
+
 type ReportInclude = {
   analytics: boolean;
   seo: boolean;
@@ -95,13 +76,7 @@ async function latestSeoRows(siteIds: string[]): Promise<SeoRow[]> {
   return [...byUrl.values()].sort((a, b) => a.score - b.score).slice(0, 20);
 }
 
-/**
- * The headline numbers, in the order they're read.
- *
- * Shared by both channels so an email and a WhatsApp message describing the
- * same period can't disagree — including the bounce-rate inversion, which is
- * the one that would be easy to get wrong in only one of them.
- */
+
 function buildMetrics(stats: Awaited<ReturnType<typeof computeStats>> | null) {
   if (!stats) return [];
   return [
@@ -120,14 +95,7 @@ function buildMetrics(stats: Awaited<ReturnType<typeof computeStats>> | null) {
   ];
 }
 
-/**
- * Everything a rendering of this report needs, gathered once.
- *
- * Shared by the hosted page, the email and the WhatsApp message, so all three
- * describe the same period with the same numbers. Computed on demand
- * rather than stored: the hosted link is meant to stay current, and a snapshot
- * frozen at send time would quietly go stale in the recipient's bookmark.
- */
+
 export async function buildReportView(schedule: InstanceType<typeof ReportSchedule>) {
   const workspace = await Workspace.findById(schedule.get("workspaceId"));
   if (!workspace) throw new Error("workspace no longer exists");
@@ -200,13 +168,7 @@ export type SendOutcome = {
   whatsappFailed: { phone: string; error: string }[];
 };
 
-/**
- * Build and send one schedule's report to everyone still subscribed.
- *
- * Never throws for a per-recipient failure. One bad address on a list of five
- * must not cost the other four their report, so failures are collected and
- * returned rather than raised.
- */
+
 export async function runSchedule(
   schedule: InstanceType<typeof ReportSchedule>,
   options: { isTest?: boolean; onlyTo?: string } = {}
@@ -411,14 +373,7 @@ export type RunSummary = {
   errors: string[];
 };
 
-/**
- * Send every schedule that has come due.
- *
- * `nextRunAt` is advanced even when a run fails. Retrying tomorrow is right;
- * retrying on every cron pass until it succeeds would mean a workspace whose
- * SMTP keeps refusing generates an unbounded queue of overdue sends, all of
- * which fire at once the moment it recovers.
- */
+
 export async function runDueSchedules(now: Date = new Date()): Promise<RunSummary> {
   const due = await ReportSchedule.find({ enabled: true, nextRunAt: { $lte: now } })
     .sort({ nextRunAt: 1 })
@@ -428,9 +383,7 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
 
   for (const schedule of due) {
     const lastSentAt = schedule.get("lastSentAt") as Date | undefined;
-    // Independent of `nextRunAt`: a value edited directly in the database, or a
-    // cron that somehow fires twice, must still not mail the same list twice in
-    // one day. Recipients notice duplicates long before they notice a late report.
+
     if (lastSentAt && now.getTime() - lastSentAt.getTime() < MIN_INTERVAL_MS) {
       summary.skipped++;
       continue;
@@ -451,6 +404,22 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
       ];
       if (problems.length) summary.errors.push(`${outcome.scheduleName}: ${problems.join(", ")}`);
       schedule.set("lastError", problems.length ? problems[0] : undefined);
+
+      // Raised only when the report actually reached someone. A run that failed
+      // every recipient has nothing to announce, and "your report is ready"
+      // above an empty inbox is worse than silence.
+      if (outcome.sent.length || outcome.whatsappSent.length) {
+        await emit({
+          type: "report.ready",
+          workspaceId: String(schedule.get("workspaceId")),
+          data: {
+            reportName: outcome.scheduleName,
+            frequency,
+            recipientCount: outcome.sent.length + outcome.whatsappSent.length,
+          },
+          link: `/app/reports`,
+        });
+      }
     } catch (e) {
       summary.failed++;
       summary.errors.push(`${schedule.get("name")}: ${(e as Error).message}`);

@@ -3,6 +3,7 @@ import { Workspace } from "../workspace/models/Workspace.js";
 import { User } from "../identity/models/User.js";
 import { getPlanCatalogEntry } from "./plans.catalog.js";
 import { sendPlanExpiryEmail } from "../../infra/mail/mailer.js";
+import { emit } from "../notifications/notify.service.js";
 const REMIND_DAYS = [7, 1];
 function alreadySent(sent: unknown, mark: number): boolean {
   return Array.isArray(sent) && sent.includes(mark);
@@ -57,6 +58,19 @@ export async function sendExpiryReminders(): Promise<ExpirySummary> {
         { _id: sub.get("_id") },
         { $addToSet: { expiryRemindersSent: mark } },
       );
+ 
+      await emit({
+        type: "plan.ending",
+        workspaceId: String(sub.get("workspaceId")),
+        data: {
+          workspaceName: (workspace?.get("name") as string) ?? "your workspace",
+          planName: plan?.name ?? (sub.get("planSlug") as string),
+          daysLeft,
+          endsOn: end,
+        },
+        link: "/app/billing",
+      });
+
       summary.sent += 1;
     } catch (e) {
       summary.failed += 1;

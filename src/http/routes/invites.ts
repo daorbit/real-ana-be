@@ -3,6 +3,7 @@ import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { User } from "../../modules/identity/models/User.js";
+import { emit } from "../../modules/notifications/notify.service.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
 
 /**
@@ -97,6 +98,26 @@ router.post("/:token/accept", requireAuth, async (req: AuthedRequest, res: Respo
   invite.set("acceptedAt", new Date());
   invite.set("acceptedBy", req.userId);
   await invite.save();
+
+  // Tell the workspace's admins someone joined — but only on a genuine join.
+  // A second click on the same link is a no-op above, and announcing it again
+  // would report a membership change that did not happen.
+  if (!existing) {
+    const accepter = await User.findById(req.userId).select("name email");
+    await emit({
+      type: "invite.accepted",
+      workspaceId: workspace.id,
+      // The accepter is the actor, so they are left out of their own
+      // announcement by `emit`.
+      actorId: req.userId,
+      data: {
+        actorName: (accepter?.name as string) || (accepter?.email as string) || "Someone",
+        workspaceName: workspace.get("name"),
+        role: invite.role,
+      },
+      link: `/app/settings/members`,
+    });
+  }
 
   res.json({
     workspaceId: workspace.id,

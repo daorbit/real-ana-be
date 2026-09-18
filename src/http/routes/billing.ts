@@ -41,6 +41,7 @@ import {
   type InvoiceKind,
 } from "../../modules/billing/invoice.js";
 import { sendInvoiceEmail, mailConfigured } from "../../infra/mail/mailer.js";
+import { emit } from "../../modules/notifications/notify.service.js";
 
  
 const router = Router();
@@ -624,6 +625,25 @@ async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: strin
         ? await PlanPurchase.findOneAndUpdate(filter, update)
         : await AddonPurchase.findOneAndUpdate(filter, update);
     if (!claimed) return;
+
+    // Raised before the receipt, and outside the `mailConfigured` guard below:
+    // the payment happened whether or not this deployment can send mail, and
+    // the dashboard should say so either way.
+    const workspaceId = claimed.get("workspaceId");
+    if (workspaceId) {
+      await emit({
+        type: "payment.received",
+        workspaceId: String(workspaceId),
+        data: {
+          kind,
+          amountLabel: formatAmount(
+            claimed.get("amount") as number,
+            claimed.get("currency") as string,
+          ),
+        },
+        link: "/app/billing",
+      });
+    }
 
     if (!mailConfigured()) return;
 

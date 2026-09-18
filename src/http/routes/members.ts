@@ -6,6 +6,7 @@ import { User } from "../../modules/identity/models/User.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
 import { sendWorkspaceInviteEmail, mailConfigured } from "../../infra/mail/mailer.js";
+import { emitTo } from "../../modules/notifications/notify.service.js";
 
 /**
  * Workspace membership: who is in a workspace, and who may change that.
@@ -166,6 +167,22 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
     return res.status(502).json({ error: "could not send the invitation email" });
   }
 
+  // Someone who already has an account gets the invitation in their bell as
+  // well as their inbox — the dashboard is where they will act on it, and an
+  // invite that exists only in email is one more thing to go looking for.
+  //
+  // An address with no account gets the email alone: there is no user to
+  // address a row to yet. The invitation is claimed on their first sign-in, at
+  // which point the workspace is simply there.
+  if (existingUser) {
+    await notifyInviteReceived(String(existingUser._id), {
+      workspaceName: access.workspace.get("name") as string,
+      inviterName: (inviter?.name as string) || (inviter?.email as string) || "A teammate",
+      role,
+      token,
+    }, String(req.userId));
+  }
+
   res.status(201).json({
     id: invite.id,
     email: invite.email,
@@ -173,6 +190,29 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
     expiresAt: invite.expiresAt,
   });
 });
+
+/**
+ * The invitation notification, kept as a named helper purely to keep the route
+ * above readable — it already carries the email send, its failure path and the
+ * upsert.
+ */
+async function notifyInviteReceived(
+  userId: string,
+  data: { workspaceName: string; inviterName: string; role: string; token: string },
+  actorId: string,
+): Promise<void> {
+  await emitTo({
+    type: "invite.received",
+    userId,
+    actorId,
+    data: {
+      workspaceName: data.workspaceName,
+      inviterName: data.inviterName,
+      role: data.role,
+    },
+    link: `/invite/${data.token}`,
+  });
+}
 
 /** Withdraw a pending invitation. */
 router.delete("/invites/:id", async (req: AuthedRequest, res: Response) => {

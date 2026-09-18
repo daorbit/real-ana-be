@@ -19,6 +19,7 @@ import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
 import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail } from "../../infra/mail/mailer.js";
+import { emitTo } from "../../modules/notifications/notify.service.js";
 import {
   signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
   signPending2faToken, verifyPending2faToken,
@@ -515,6 +516,19 @@ router.post("/login", async (req, res) => {
         sendAccountLockedEmail({ email: user.email, name: user.name }, until).catch((e) =>
           console.error("[login] account-locked notice failed:", (e as Error)?.message)
         );
+        // Also in the dashboard, for whenever they next get in. If the lockout
+        // was someone else trying their password, this is the record that
+        // survives a deleted email.
+        await emitTo({
+          type: "security.alert",
+          userId: String(user._id),
+          data: {
+            what: "Sign-in was locked for 12 hours after five wrong passwords.",
+            event: "login.locked",
+            lockedUntil: until,
+          },
+          link: "/app/settings",
+        });
         return res.status(423).json({
           error: "too many failed attempts — this account is temporarily locked",
           locked: true,
@@ -970,6 +984,13 @@ router.post("/me/password", requireAuth, blockDemoWrites, async (req: AuthedRequ
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     await user.save();
 
+    await emitTo({
+      type: "security.alert",
+      userId: String(user._id),
+      data: { what: "Your password was changed.", event: "password.changed" },
+      link: "/app/settings",
+    });
+
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
       console.error("[change-password] notice failed:", (e as Error)?.message)
     );
@@ -1195,6 +1216,12 @@ router.post("/reset-password", async (req, res) => {
     await user.save();
     await pending.deleteOne();
 
+    await emitTo({
+      type: "security.alert",
+      userId: String(user._id),
+      data: { what: "Your password was reset.", event: "password.reset" },
+      link: "/app/settings",
+    });
 
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
       console.error("[reset] change notice failed:", (e as Error)?.message)

@@ -35,6 +35,7 @@ import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
 import inviteRoutes from "./http/routes/invites.js";
 import reportsPublicRoutes from "./http/routes/reports-public.js";
+import notificationRoutes from "./http/routes/notifications.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import swaggerUi from "swagger-ui-express";
@@ -255,6 +256,10 @@ app.use("/api/workspaces/:wid/members", dashboardCors, requireUnlocked, memberRo
 // Accepting an invitation. Not under /workspaces: the recipient has no access
 // to the workspace yet, which is the whole point of the link.
 app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
+// The notification panel. Scoped to the signed-in user rather than a workspace
+// prefix: the bell is one merged feed across every workspace they belong to,
+// plus account-level notices that belong to no workspace at all.
+app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
 // Orbit AI, the in-app assistant. The in-app support form it used to hand over
 // to is now a da-forms form embedded on the Help page, which posts to da-forms
