@@ -43,7 +43,9 @@ export type BannerName =
   | "cold-invite"
   | "two-factor-backup-codes"
   | "report"
-  | "general";
+  | "contact-ack"
+  | "newsletter"
+  | "broadcast";
 
 export type Theme = { accent: string; accentDeep: string; wash: string; edge: string };
 
@@ -60,8 +62,11 @@ export const THEMES: Record<BannerName, Theme> = {
   "cold-invite": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   "two-factor-backup-codes": { accent: "#f97316", accentDeep: "#ea580c", wash: "#fff7f0", edge: "#ffe6d2" },
   report: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
-  general: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
+  "contact-ack": { accent: "#0d9488", accentDeep: "#0f766e", wash: "#f1fafa", edge: "#d3ecea" },
+  newsletter: { accent: "#7c3aed", accentDeep: "#6d28d9", wash: "#f7f4ff", edge: "#e5dbfb" },
+  broadcast: { accent: "#0891b2", accentDeep: "#0e7490", wash: "#f3f8fb", edge: "#d8e9f1" },
 };
+
 
 const LOGO_CID = "quantalog-logo";
 

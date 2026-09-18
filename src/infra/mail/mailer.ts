@@ -614,10 +614,10 @@ export function broadcastHtml(text: string, cta?: { label: string; href: string 
 
   const action =
     cta && /^https?:\/\//i.test(cta.href)
-      ? actionButton(escapeHtml(cta.label), escapeAttr(cta.href), "general")
+      ? actionButton(escapeHtml(cta.label), escapeAttr(cta.href), "broadcast")
       : "";
 
-  return bannerShell("general", paragraphs + action);
+  return bannerShell("broadcast", paragraphs + action);
 }
 
 
@@ -711,7 +711,7 @@ export function contactAckHtml(name: string, subject: string, message: string): 
   const quoted = escapeHtml(message).replace(/\n/g, "<br>");
 
   return bannerShell(
-    "general",
+    "contact-ack",
     `<p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px"><font color="${C.text}">Thanks, ${escapeHtml(name)} — we have your message.</font></p>
      ${bannerLine("A person reads every message that comes through this form. You should hear back at this address within one working day.")}
      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:16px 0 0">
@@ -839,13 +839,13 @@ export function invoiceHtml(invoice: {
 
 export function newsletterAckHtml(): string {
   return bannerShell(
-    "general",
+    "newsletter",
     `<p style="margin:0 0 3px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px;text-align:center"><font color="${C.text}">You're on the list.</font></p>
      ${bannerLine(
        "We write when there is something worth reading — new features, and what we learn building analytics that runs without cookies. A few times a month at most, and never a sales sequence.",
      )}
      ${bannerLine("Nothing to do from here. To stop, reply with &quot;unsubscribe&quot; and you're off the list.")}
-     ${actionButton("Try the live demo", LINKS.site, "general")}
+     ${actionButton("Try the live demo", LINKS.site, "newsletter")}
      <!-- A subscriber has no account, and this is list mail — the unsubscribe
           route has to stay visible even without a signed-in dashboard link. -->
      <p style="margin:22px 0 0;font-size:11.5px;line-height:1.7;color:${C.faint};text-align:center">
