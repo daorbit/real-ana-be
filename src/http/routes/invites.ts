@@ -103,7 +103,7 @@ router.post("/:token/accept", requireAuth, async (req: AuthedRequest, res: Respo
   // A second click on the same link is a no-op above, and announcing it again
   // would report a membership change that did not happen.
   if (!existing) {
-    const accepter = await User.findById(req.userId).select("name email");
+    const accepter = await User.findById(req.userId).select("name email avatarUrl");
     await emit({
       type: "invite.accepted",
       workspaceId: workspace.id,
@@ -112,6 +112,7 @@ router.post("/:token/accept", requireAuth, async (req: AuthedRequest, res: Respo
       actorId: req.userId,
       data: {
         actorName: (accepter?.name as string) || (accepter?.email as string) || "Someone",
+        actorAvatarUrl: (accepter?.avatarUrl as string) || "",
         workspaceName: workspace.get("name"),
         role: invite.role,
       },

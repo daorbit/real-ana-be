@@ -143,7 +143,7 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
     { upsert: true, new: true },
   );
 
-  const inviter = await User.findById(req.userId).select("name email");
+  const inviter = await User.findById(req.userId).select("name email avatarUrl");
 
   try {
     await sendWorkspaceInviteEmail(
@@ -178,6 +178,7 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
     await notifyInviteReceived(String(existingUser._id), {
       workspaceName: access.workspace.get("name") as string,
       inviterName: (inviter?.name as string) || (inviter?.email as string) || "A teammate",
+      inviterAvatarUrl: (inviter?.avatarUrl as string) || "",
       role,
       token,
     }, String(req.userId));
@@ -198,7 +199,13 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
  */
 async function notifyInviteReceived(
   userId: string,
-  data: { workspaceName: string; inviterName: string; role: string; token: string },
+  data: {
+    workspaceName: string;
+    inviterName: string;
+    inviterAvatarUrl?: string;
+    role: string;
+    token: string;
+  },
   actorId: string,
 ): Promise<void> {
   await emitTo({
@@ -208,6 +215,7 @@ async function notifyInviteReceived(
     data: {
       workspaceName: data.workspaceName,
       inviterName: data.inviterName,
+      actorAvatarUrl: data.inviterAvatarUrl || "",
       role: data.role,
     },
     link: `/invite/${data.token}`,
