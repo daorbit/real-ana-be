@@ -53,7 +53,7 @@ const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
 export function watermarkTransformation(): string | undefined {
   if (!WATERMARK_PUBLIC_ID) return undefined;
   const layer = WATERMARK_PUBLIC_ID.replace(/\//g, ":");
-  return `l_${layer},w_0.16,fl_relative,g_south_east,x_0.03,y_0.03,o_85`;
+  return `l_${layer},w_0.08,fl_relative,r_max,g_south_east,x_0.03,y_0.03,o_85`;
 }
 
 
