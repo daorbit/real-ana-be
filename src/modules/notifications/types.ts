@@ -26,57 +26,23 @@ export const NOTIFICATION_TYPES = [
   "seo.audit.done",
   "admin.message",
   "security.alert",
+  "form.submission",
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
-/**
- * How a type finds its recipients.
- *
- * - `workspace` — fanned out to the members of one workspace whose role is at
- *   least `minRole`. The row carries `workspaceId`.
- * - `user`      — addressed to one person, with no workspace behind it
- *   (security notices, an invitation to a workspace they are not in yet).
- */
+
 export type NotificationScope = "workspace" | "user";
 
 export type NotificationSpec = {
   scope: NotificationScope;
-  /**
-   * The weakest role that should hear about this. Only meaningful for
-   * `workspace` scope.
-   *
-   * This is the field that keeps money off a viewer's screen: a read-only seat
-   * shared with a client has no business being told what the agency pays.
-   */
+
   minRole: WorkspaceRole;
-  /**
-   * Whether a user may switch this off.
-   *
-   * False on `security.alert` on purpose. "Your password was changed" is the
-   * one message whose whole value is reaching someone who did not expect it,
-   * and an attacker who has the account would mute it first.
-   */
+
   optional: boolean;
-  /**
-   * Whether this type is eligible for browser push, for users who granted
-   * permission.
-   *
-   * Off for the routine ones. A push is an interruption — it lights a phone on
-   * a desk — and a finished SEO crawl does not earn that. The bell is where
-   * "something happened" belongs; push is for "something happened that you
-   * would want to stop what you are doing for".
-   */
+
   push: boolean;
-  /**
-   * Whether the product already sends an email for this by another path.
-   *
-   * Nothing here reads it yet — notifications send no mail in v1. It is
-   * recorded now because the answer is easy to establish today, while the
-   * sending code is in front of us, and genuinely hard to reconstruct later:
-   * wiring email into notifications without it would double-send every type
-   * marked true.
-   */
+
   mailedElsewhere: boolean;
 };
 
@@ -91,33 +57,19 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
   "plan.ending": { scope: "workspace", minRole: "admin", optional: true, push: true, mailedElsewhere: true },
   "payment.received": { scope: "workspace", minRole: "admin", optional: true, push: false, mailedElsewhere: true },
   "seo.audit.done": { scope: "workspace", minRole: "viewer", optional: true, push: false, mailedElsewhere: false },
-  /**
-   * A message written by a platform admin and sent to chosen recipients.
-   *
-   * The one type that stores its own prose, because there is nothing to key a
-   * translation off: an admin types a subject and a body into a form minutes
-   * before it goes out. `data` therefore carries `{ subject, body, cta }` and
-   * the client renders them as given.
-   */
+
   "admin.message": { scope: "user", minRole: "viewer", optional: true, push: true, mailedElsewhere: true },
-  /**
-   * Something changed on the account that the holder should verify was them —
-   * a password change, a lockout, an admin resetting 2FA.
-   */
+
   "security.alert": { scope: "user", minRole: "viewer", optional: false, push: true, mailedElsewhere: true },
+
+  "form.submission": { scope: "workspace", minRole: "editor", optional: true, push: false, mailedElsewhere: true },
 };
 
 export function isNotificationType(value: unknown): value is NotificationType {
   return typeof value === "string" && value in NOTIFICATION_SPECS;
 }
 
-/**
- * Whether a member holding `role` is senior enough to receive `type`.
- *
- * Leans on `ROLE_RANK` rather than listing roles per type, for the reason given
- * there: the roles are cumulative, and saying so once is what stops two lists
- * disagreeing about whether an owner counts as an admin.
- */
+
 export function roleMayReceive(type: NotificationType, role: WorkspaceRole): boolean {
   return ROLE_RANK[role] >= ROLE_RANK[NOTIFICATION_SPECS[type].minRole];
 }

@@ -11,6 +11,7 @@ import { parseGeneratedForm } from "../../modules/forms-ai/form-schema.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
+import { emit } from "../../modules/notifications/notify.service.js";
 
 
 const router = Router();
@@ -207,6 +208,42 @@ router.post(
     await spendQuota(workspaceId, "orbit");
 
     res.json({ ops: result.ops, model: result.model });
+  }),
+);
+
+/** Cap on how many answers travel in the notification row — a runaway form is not a reason to store an unbounded document. */
+const MAX_ANSWERS = 30;
+
+router.post(
+  "/notify/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+
+    const formTitle = typeof req.body?.formTitle === "string" ? req.body.formTitle.slice(0, 200) : "";
+    const formId = typeof req.body?.formId === "string" ? req.body.formId : "";
+    const rawAnswers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+
+    type Answer = { label: string; value: string };
+    const answers: Answer[] = rawAnswers
+      .map((a: unknown): Answer | null => {
+        if (!a || typeof a !== "object") return null;
+        const row = a as Record<string, unknown>;
+        const label = typeof row.label === "string" ? row.label.slice(0, 120) : "";
+        const value = typeof row.value === "string" ? row.value.slice(0, 500) : "";
+        if (!label) return null;
+        return { label, value };
+      })
+      .filter((a: Answer | null): a is Answer => a !== null)
+      .slice(0, MAX_ANSWERS);
+
+    await emit({
+      type: "form.submission",
+      workspaceId: req.params.workspaceId,
+      data: { formTitle, formId, answers },
+      link: "/app/leads",
+    });
+
+    res.status(204).end();
   }),
 );
 

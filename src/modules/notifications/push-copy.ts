@@ -86,5 +86,12 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
         body: str(data, "what", "Something changed on your account."),
       };
     }
+
+    case "form.submission": {
+      // Never actually sent — the type's `push: false` in the registry stops
+      // `deliver` from calling this. Present for the switch's exhaustiveness.
+      const form = str(data, "formTitle", "a form");
+      return { title: "New submission", body: `A new response came in on ${form}.` };
+    }
   }
 }
