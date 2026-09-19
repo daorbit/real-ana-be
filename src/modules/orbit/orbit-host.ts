@@ -124,18 +124,15 @@ export const quantalogOrbitHost: OrbitHost = {
   },
 };
 
-/**
- * Same entitlement/tier as `quantalogOrbitHost` — so "why did this change"
- * still only reaches the models a workspace's plan allows — but quota is
- * never checked or spent.
+/*
+ * There was an `unmeteredOrbitHost` here — same entitlement, but quota never
+ * checked or spent — used by the "why did this change?" explain route on the
+ * reasoning that glancing at a stat card should not spend the monthly question
+ * pool.
  *
- * For a short, single-purpose call that isn't a chat question: charging it
- * from the monthly question pool would mean glancing at a handful of stat
- * cards spends real quota just to understand your own dashboard. Protected
- * instead by its own, more generous rate limit at the route level.
+ * It is gone because that made explain a real model call that never reached
+ * the bill: one unbilled route is all it takes to use Orbit indefinitely.
+ * Every path through Orbit meters now. If something genuinely should not
+ * charge the customer, give it its own allowance rather than an exemption
+ * from counting.
  */
-export const unmeteredOrbitHost: OrbitHost = {
-  entitlement: quantalogOrbitHost.entitlement,
-  hasQuota: async () => true,
-  spendQuota: async () => {},
-};

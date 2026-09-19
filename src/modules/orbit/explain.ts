@@ -49,7 +49,16 @@ export type ExplainMetricInput = {
   signal?: AbortSignal;
 };
 
-export type ExplainMetricResult = { ok: true; reply: string } | { ok: false; status: number; error: string };
+export type ExplainMetricResult =
+  | { ok: true; reply: string }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      /** Set when the failure is a spent question allowance rather than a
+       * fault — the route answers those with the upgrade dialog's shape. */
+      quotaExceeded?: boolean;
+    };
 
 function formatValue(metric: ExplainMetric, value: number): string {
   if (metric === "bounceRate") return `${value}%`;
@@ -125,7 +134,15 @@ export async function explainMetricChange(input: ExplainMetricInput): Promise<Ex
   });
 
   if (!result.ok) {
-    return { ok: false, status: result.status, error: result.error };
+    // `quotaExceeded` is carried through rather than flattened into a plain
+    // failure: the route turns it into the upgrade dialog's shape, the same as
+    // a spent allowance on a chat question.
+    return {
+      ok: false,
+      status: result.status,
+      error: result.error,
+      quotaExceeded: result.quotaExceeded,
+    };
   }
 
   return { ok: true, reply: result.reply };

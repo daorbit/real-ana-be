@@ -10,7 +10,7 @@ import {
 } from "../../modules/orbit/index.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { quotaSummary } from "../../modules/billing/quota.service.js";
-import { effectiveOrbitPlan, quantalogOrbitHost, unmeteredOrbitHost } from "../../modules/orbit/orbit-host.js";
+import { effectiveOrbitPlan, quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
 import { explainMetricChange, type ExplainMetric } from "../../modules/orbit/explain.js";
 import { Site } from "../../modules/analytics/models/Site.js";
@@ -407,8 +407,13 @@ const EXPLAIN_HOURLY_LIMIT = 30;
 
 /**
  * "Why did this change?" — explains one metric's move over the caller's own
- * current dashboard range. Free: no quota spend, gated only by its own rate
- * limit and the workspace's data-access entitlement.
+ * current dashboard range.
+ *
+ * Metered like any other Orbit answer. It used to run unmetered on the
+ * reasoning that glancing at a stat card should not spend the monthly question
+ * pool — but it is a real model call on real data, so left free it was a way
+ * to use Orbit indefinitely without it ever reaching the bill. The hourly rate
+ * limit below still stands on top of the quota.
  */
 router.post("/explain", async (req: AuthedRequest, res: Response) => {
   if (!orbitConfigured()) {
@@ -454,7 +459,8 @@ router.post("/explain", async (req: AuthedRequest, res: Response) => {
       compare: req.body?.compare,
       compareFrom: req.body?.compareFrom,
       compareTo: req.body?.compareTo,
-      host: unmeteredOrbitHost,
+      // Metered, like every other Orbit answer — see the note on the route.
+      host: quantalogOrbitHost,
       tenantId: ws.id,
       signal: hungUp.signal,
     });
@@ -464,7 +470,18 @@ router.post("/explain", async (req: AuthedRequest, res: Response) => {
 
   if (hungUp.signal.aborted) return;
 
-  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  if (!result.ok) {
+    // A spent allowance is a plan limit, not a failure — same shape the chat
+    // route returns, so the dashboard's upgrade dialog reads it unchanged.
+    if (result.quotaExceeded) {
+      return planLimit(res, result.error, {
+        kind: "orbit_questions",
+        label: "Orbit questions",
+        quota: plan.monthlyQuota,
+      });
+    }
+    return res.status(result.status).json({ error: result.error });
+  }
 
   res.json({ reply: result.reply });
 });
