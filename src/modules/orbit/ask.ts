@@ -11,95 +11,40 @@ import {
 } from "./models.js";
 import type { OrbitEntitlement, OrbitHost } from "./types.js";
 
-/**
- * How long to wait on one model before moving to the next.
- *
- * Tuned against the free tiers, which queue: measured cold, several of them
- * take well over twenty seconds to return a first token, and cutting them off
- * there meant the chain fell through to a paid model on almost every request —
- * defeating the point of having them.
- *
- * The trade is a slow worst case. It is bounded by `TOTAL_BUDGET_MS` below, so
- * a user waits for a couple of failures rather than all of them.
- */
+
 const TIMEOUT_MS = 35_000;
 
 const TOTAL_BUDGET_MS = 75_000;
 
 const MIN_ATTEMPT_MS = 4_000;
 
-/**
- * What comes back when the caller gave up before an answer did.
- *
- * 499, borrowed from nginx: the client closed the connection. Not a failure
- * of ours and not the client's error either, so neither a 5xx nor a plain
- * 4xx says it. Nothing is written to the socket in practice — there is no
- * longer a socket — but the route still needs a result to return, and one
- * that is unmistakably *not* an answer is what keeps the spend and the
- * transcript write on the success path only.
- */
+
 const ABANDONED: OrbitResult = {
   ok: false,
   status: 499,
   error: "Stopped before an answer arrived.",
 };
 
-/**
- * Room for a numbered fix — an SEO answer runs to several steps with a tag to
- * paste in each — plus the follow-ups.
- *
- * Sized against the *envelope*, not the prose. The reply is capped at 4000
- * characters (`MAX_REPLY_CHARS`), roughly 1000 tokens, and everything else in
- * the response is billed to the same ceiling: the JSON scaffolding, three
- * suggestions, and — because a reply is a JSON string — a backslash for every
- * quote and newline in it, which an answer full of `<script src="…">` produces
- * in quantity. At 1400 a long install answer ran out of tokens mid-string and
- * arrived as an unparseable envelope.
- */
+
 const MAX_TOKENS = 2600;
 
 /** At most this many follow-ups. Three fits the panel; more is a menu. */
 const MAX_SUGGESTIONS = 3;
 
-/**
- * The one model that reads an attached image.
- *
- * Deliberately not in `ORBIT_MODELS` — that catalogue feeds the picker and
- * the model-selection chain, and this model is never picked. It is reached
- * only by `askOrbitVision`, which `askOrbit` defers to the moment a call
- * carries an image, before any of the usual chain/fallback logic runs.
- */
+
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 
 /** Room for a description of an image plus a few follow-up sentences. */
 const VISION_MAX_TOKENS = 1024;
 
-/**
- * The one model that draws a picture.
- *
- * Same treatment as `VISION_MODEL`: not in `ORBIT_MODELS`, never fallen back
- * to or from, reached only through `askOrbitGenerateImage` when a call is
- * explicitly asking to generate rather than to chat.
- */
+
 const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
 /** The default step count. Higher looks better and costs more of the shared
  * daily neuron budget; four is FLUX Schnell's own recommended default. */
 const IMAGE_STEPS = 4;
 
-/**
- * Phrases that mean "about my own numbers" rather than "about the product".
- *
- * Building the workspace digest costs several database queries and a large
- * block of prompt, and most support questions cannot use a single figure in it.
- * This decides whether that is worth doing.
- *
- * Written to over-include on purpose. Sending the digest to a question that did
- * not need it wastes tokens; withholding it from one that did produces "I
- * cannot see your analytics" to someone whose plan says otherwise, which is a
- * bug report. So anything possessive, comparative, or time-bound counts, and
- * only a question with none of those markers skips it.
- */
+
 const DATA_MARKERS = [
   " my ", " our ", " mine", " we ", " us ",
   "yesterday", "today", "this week", "last week", "this month", "last month",
@@ -118,32 +63,13 @@ function wantsData(question: string): boolean {
 /** Where the stable rules end and this question's own context begins. */
 const KNOWLEDGE_MARKER = "\n\nProduct reference:\n\n";
 
-/**
- * The system prompt split into a cacheable prefix and the rest.
- *
- * Everything up to the product reference is identical on every call, so it is
- * sent as its own content part carrying a cache marker; the reference sections
- * and any workspace figures follow in a second, uncached part. Providers that
- * support prompt caching bill the first at a fraction of fresh input, and
- * providers that do not simply see a two-part message with an unknown field.
- *
- * A prompt with no marker (a caller's own `systemPrompt`) is returned as one
- * uncached part rather than guessed at — splitting someone else's instructions
- * at an arbitrary point is how a cache prefix stops being stable.
- */
+
 function cacheableSystem(prompt: string, provider: OrbitModel["provider"]): unknown {
-  // Only OpenRouter documents `cache_control` on a content part. Sending the
-  // array form to a provider that has no use for it is all risk and no saving:
-  // NVIDIA's endpoint is strict about the system message's shape, and a
-  // rejected request costs that model its turn in the chain.
+
   if (provider !== "openrouter") return prompt;
 
   const at = prompt.indexOf(KNOWLEDGE_MARKER);
-  // A plain string when there is nothing to cache — which is every caller that
-  // brought its own instructions, the social scheduler included. Several models
-  // reject a content *array* on the system message outright, so wrapping an
-  // unsplittable prompt in one to no benefit failed the whole chain and the
-  // route answered "Orbit could not answer that" whatever model was picked.
+
   if (at === -1) return prompt;
 
   return [
@@ -216,15 +142,7 @@ export type AskOptions = {
   history?: OrbitTurn[];
   /** The asker's preferred model. Tried first; everything else after it. */
   modelId?: string;
-  /**
-   * A base64 image data URL (`data:image/...;base64,...`) to answer a
-   * question about, already size- and type-validated by the route.
-   *
-   * Its presence, not `modelId`, decides the model: `askOrbit` defers to
-   * `askOrbitVision` the moment this is set, before any of the usual
-   * chain/fallback/history logic runs. There is exactly one vision model, so
-   * there is nothing to pick and nothing to fall back to.
-   */
+
   image?: string;
   /**
    * Draw a picture from `question` instead of answering it.
@@ -245,28 +163,9 @@ export type AskOptions = {
   host?: OrbitHost;
   /** Opaque tenant key, passed back to the host unchanged. Required with `host`. */
   tenantId?: string;
-  /**
-   * Replace the assistant's instructions for this call.
-   *
-   * For internal jobs that want the model plumbing — the fallback chain, the
-   * timeouts, the output sanitising — but are not the in-app assistant. The
-   * report digest is one: under the support prompt the model correctly refuses
-   * it, because "summarise these figures" is not a Quantalog support question.
-   *
-   * Never set from a request. The prompt decides what the assistant will and
-   * will not do, so a caller-supplied one reaching a route would let anyone
-   * replace the rules — including the refusal this exists to work around.
-   */
+
   systemPrompt?: string;
-  /**
-   * Models this call must not use, by id.
-   *
-   * For a caller that knows something the model list cannot express — a route
-   * on a request path excluding a provider that is currently unhealthy, or a
-   * reasoning model whose thinking time is longer than the caller can wait.
-   * The chain is filtered, not reordered, so what remains still falls back
-   * normally among itself.
-   */
+
   exclude?: string[];
   /**
    * Cap on the whole call, in milliseconds.
@@ -275,62 +174,14 @@ export type AskOptions = {
    * someone is watching wants a much shorter one than a background job does.
    */
   budgetMs?: number;
-  /**
-   * Cap on a single model attempt, in milliseconds.
-   *
-   * Separate from `budgetMs` because they bound different things: the budget is
-   * how long the *person* waits, this is how long one hung provider may hold
-   * that budget hostage. A route with a tight budget needs a tighter attempt
-   * ceiling to fit more than one try inside it — at the default 35s, a 70s
-   * budget buys two attempts only if both fail at exactly the timeout.
-   */
+
   attemptMs?: number;
-  /**
-   * Gives up when this fires, wherever the call has got to.
-   *
-   * For a caller whose reason to stop is outside the timeouts — on a request
-   * path, the person closing the tab or pressing stop. Without it the model
-   * call runs to completion and is charged for, into a socket nobody is
-   * reading: the timeouts protect us from a hung provider, not from an answer
-   * no one is waiting for any more.
-   *
-   * Composed with each attempt's own timeout rather than replacing it. Both
-   * still apply — whichever fires first ends the attempt.
-   */
+
   signal?: AbortSignal;
-  /**
-   * Accept the model's raw text instead of requiring Orbit's answer envelope.
-   *
-   * For callers that asked for their own JSON shape. The envelope exists for
-   * the chat panel, where an answer is prose plus follow-up questions; a route
-   * that told the model to return a plan object gets exactly that, and
-   * `sanitiseModelAnswer` then rejects it for having no `reply` key — a model
-   * that followed the instruction perfectly is scored as having failed.
-   *
-   * The older models hid this by wrapping their object in `{"reply": "{...}"}`,
-   * which is double-encoded JSON and the thing `parsePlan` spends most of its
-   * length undoing. Llama returns the object directly, which is what was asked
-   * for, so this flag stops punishing it for that.
-   *
-   * `suggestions` is always empty here: nothing produced them, and inventing
-   * them from the raw text would put fragments of a JSON document into the
-   * follow-up buttons.
-   */
   rawOutput?: boolean;
 };
 
-/**
- * Ask Orbit a question, with the conversation so far for context.
- *
- * With a host, this is the whole transaction: entitlement, quota check, model
- * call, and the spend on success. Keeping the spend here rather than in the
- * caller is what guarantees the two rules that matter — a question is never
- * charged unless it was answered, and it is never answered without quota — hold
- * for every embedder rather than being re-implemented correctly in each one.
- *
- * The entitlement's tier decides which models may answer, both the chosen one
- * and every fallback, so a tier boundary cannot be crossed by a rate limit.
- */
+
 export async function askOrbit(
   question: string,
   options: AskOptions = {},
@@ -384,13 +235,7 @@ export async function askOrbit(
     entitlement ? -entitlement.maxHistoryTurns : undefined,
   );
 
-  // Only entitlements with data access get the tenant's figures appended;
-  // everyone else gets the base prompt, whose "you cannot read their data" rule
-  // then holds. A failure here degrades to the base prompt rather than failing
-  // the question: an answer without the numbers still beats an error.
-  // Only the sections this question needs, rather than the whole reference.
-  // The rules block in front of them is byte-identical every time, which is
-  // what the providers' prompt caches key on.
+
   const knowledge = relevantKnowledge(question);
   if (process.env.ORBIT_DEBUG_PROMPT) {
     console.log(
@@ -402,16 +247,9 @@ export async function askOrbit(
   const pages = docIndex();
 
   let prompt = options.systemPrompt ?? orbitPromptFor(knowledge, pages);
-  // Set only when this question actually pulled the digest in below, and
-  // carried through onto the returned answer so the panel can render it as a
-  // table alongside the prose.
+
   let dataDigest: unknown;
-  // Only the assistant's own prompt takes the tenant's figures. A caller that
-  // brought its own instructions also brought its own data in the question.
-  //
-  // The digest is fetched only when the question is actually about their
-  // numbers: "how do I install the tracker" was paying to build and send a
-  // stats-and-competitor summary it could not use, on the most expensive tier.
+
   if (
     !options.systemPrompt &&
     entitlement?.dataAccess &&
@@ -444,31 +282,12 @@ export async function askOrbit(
 
   for (const model of chain) {
     const elapsed = Date.now() - startedAt;
-    // Stop only when the budget is genuinely spent, rather than when a full
-    // timeout would no longer fit inside it.
-    //
-    // The old guard broke the loop at `TOTAL - TIMEOUT`, which is 40s of a 75s
-    // budget — so after one slow model the rest of the chain was skipped
-    // entirely and the caller was told nothing could answer, while several
-    // models were up and would have answered in a second. Most failures here
-    // are fast (a 429 or a 503 comes back immediately); it is only a hang that
-    // costs a full timeout, and refusing to try because of that possibility is
-    // what turned one overloaded provider into a total outage.
-    //
-    // The floor below is not a return to that: it reserves a few seconds, not
-    // a full timeout, so the loop stops starting an attempt that provably
-    // cannot finish — at 69s of a 70s budget the old check still began a call
-    // and let it run past the ceiling the budget exists to enforce.
+
     if (elapsed > budgetMs - MIN_ATTEMPT_MS) {
       console.error("[orbit] out of time budget; giving up on the chain");
       break;
     }
 
-    // Nobody is waiting for this any more. Checked before each attempt as well
-    // as inside the call, because the chain's whole purpose is to try the next
-    // model when one fails — and an abort makes every remaining attempt fail
-    // instantly, which would walk the entire chain for an answer with no
-    // reader.
     if (signal?.aborted) return ABANDONED;
 
     // Whatever is left, so a late attempt still runs rather than being skipped.
@@ -530,13 +349,6 @@ export async function askOrbit(
       };
 }
 
-/**
- * The image path. Same quota contract as `askOrbit` — checked before the
- * call, spent only on success — but nothing else about the text path
- * applies: no product reference, no retrieval, no fallback chain (there is
- * one vision model), and no structured `{reply, suggestions}` envelope,
- * since this endpoint does not support `response_format`.
- */
 async function askOrbitVision(
   question: string,
   image: string,
@@ -558,6 +370,22 @@ async function askOrbitVision(
 
   const comma = image.indexOf(",");
   const base64 = comma === -1 ? image : image.slice(comma + 1);
+ 
+  const VISION_HISTORY_TURNS = 4;
+  const VISION_TURN_CHARS = 200;
+  const historyTurns = (options.history ?? []).slice(-VISION_HISTORY_TURNS);
+  let prompt = question || "Describe what's in this image.";
+  if (historyTurns.length > 0) {
+    const transcript = historyTurns
+      .map((t) => {
+        const text = t.content.length > VISION_TURN_CHARS
+          ? t.content.slice(0, VISION_TURN_CHARS) + "…"
+          : t.content;
+        return `${t.role}: ${text}`;
+      })
+      .join("\n");
+    prompt = `Earlier in this conversation:\n${transcript}\n\nQuestion about the image: ${prompt}`;
+  }
 
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), Math.min(TIMEOUT_MS, budgetMs));
@@ -570,7 +398,7 @@ async function askOrbitVision(
     raw = await cloudflareVisionChat({
       model: VISION_MODEL,
       image: base64,
-      prompt: question || "Describe what's in this image.",
+      prompt,
       maxTokens: VISION_MAX_TOKENS,
       signal: abort.signal,
     });
@@ -610,11 +438,7 @@ async function askOrbitVision(
   };
 }
 
-/**
- * The image-generation path. Same quota contract as the other two, one call,
- * no fallback — the reply here isn't prose at all, it's the picture itself,
- * carried on `imageBase64` with `reply` left as a short caption.
- */
+
 async function askOrbitGenerateImage(
   question: string,
   options: AskOptions,
@@ -693,12 +517,6 @@ type CallResult =
   | { ok: true; text: string }
   | { ok: false; status: number; detail: string };
 
-/**
- * Dispatch to whichever provider owns this model.
- *
- * OpenRouter and NVIDIA both speak the OpenAI chat-completions shape, so they
- * share one caller and differ only in host, key and headers.
- */
 function callModel(
   model: OrbitModel,
   question: string,
@@ -735,8 +553,7 @@ function openAiEndpoint(provider: OrbitModel["provider"]) {
     url: "https://openrouter.ai/api/v1/chat/completions",
     key: process.env.OPENROUTER_API_KEY,
     keyName: "OPENROUTER_API_KEY",
-    // OpenRouter attributes usage to these, and they are what appear on the
-    // dashboard when working out which app spent a quota.
+
     headers: {
       "HTTP-Referer": process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in",
       "X-Title": "Quantalog Orbit",
@@ -744,13 +561,7 @@ function openAiEndpoint(provider: OrbitModel["provider"]) {
   };
 }
 
-/**
- * A fetch that cannot hang.
- *
- * Without an explicit abort, a stalled upstream holds the socket until the
- * platform's own timeout — and with a fallback chain behind it, that is the
- * difference between a slow answer and no answer at all.
- */
+
 async function post(
   url: string,
   headers: Record<string, string>,
@@ -846,16 +657,9 @@ async function callGemini(
     };
     const candidate = data.candidates?.[0];
     const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("").trim();
-    // An empty candidate usually means the safety filter caught something, or
-    // the answer was cut off before any text was produced. Either way the next
-    // model in the chain should get a turn.
+
     if (!text) return { ok: false, status: 502, detail: "empty candidate" };
 
-    // Hitting the token ceiling mid-generation leaves a JSON envelope with no
-    // closing quote or brace. It cannot be parsed, so the sanitiser has nothing
-    // to unwrap and falls back to rendering the raw source — the user reads
-    // `{"reply":"To install…` in the chat. Treat it as a failed call so the
-    // chain tries another model rather than showing the wreckage.
     if (candidate?.finishReason === "MAX_TOKENS") {
       return { ok: false, status: 502, detail: "truncated at max tokens" };
     }
@@ -866,13 +670,7 @@ async function callGemini(
   }
 }
 
-/**
- * Cloudflare Workers AI, through the client in `infra/http-client`.
- *
- * The system prompt is sent as an ordinary first message: this endpoint has no
- * system field of its own, and no cache markers either, so the prompt goes
- * whole rather than split the way the OpenRouter path splits it.
- */
+
 async function callCloudflare(
   model: OrbitModel,
   question: string,
@@ -929,17 +727,9 @@ async function callOpenAiCompatible(
         { role: "user", content: question },
       ],
       temperature: 0.3,
-      // A reasoning model spends this budget on thinking before it writes
-      // anything, so the answer's own allowance is whatever is left. At the
-      // shared limit these run out mid-thought and return an empty completion,
-      // which costs the model its turn for no reason — Nemotron did it on
-      // every call, and GPT-OSS does it on any prompt long enough to reason
-      // about. Flagged per model rather than per provider: it is a property of
-      // the model, and the provider is the wrong thing to key it on.
+
       max_tokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
-      // Only sent to models that honour it. Some providers reject a request
-      // carrying a schema they cannot satisfy, which would cost us the model
-      // entirely rather than just its formatting.
+
       ...(model.structured
         ? {
             response_format: {
