@@ -7,6 +7,8 @@ import {
   orbitConfigured,
   providerReady,
   tierAllows,
+  extractDocumentText,
+  SUPPORTED_DOCUMENT_MIME,
   type OrbitTurn,
 } from "../../modules/orbit/index.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
@@ -39,13 +41,10 @@ const MAX_TURN_CHARS = 4000;
  * the base64 overhead and the rest of the JSON envelope. */
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
+const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
-/**
- * Models a plan tier alone does not gate — restricted to the platform's own
- * super admins instead, checked here rather than in the `orbit` package
- * itself, which is written to know nothing about roles or embedders (see the
- * doc comment on `OrbitHost` in modules/orbit/types.ts).
- */
+
+
 const SUPER_ADMIN_ONLY_MODELS = new Set(["claude"]);
 
 async function isSuperAdmin(req: AuthedRequest): Promise<boolean> {
@@ -56,15 +55,7 @@ async function isSuperAdmin(req: AuthedRequest): Promise<boolean> {
 
 const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
 
-/** Cloudinary overlay transformation stamping the Orbit mark bottom-right,
- * sized relative to the source image.
- *
- * A layer name with folders in it needs its `/` swapped for `:` — Cloudinary
- * reads the bare slash as the end of the transformation segment, which broke
- * the whole upload (not just the watermark) rather than merely skipping it.
- *
- * Exported so other routes that upload an Orbit-drawn image (the post planner,
- * for one) stamp it the same way instead of repeating this string. */
+
 export function watermarkTransformation(): string | undefined {
   if (!WATERMARK_PUBLIC_ID) return undefined;
   const layer = WATERMARK_PUBLIC_ID.replace(/\//g, ":");
@@ -91,13 +82,7 @@ function rateLimited(key: string, limit: number): boolean {
   return recent.length > limit;
 }
 
-/**
- * Take only what we recognise from the client's history.
- *
- * The transcript is supplied by the browser, so it is user input like anything
- * else: every turn is length-capped and anything with an unknown role is
- * dropped rather than passed through to the model.
- */
+
 function readHistory(raw: unknown, maxTurns: number): OrbitTurn[] {
   if (!Array.isArray(raw)) return [];
 
@@ -114,18 +99,11 @@ function readHistory(raw: unknown, maxTurns: number): OrbitTurn[] {
       role: t.role as "user" | "assistant",
       content: t.content.slice(0, MAX_TURN_CHARS),
     }))
-    // Keep the most recent turns: the end of a conversation is what the next
-    // question refers to. How many is a plan field, because history is the
-    // largest part of what a question costs — every past turn is re-sent with
-    // the next one.
+
     .slice(-maxTurns);
 }
 
-/**
- * Questions left this cycle: the plan's own remainder plus any purchased
- * credits, which is the number that decides whether the next question is
- * answered.
- */
+
 async function remainingQuestions(workspaceId: string, plan: OrbitPlanEntry) {
   const summary = await quotaSummary(workspaceId);
   if (!summary) return null;
@@ -133,18 +111,7 @@ async function remainingQuestions(workspaceId: string, plan: OrbitPlanEntry) {
   return Math.max(0, plan.monthlyQuota - used) + addonCredits;
 }
 
-/**
- * The models this workspace's Orbit plan may pick, and what it has left.
- *
- * Models above the plan's tier are returned `locked`, not omitted. Hiding them
- * would make the picker honest and the upgrade invisible; showing them greyed,
- * with the tier that unlocks them, is what tells someone on Orbit Free that
- * Gemini Flash exists and what it costs. Models whose provider has no key are
- * still dropped entirely — that is a deployment fact, not a plan boundary, and
- * offering one would only fail.
- *
- * The upstream model name and provider stay server-side.
- */
+
 router.get("/status", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res);
   if (!ws) return;
@@ -193,11 +160,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
 
   let question = String(req.body?.question ?? "").trim().slice(0, plan.maxQuestionChars);
 
-  // An attachment, validated and uploaded before the model is asked anything
-  // — a bad or oversized image should fail fast rather than after a paid
-  // model call. Cloudinary is used for storage only, not for the call
-  // itself: Cloudflare reads the original bytes directly, no round trip
-  // through a hosted URL needed.
+
   const rawImage = typeof req.body?.image === "string" ? req.body.image : undefined;
   let imageUrl: string | undefined;
 
@@ -226,18 +189,49 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     if (!question) question = "What's in this image?";
   }
 
-  // Explicit rather than inferred from the question's wording — the same
-  // reasoning as the composer's own toggle: a model guessing "draw a plan
-  // for my week" is a picture request would be wrong far more often than it
-  // would be a helpful shortcut. Meaningless alongside an attached image —
-  // reading and drawing are mutually exclusive — so the toggle is ignored
-  // rather than erroring, the same tolerance an unrecognised `model` gets.
+  // A document, read and discarded rather than stored — unlike an image it
+  // has no reason to persist anywhere once its text has reached the model.
+  const rawDocument = req.body?.document as
+    | { name?: unknown; mime?: unknown; data?: unknown }
+    | undefined;
+  let documentText: string | undefined;
+  let documentName: string | undefined;
+
+  if (rawDocument && typeof rawDocument.data === "string") {
+    const mime = typeof rawDocument.mime === "string" ? rawDocument.mime.toLowerCase() : "";
+    documentName =
+      typeof rawDocument.name === "string" && rawDocument.name.trim()
+        ? rawDocument.name.trim().slice(0, 200)
+        : "attachment";
+
+    if (!SUPPORTED_DOCUMENT_MIME.has(mime)) {
+      return res.status(400).json({ error: "That file type isn't supported — PDF, DOCX, CSV or plain text." });
+    }
+
+    const comma = rawDocument.data.indexOf(",");
+    const b64 = comma === -1 ? rawDocument.data : rawDocument.data.slice(comma + 1);
+    const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+    const bytes = Math.floor((b64.length * 3) / 4) - padding;
+
+    if (bytes <= 0) return res.status(400).json({ error: "That file is empty." });
+    if (bytes > MAX_DOCUMENT_BYTES) {
+      return res.status(400).json({
+        error: `That file must be ${Math.round(MAX_DOCUMENT_BYTES / (1024 * 1024))}MB or smaller.`,
+      });
+    }
+
+    const buffer = Buffer.from(b64, "base64");
+    const extracted = await extractDocumentText(buffer, mime);
+    if (!extracted.ok) return res.status(400).json({ error: extracted.error });
+    documentText = extracted.text;
+
+    if (!question) question = `What's in ${documentName}?`;
+  }
+
+ 
   const generateImage = Boolean(req.body?.generateImage) && !rawImage;
 
-  // Gated on the Orbit plan's own flag, not the question quota below — a
-  // Starter workspace with questions left still can't draw, so the browser
-  // needs a clear "upgrade" answer rather than a quota error that implies
-  // waiting for the next cycle would fix it.
+ 
   if (generateImage && !plan.imageGeneration) {
     return planLimit(res, "Drawing pictures is part of Orbit Pro.", {
       kind: "orbit_image_generation",
@@ -297,6 +291,8 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       exclude,
       image: rawImage,
       generateImage,
+      documentText,
+      documentName,
       host: quantalogOrbitHost,
       tenantId: ws.id,
       signal: hungUp.signal,

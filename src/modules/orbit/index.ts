@@ -42,3 +42,5 @@ export {
 export type { PageContext } from "./prompt-public.js";
 export { docIndex, relevantKnowledge, selectedHeadings } from "./retrieval.js";
 export { sanitiseModelAnswer } from "./output.js";
+export { extractDocumentText, SUPPORTED_DOCUMENT_MIME } from "./document.js";
+export type { ExtractedDocument } from "./document.js";
