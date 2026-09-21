@@ -1,7 +1,7 @@
  
 
 export { askOrbit, orbitConfigured } from "./ask.js";
-export type { AskOptions, OrbitAnswer, OrbitResult, OrbitTurn } from "./ask.js";
+export type { AskOptions, OrbitAnswer, OrbitCitation, OrbitResult, OrbitTurn } from "./ask.js";
 
 export {
   ORBIT_MODELS,
