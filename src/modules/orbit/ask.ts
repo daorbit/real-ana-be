@@ -124,6 +124,9 @@ export type OrbitAnswer = {
   modelLabel: string;
   imageBase64?: string;
   dataDigest?: unknown;
+  /** Pages a web search drew on, when the model used one. Only Claude's own
+   * search tool populates this today — see callAnthropic. */
+  citations?: OrbitCitation[];
 };
 
 export type OrbitResult =
@@ -306,7 +309,14 @@ export async function askOrbit(
             console.error("[orbit] quota spend failed:", (e as Error).message);
           }
         }
-        return { ok: true, ...parsed, model: model.id, modelLabel: model.label, dataDigest };
+        return {
+          ok: true,
+          ...parsed,
+          model: model.id,
+          modelLabel: model.label,
+          dataDigest,
+          citations: raw.citations,
+        };
       }
       // A 200 whose body could not be read as an answer. Logged, or a model
       // that always answers unusably looks identical to one that is down.
@@ -494,8 +504,11 @@ async function askOrbitGenerateImage(
   };
 }
 
+/** One page a web-search-backed answer drew on, for the client to link. */
+export type OrbitCitation = { url: string; title: string };
+
 type CallResult =
-  | { ok: true; text: string }
+  | { ok: true; text: string; citations?: OrbitCitation[] }
   | { ok: false; status: number; detail: string };
 
 function callModel(
@@ -691,6 +704,7 @@ async function callCloudflare(
 function anthropicBaseUrl(): string {
   return (process.env.CLAUDE_API_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
 }
+const MAX_WEB_SEARCHES = 3;
 
 async function callAnthropic(
   model: OrbitModel,
@@ -715,6 +729,8 @@ async function callAnthropic(
       ],
       temperature: 0.3,
       max_tokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
+
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
     },
     timeoutMs,
     signal,
@@ -724,20 +740,32 @@ async function callAnthropic(
 
   try {
     const data = JSON.parse(res.text) as {
-      content?: { type?: string; text?: string }[];
+      content?: {
+        type?: string;
+        text?: string;
+        citations?: { url?: string; title?: string }[];
+      }[];
       error?: { message?: string };
       stop_reason?: string;
     };
 
     if (data.error) return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
 
-    const text = data.content
-      ?.filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("")
-      .trim();
+    const textBlocks = data.content?.filter((b) => b.type === "text") ?? [];
+    const text = textBlocks.map((b) => b.text ?? "").join("").trim();
 
-    return text ? { ok: true, text } : { ok: false, status: 502, detail: "empty completion" };
+    const seen = new Set<string>();
+    const citations: OrbitCitation[] = [];
+    for (const block of textBlocks) {
+      for (const c of block.citations ?? []) {
+        if (!c.url || seen.has(c.url)) continue;
+        seen.add(c.url);
+        citations.push({ url: c.url, title: c.title?.trim() || c.url });
+      }
+    }
+
+    if (!text) return { ok: false, status: 502, detail: "empty completion" };
+    return citations.length ? { ok: true, text, citations } : { ok: true, text };
   } catch {
     return { ok: false, status: 502, detail: "unparseable envelope" };
   }

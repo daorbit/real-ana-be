@@ -392,6 +392,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       latencyMs: Date.now() - startedAt,
       imageUrl: generatedImageUrl,
       dataDigest: result.dataDigest,
+      citations: result.citations,
     },
   });
 
@@ -412,6 +413,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     // answer arguing with its own evidence. The panel captions it with the date
     // it was taken instead.
     dataDigest: result.dataDigest,
+    citations: result.citations,
     /** The thread this landed in. Null when it could not be stored. */
     conversationId: savedId,
     // Sent back so the panel can count down without a second round trip. Read

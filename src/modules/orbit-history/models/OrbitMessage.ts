@@ -18,6 +18,10 @@ const orbitMessageSchema = new Schema(
     imageUrl: { type: String, trim: true, default: "" },
     suggestions: { type: [String], default: [] },
     dataDigest: { type: Schema.Types.Mixed, default: undefined },
+    citations: {
+      type: [{ url: String, title: String, _id: false }],
+      default: undefined,
+    },
     failed: { type: Boolean, default: false },
     model: { type: String, trim: true, maxlength: 120, default: "" },
     modelLabel: { type: String, trim: true, maxlength: 120, default: "" },
