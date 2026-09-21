@@ -534,14 +534,43 @@ async function askOrbitGenerateImage(
     }
   }
 
+  const described = await describeGeneratedImage(raw.image, signal);
+
   return {
     ok: true,
-    reply: `Here's what I drew: ${prompt}`,
+    reply: `Here's what I drew: ${described ?? prompt}`,
     suggestions: [],
     model: "flux-schnell",
     modelLabel: "FLUX",
     imageBase64: raw.image,
   };
+}
+
+const DESCRIBE_TIMEOUT_MS = 15_000;
+
+async function describeGeneratedImage(
+  base64: string,
+  callerSignal?: AbortSignal,
+): Promise<string | null> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), DESCRIBE_TIMEOUT_MS);
+  const relay = () => abort.abort();
+  callerSignal?.addEventListener("abort", relay);
+  if (callerSignal?.aborted) abort.abort();
+
+  try {
+    const result = await cloudflareVisionChat({
+      model: VISION_MODEL,
+      image: base64,
+      prompt: "Describe this image in one or two sentences, naming its colours, composition and subject specifically enough that someone who has not seen it could picture it and recognise it later.",
+      maxTokens: 200,
+      signal: abort.signal,
+    });
+    return result.ok ? result.text.trim() || null : null;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", relay);
+  }
 }
 
 export type OrbitCitation = { url: string; title: string };

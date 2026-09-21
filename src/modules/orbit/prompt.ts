@@ -182,8 +182,21 @@ export function orbitRulesPrompt(docIndex: string): string {
 }
 
 
+function todayLine(): string {
+  const today = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  return `Today's date is ${today} (UTC).`;
+}
+
 export function orbitPromptFor(knowledge: string, docIndex: string): string {
   return `${orbitRulesPrompt(docIndex)}
+
+${todayLine()}
 
 Product reference:
 
