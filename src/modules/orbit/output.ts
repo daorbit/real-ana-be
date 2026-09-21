@@ -132,23 +132,7 @@ export function unwrapNested(
   return unwrapNested(parsed[key], key, depth - 1);
 }
 
-/**
- * Recover the reply from an envelope that was cut off mid-generation.
- *
- * A model that hits its token ceiling while writing `{"reply": "…"}` leaves a
- * string with no closing quote and no brace. Nothing can parse it, so every
- * path above falls through to treating it as prose — and the user reads
- * `{"reply":"To install Quantalog…` verbatim in the chat window.
- *
- * The answer itself is sitting right there, just missing its terminator, so
- * this lifts the value of the first `reply` key and unescapes it by hand. The
- * text was written for the user; only its wrapper failed.
- *
- * Deliberately narrow: the string must *open* with the envelope, which is what
- * separates a broken wrapper from an answer that merely quotes JSON. A complete
- * envelope never reaches here — `parseLooseJson` handles those — so matching
- * only unterminated input costs nothing in the normal case.
- */
+
 export function salvageTruncatedEnvelope(text: string): string | null {
   const trimmed = stripCodeFence(text);
   if (!trimmed.startsWith("{")) return null;
@@ -188,21 +172,7 @@ export function salvageTruncatedEnvelope(text: string): string | null {
   return salvaged.length >= 20 ? salvaged : null;
 }
 
-/**
- * Tidy a string that is going to be rendered as prose.
- *
- * Deliberately minimal. This is someone's answer, and a cleanup routine that
- * rewrites wording is worse than the untidiness it fixes — so it only removes
- * artefacts of the transport: stray fences, zero-width characters that break
- * text selection, and runs of blank lines from a model padding its output.
- *
- * Note what is *not* done here: turning a literal backslash-n into a newline.
- * That looks like an obvious tidy-up and is a bug. Inside a JSON string, `\n`
- * is a valid escape that `JSON.parse` already resolves — so unescaping here
- * would corrupt the envelope before it could be parsed, and would also mangle
- * any answer that legitimately contains the characters, such as a code sample
- * showing an escape sequence.
- */
+
 export function tidyProse(text: string): string {
   return (
     stripCodeFence(text)
@@ -236,14 +206,6 @@ export type SanitiseOptions = {
   maxReplyChars?: number;
 };
 
-/**
- * Turn whatever a model returned into an answer worth rendering.
- *
- * Handles, in order: a fenced or bare JSON envelope, a `reply` that is itself
- * more JSON, and plain prose from a model that ignored the shape. Returns null
- * only when there is no usable text at all — which is the caller's signal to
- * try a different model rather than to show an error.
- */
 export function sanitiseModelAnswer(
   raw: string,
   options: SanitiseOptions = {},
@@ -251,12 +213,7 @@ export function sanitiseModelAnswer(
   const {
     maxSuggestionChars = 80,
     maxSuggestions = 3,
-    // A backstop against a runaway generation, not a target length — the
-    // prompt now allows a thorough general answer to run to several
-    // paragraphs with headings and lists, and this only exists to catch a
-    // model that never stops rather than to clip a real one short. Sized
-    // above MAX_TOKENS's own output ceiling in ask.ts so that cap, not this
-    // one, is what actually ends a normal answer.
+
     maxReplyChars = 12000,
   } = options;
 
@@ -269,15 +226,7 @@ export function sanitiseModelAnswer(
     return fromEnvelope(parsed, limits);
   }
 
-  // Not an envelope on its own. Before treating it as prose, check whether the
-  // model wrote the answer twice — once as prose and once as a fenced object
-  // underneath it. That block is the model restating itself, and it carries the
-  // suggestions the prose copy dropped, so it is the better source.
-  // A response that is an envelope but could not be parsed is almost always one
-  // that ran out of tokens while writing it. Recovering the reply beats
-  // rendering the JSON source, and beats discarding an answer we already paid
-  // for. Suggestions are lost with the tail, so the trailing-question split is
-  // the only chance of recovering any.
+
   const salvaged = salvageTruncatedEnvelope(raw);
   if (salvaged) return asProse(salvaged, limits);
 
@@ -296,13 +245,7 @@ export function sanitiseModelAnswer(
 
 type Limits = Required<SanitiseOptions>;
 
-/**
- * Read the agreed shape out of a parsed envelope.
- *
- * Split out because the envelope can arrive two ways — as the whole response, or
- * as a block appended to a prose answer — and both need identical treatment of
- * double-encoding, limits and misplaced follow-ups.
- */
+
 function fromEnvelope(
   envelope: Record<string, unknown>,
   { maxSuggestionChars, maxSuggestions, maxReplyChars }: Limits,
@@ -314,8 +257,7 @@ function fromEnvelope(
 
   if (!rawReply) return null;
 
-  // Suggestions can be nested the same way the reply was, so they are read from
-  // whichever envelope actually carried the text.
+
   const source = findSuggestions(envelope) ?? [];
   const suggestions = source
     .filter((s): s is string => typeof s === "string")
@@ -323,9 +265,6 @@ function fromEnvelope(
     .filter((s) => s.length > 0 && s.length <= maxSuggestionChars)
     .slice(0, maxSuggestions);
 
-  // A model that filled the envelope correctly is trusted as-is. One that left
-  // `suggestions` empty usually wrote them at the end of the reply instead,
-  // where they read as the answer trailing off into orphan questions.
   if (suggestions.length > 0) return { reply: rawReply, suggestions };
 
   const split = splitTrailingQuestions(rawReply);
@@ -354,31 +293,11 @@ function asProse(
   };
 }
 
-/**
- * Pull follow-up questions out of the end of a reply.
- *
- * A model that ignored the envelope often still produces the follow-ups — it
- * just appends them to the prose instead of putting them in `suggestions`. The
- * result is a reply that trails off into two orphan questions and an empty
- * suggestions array, so the chips never render and the answer looks like it ran
- * on past its ending.
- *
- * Only trailing lines are considered, and only ones that read as a whole
- * question on their own line. A question *inside* the answer — "What does that
- * mean? It means…" — is part of the explanation and is left alone.
- *
- * Returns the trimmed reply and whatever was lifted off the end.
- */
+
 function splitTrailingQuestions(reply: string): { reply: string; questions: string[] } {
-  // The explicit form first: a model that wrote its own "Suggestions" heading
-  // and listed them under it. Everything from the heading down is not part of
-  // the answer, whatever shape the items take.
-  // The optional trailing "questions" matters: models write "Follow-up
-  // questions" at least as often as "Follow-ups", and missing it sends the
-  // whole block down the line-walker, which only strips the last few lines and
-  // leaves the heading stranded at the end of the answer.
+
   const headed =
-    /\n\s*(?:\*\*|##+\s*)?(?:suggestions?|follow[- ]?ups?(?:\s+questions?)?|related questions?|next steps?)(?:\*\*)?\s*:?\s*\n([\s\S]+)$/i.exec(
+    /\n[ \t]*(?:\*\*|##+[ \t]*)?[A-Za-z ]{0,40}?(?:suggestions?|follow[- ]?ups?|related questions?|next steps?)[^\n:]{0,40}?:(?:\*\*)?[ \t]*\n([\s\S]+)$/i.exec(
       reply,
     );
 
