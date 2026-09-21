@@ -536,6 +536,9 @@ function callModel(
   if (model.provider === "cloudflare") {
     return callCloudflare(model, question, history, prompt, timeout, signal);
   }
+  if (model.provider === "anthropic") {
+    return callAnthropic(model, question, history, prompt, timeout, signal);
+  }
   return callOpenAiCompatible(model, question, history, prompt, timeout, signal);
 }
 
@@ -700,6 +703,62 @@ async function callCloudflare(
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", relay);
+  }
+}
+
+/** Defaults to Anthropic's own API; overridable for a compatible proxy. */
+function anthropicBaseUrl(): string {
+  return (process.env.CLAUDE_API_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
+}
+
+async function callAnthropic(
+  model: OrbitModel,
+  question: string,
+  history: OrbitTurn[],
+  prompt: string,
+  timeoutMs: number = TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<CallResult> {
+  const key = process.env.CLAUDE_API_KEY;
+  if (!key) return { ok: false, status: 503, detail: "no CLAUDE_API_KEY" };
+
+  const res = await post(
+    `${anthropicBaseUrl()}/v1/messages`,
+    { "x-api-key": key, "anthropic-version": "2023-06-01" },
+    {
+      model: model.model,
+      system: prompt,
+      messages: [
+        ...history.map((t) => ({ role: t.role, content: t.content })),
+        { role: "user", content: question },
+      ],
+      temperature: 0.3,
+      max_tokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
+    },
+    timeoutMs,
+    signal,
+  );
+
+  if (!res.ok) return res;
+
+  try {
+    const data = JSON.parse(res.text) as {
+      content?: { type?: string; text?: string }[];
+      error?: { message?: string };
+      stop_reason?: string;
+    };
+
+    if (data.error) return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
+
+    const text = data.content
+      ?.filter((b) => b.type === "text")
+      .map((b) => b.text ?? "")
+      .join("")
+      .trim();
+
+    return text ? { ok: true, text } : { ok: false, status: 502, detail: "empty completion" };
+  } catch {
+    return { ok: false, status: 502, detail: "unparseable envelope" };
   }
 }
 

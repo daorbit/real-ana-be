@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
+import { User } from "../../modules/identity/models/User.js";
 import {
   ORBIT_MODELS,
   askOrbit,
@@ -38,6 +39,20 @@ const MAX_TURN_CHARS = 4000;
  * the base64 overhead and the rest of the JSON envelope. */
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 
+
+/**
+ * Models a plan tier alone does not gate — restricted to the platform's own
+ * super admins instead, checked here rather than in the `orbit` package
+ * itself, which is written to know nothing about roles or embedders (see the
+ * doc comment on `OrbitHost` in modules/orbit/types.ts).
+ */
+const SUPER_ADMIN_ONLY_MODELS = new Set(["claude"]);
+
+async function isSuperAdmin(req: AuthedRequest): Promise<boolean> {
+  if (req.impersonatorId) return false;
+  const user = await User.findById(req.userId).select("role");
+  return user?.role === "super_admin";
+}
 
 const WATERMARK_PUBLIC_ID = process.env.ORBIT_WATERMARK_PUBLIC_ID?.trim();
 
@@ -135,6 +150,7 @@ router.get("/status", async (req: AuthedRequest, res: Response) => {
   if (!ws) return;
 
   const plan = await effectiveOrbitPlan(ws.id);
+  const superAdmin = await isSuperAdmin(req);
 
   res.json({
     configured: orbitConfigured(),
@@ -146,14 +162,16 @@ router.get("/status", async (req: AuthedRequest, res: Response) => {
       maxQuestionChars: plan.maxQuestionChars,
       imageGeneration: plan.imageGeneration,
     },
-    models: ORBIT_MODELS.filter((m) => providerReady(m.provider)).map((m) => ({
-      id: m.id,
-      label: m.label,
-      hint: m.hint,
-      locked: !tierAllows(plan.modelTier, m.tier),
-      /** The tier that unlocks it, so the UI can name the upgrade. */
-      tier: m.tier,
-    })),
+    models: ORBIT_MODELS.filter((m) => providerReady(m.provider))
+      .filter((m) => superAdmin || !SUPER_ADMIN_ONLY_MODELS.has(m.id))
+      .map((m) => ({
+        id: m.id,
+        label: m.label,
+        hint: m.hint,
+        locked: !tierAllows(plan.modelTier, m.tier),
+        /** The tier that unlocks it, so the UI can name the upgrade. */
+        tier: m.tier,
+      })),
   });
 });
 
@@ -237,6 +255,12 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
   // browser that may have been open since before a model was retired.
   const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
 
+  // `/status` already hides these from anyone who isn't a super admin, but a
+  // request can name a model id directly without going through that list —
+  // barring them here as well is what actually enforces it.
+  const superAdmin = await isSuperAdmin(req);
+  const exclude = superAdmin ? [] : [...SUPER_ADMIN_ONLY_MODELS];
+
   // The thread this question continues, when the browser is carrying on a
   // saved one. Validated against the workspace inside the history module — an
   // id from a stale tab starts a new thread rather than failing the question.
@@ -270,6 +294,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       // read, so passing them here is harmless but unused.
       history: readHistory(req.body?.history, plan.maxHistoryTurns),
       modelId,
+      exclude,
       image: rawImage,
       generateImage,
       host: quantalogOrbitHost,

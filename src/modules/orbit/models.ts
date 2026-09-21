@@ -1,7 +1,7 @@
  
 import { type OrbitTier } from "./types.js";
 
-export type ModelProvider = "gemini" | "openrouter" | "nvidia" | "cloudflare";
+export type ModelProvider = "gemini" | "openrouter" | "nvidia" | "cloudflare" | "anthropic";
 
 export type OrbitModel = {
   id: string;
@@ -67,6 +67,15 @@ export const ORBIT_MODELS: OrbitModel[] = [
     structured: false,
     tier: "basic",
   },
+  {
+    id: "claude",
+    label: "Claude",
+    hint: "Anthropic's model. Super admin only.",
+    provider: "anthropic",
+    model: process.env.CLAUDE_MODEL || "claude-sonnet-5",
+    structured: false,
+    tier: "advanced",
+  },
   // {
   //   id: "deepseek",
   //   label: "DeepSeek V4",
@@ -115,6 +124,8 @@ export function providerReady(provider: ModelProvider): boolean {
       return Boolean(process.env.NVIDIA_API_KEY);
     case "cloudflare":
       return Boolean(process.env.CLOUDFLARE_API_TOKEN && process.env.CLOUDFLARE_ACCOUNT_ID);
+    case "anthropic":
+      return Boolean(process.env.CLAUDE_API_KEY);
     default:
       return Boolean(process.env.OPENROUTER_API_KEY);
   }
