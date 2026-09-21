@@ -46,17 +46,12 @@ const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 const IMAGE_STEPS = 4;
 
 
-/**
- * Words that only mean something on top of an actual metric — "my traffic" is
- * a data question, but "my email address" or "update my password" is not, so
- * a bare pronoun can never trigger the digest on its own.
- */
-const POSSESSIVE_MARKERS = ["my", "our", "mine", "we", "us"];
-
-/** Words that mean the question is about the tenant's own figures on their
- * own, no pronoun needed. */
-const TOPIC_MARKERS = [
+const AMBIGUOUS_MARKERS = [
+  "my", "our", "mine", "we", "us",
   "yesterday", "today", "this week", "last week", "this month", "last month",
+];
+
+const TOPIC_MARKERS = [
   "traffic", "visitors", "pageviews", "sessions", "bounce rate",
   "how many visitors", "how many pageviews", "how much traffic",
   "top pages", "top referrers", "top countries",
@@ -64,9 +59,6 @@ const TOPIC_MARKERS = [
   "performing", "performance",
 ];
 
-/** A comparison/ranking word that only reads as a data question paired with a
- * possessive pronoun — "are we up or down", "how did we score" — since alone
- * these are common English words with no connection to analytics at all. */
 const COMPARISON_MARKERS = [
   "doing", "up", "down", "dropped", "drop", "fell", "spike", "increase",
   "decrease", "score", "rank", "ranking", "compare", "compared",
@@ -79,14 +71,13 @@ function wordRe(markers: string[]): RegExp {
   );
 }
 
-const POSSESSIVE_RE = wordRe(POSSESSIVE_MARKERS);
+const AMBIGUOUS_RE = wordRe(AMBIGUOUS_MARKERS);
 const TOPIC_RE = wordRe(TOPIC_MARKERS);
 const COMPARISON_RE = wordRe(COMPARISON_MARKERS);
 
-
 function wantsData(question: string): boolean {
   if (TOPIC_RE.test(question)) return true;
-  return POSSESSIVE_RE.test(question) && COMPARISON_RE.test(question);
+  return AMBIGUOUS_RE.test(question) && COMPARISON_RE.test(question);
 }
 
 /** Where the stable rules end and this question's own context begins. */
