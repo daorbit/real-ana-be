@@ -1,5 +1,5 @@
 
-import { orbitPromptFor, orbitPromptWithData } from "./prompt.js";
+import { orbitPromptFor, orbitPromptWithData, orbitPromptWithDocument } from "./prompt.js";
 import { docIndex, relevantKnowledge, selectedHeadings } from "./retrieval.js";
 import { cloudflareChat, cloudflareVisionChat, cloudflareGenerateImage } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
@@ -150,6 +150,9 @@ export type AskOptions = {
 
   systemPrompt?: string;
 
+  documentText?: string;
+  documentName?: string;
+
   exclude?: string[];
 
   budgetMs?: number;
@@ -251,6 +254,10 @@ export async function askOrbit(
     } catch (e) {
       console.error("[orbit] data summary failed:", (e as Error).message);
     }
+  }
+
+  if (options.documentText) {
+    prompt = orbitPromptWithDocument(prompt, options.documentText, options.documentName || "attachment");
   }
 
   let lastStatus = 502;
@@ -885,9 +892,6 @@ async function callOpenAiCompatible(
       return { ok: false, status: 502, detail: JSON.stringify(data.detail).slice(0, 200) };
     }
 
-    // `reasoning_content` is deliberately ignored: on a reasoning model it
-    // holds the chain of thought, which is not the answer and should never
-    // reach a support conversation.
     const text = data.choices?.[0]?.message?.content?.trim();
     return text ? { ok: true, text } : { ok: false, status: 502, detail: "empty completion" };
   } catch {
@@ -895,13 +899,7 @@ async function callOpenAiCompatible(
   }
 }
 
-/**
- * Reduce whatever this model returned to an answer.
- *
- * The work happens in `model-output`, which handles the several dialects five
- * models produce for one agreed shape — including the double-encoded envelope
- * that put raw JSON in front of users.
- */
+
 function parseAnswer(raw: string) {
   return sanitiseModelAnswer(raw, { maxSuggestions: MAX_SUGGESTIONS });
 }
