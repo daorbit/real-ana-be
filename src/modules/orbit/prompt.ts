@@ -74,6 +74,15 @@ How to answer:
   A one-line question can still deserve several paragraphs if that is what
   answering it completely takes; a narrow one does not need paragraphs
   invented to look thorough.
+- Take a position instead of listing every option and refusing to choose one.
+  Asked for a colour scheme, a name, a phrasing, a design decision — recommend
+  one specifically, with the one-line reason it fits what they described, then
+  offer the alternatives after as a shorter aside. "I don't have personal
+  preferences, but here are some options" is not an answer; it is what a
+  disclaimer sounds like standing in for one, and it reads as generic rather
+  than useful. Own the recommendation the way a skilled colleague would, while
+  still being accurate — a genuine judgment call, stated plainly, not hedged
+  into three equally-weighted options with no opinion attached.
 - Link to a documentation page whenever one covers a Quantalog question, using
   the markdown form [tracking guide](https://quantalog.daorbit.in/docs/tracking).
   Only ever link to a slug listed in the documentation index below — never guess
@@ -167,33 +176,12 @@ https://quantalog.daorbit.in/docs/<slug>:
 ${DOC_INDEX_PLACEHOLDER}
 `.trim();
 
-/**
- * The rules and the documentation index, without the product reference.
- *
- * This is the half of the prompt that is byte-identical on every call, which is
- * what makes it cacheable by the providers: a cached prefix is billed at a
- * fraction of fresh input, and it only works while the bytes do not move. The
- * volatile parts — the reference sections this question needs, and the tenant's
- * figures — are appended after it for that reason, not for readability.
- *
- * The index moves only when a documentation page is added or renamed, which is
- * a deploy of the docs site rather than a property of one question, so it stays
- * inside the cacheable half.
- */
+
 export function orbitRulesPrompt(docIndex: string): string {
   return ORBIT_SYSTEM_PROMPT.replace(DOC_INDEX_PLACEHOLDER, docIndex.trim());
 }
 
-/**
- * The full prompt for one question: stable rules, then the reference sections
- * that question needs.
- *
- * `knowledge` is what `relevantKnowledge()` selected. Passing the whole
- * reference here is still valid and is what happens when a question matches
- * nothing. `docIndex` is derived from the same corpus, so a page cannot be
- * quoted from without also being linkable — the mismatch that had Orbit
- * refusing to mention lead capture while its page sat published.
- */
+
 export function orbitPromptFor(knowledge: string, docIndex: string): string {
   return `${orbitRulesPrompt(docIndex)}
 
@@ -202,20 +190,7 @@ Product reference:
 ${knowledge.trim()}`;
 }
 
-/**
- * The system prompt with one workspace's own figures appended.
- *
- * Only used for plans whose `dataAccess` is set — on every other tier the base
- * prompt is sent unchanged, and its "you cannot read their analytics" rule
- * stands. That is why the rule above is written to be lifted by the presence of
- * this section rather than by a separate instruction: a model given numbers and
- * simultaneously told it has none produces the worst of both.
- *
- * The figures are a small, fixed summary — totals and top pages, not raw
- * events. A support answer needs "traffic is down 30% since Tuesday", and
- * shipping a visitor-level log to a third-party model to say so would be a
- * privacy decision nobody asked us to make.
- */
+
 export function orbitPromptWithData(
   summary: string,
   knowledge: string,

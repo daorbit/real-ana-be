@@ -430,8 +430,6 @@ async function askOrbitVision(
 }
 
 
-/** Fast enough to spend on a prompt rewrite without eating into the image
- * generation's own budget — this is a short, cheap call ahead of the real one. */
 const PROMPT_EXPAND_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8-fast";
 
 const PROMPT_EXPAND_SYSTEM = `
@@ -449,17 +447,6 @@ Reply with the finished image prompt and nothing else: no preamble, no
 quotes, no explanation of what you changed.
 `.trim();
 
-/**
- * Expand a possibly-referential drawing request into a prompt the image
- * model can act on alone.
- *
- * FLUX takes one prompt string with no memory of anything said before it —
- * "paint the homepage in that colour scheme" means nothing to it. This asks a
- * fast text model to read the actual conversation and rewrite the request as
- * something self-contained, before it ever reaches the image model. Skipped
- * entirely with no history: a first message has nothing to resolve, and the
- * extra call would only add latency for free.
- */
 async function expandImagePrompt(
   question: string,
   history: OrbitTurn[],
@@ -479,9 +466,6 @@ async function expandImagePrompt(
     signal,
   });
 
-  // A failed rewrite is not worth failing the whole picture over — the
-  // original request still draws something, just without resolving the
-  // reference, which is exactly the behaviour before this existed.
   return result.ok ? result.text.trim() || question : question;
 }
 
@@ -552,10 +536,6 @@ async function askOrbitGenerateImage(
 
   return {
     ok: true,
-    // The resolved, self-contained description — not a generic caption — so
-    // a later question that refers back to "that colour scheme" or "the
-    // homepage I asked for" has an actual sentence in its history to read,
-    // instead of the opaque "[generated an image]" tag alone.
     reply: `Here's what I drew: ${prompt}`,
     suggestions: [],
     model: "flux-schnell",
@@ -564,7 +544,6 @@ async function askOrbitGenerateImage(
   };
 }
 
-/** One page a web-search-backed answer drew on, for the client to link. */
 export type OrbitCitation = { url: string; title: string };
 
 type CallResult =
@@ -760,7 +739,6 @@ async function callCloudflare(
   }
 }
 
-/** Defaults to Anthropic's own API; overridable for a compatible proxy. */
 function anthropicBaseUrl(): string {
   return (process.env.CLAUDE_API_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
 }
