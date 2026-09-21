@@ -251,7 +251,13 @@ export function sanitiseModelAnswer(
   const {
     maxSuggestionChars = 80,
     maxSuggestions = 3,
-    maxReplyChars = 4000,
+    // A backstop against a runaway generation, not a target length — the
+    // prompt now allows a thorough general answer to run to several
+    // paragraphs with headings and lists, and this only exists to catch a
+    // model that never stops rather than to clip a real one short. Sized
+    // above MAX_TOKENS's own output ceiling in ask.ts so that cap, not this
+    // one, is what actually ends a normal answer.
+    maxReplyChars = 12000,
   } = options;
 
   if (!raw?.trim()) return null;

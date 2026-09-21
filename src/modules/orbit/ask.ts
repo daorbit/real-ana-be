@@ -26,7 +26,8 @@ const ABANDONED: OrbitResult = {
 };
 
 
-const MAX_TOKENS = 2600;
+
+const MAX_TOKENS = 4000;
 
 /** At most this many follow-ups. Three fits the panel; more is a menu. */
 const MAX_SUGGESTIONS = 3;
@@ -91,42 +92,20 @@ export type OrbitTurn = {
 export type OrbitAnswer = {
   reply: string;
   suggestions: string[];
-  /** Which model answered. The client shows it, so a fallback is visible. */
   model: string;
   modelLabel: string;
-  /** A generated picture, base64 with no `data:` prefix — set only when the
-   * call asked for one. */
   imageBase64?: string;
-  /**
-   * The tenant's figures as data, set only when this question pulled the
-   * data digest into the prompt (the same condition `wantsData` gates below).
-   * For the client to render a table under the prose instead of leaving the
-   * numbers to be read out of it.
-   */
   dataDigest?: unknown;
 };
 
 export type OrbitResult =
   | ({ ok: true } & OrbitAnswer)
-  /**
-   * `quotaExceeded` marks the one failure the host should surface as an upgrade
-   * prompt rather than an error. Named rather than inferred from the 402, so the
-   * host does not have to read status codes to tell a spent allowance from any
-   * other payment-shaped refusal.
-   */
   | { ok: false; error: string; status: number; quotaExceeded?: true };
 
-/** Whether any provider is configured. Routes check this before accepting a question. */
 export function orbitConfigured(): boolean {
   return availableModels().length > 0;
 }
 
-/**
- * The JSON shape both providers are asked for.
- *
- * `suggestions` is required rather than optional so a model cannot quietly drop
- * it — an empty array is a decision, a missing key is an oversight.
- */
 const SCHEMA = {
   type: "object",
   properties: {
@@ -138,41 +117,19 @@ const SCHEMA = {
 } as const;
 
 export type AskOptions = {
-  /** Oldest-first, excluding the current question. Trimmed to the entitlement. */
   history?: OrbitTurn[];
-  /** The asker's preferred model. Tried first; everything else after it. */
   modelId?: string;
 
   image?: string;
-  /**
-   * Draw a picture from `question` instead of answering it.
-   *
-   * Its own path, ahead of everything else in `askOrbit` — same deal as
-   * `image`, a different call entirely rather than a flag threaded through
-   * the text chain. Ignored if `image` is also set; a call is read *or*
-   * drawn, never both.
-   */
+
   generateImage?: boolean;
-  /**
-   * The product embedding Orbit. Supplies the entitlement and owns quota.
-   *
-   * Optional so a host with nothing to bill — a script, a test, an internal
-   * tool — can call Orbit without implementing an interface it does not need.
-   * Without one, every configured model is eligible and nothing is metered.
-   */
   host?: OrbitHost;
-  /** Opaque tenant key, passed back to the host unchanged. Required with `host`. */
   tenantId?: string;
 
   systemPrompt?: string;
 
   exclude?: string[];
-  /**
-   * Cap on the whole call, in milliseconds.
-   *
-   * Defaults to the standard budget. A route rendering into a chat panel
-   * someone is watching wants a much shorter one than a background job does.
-   */
+
   budgetMs?: number;
 
   attemptMs?: number;
@@ -314,10 +271,6 @@ export async function askOrbit(
       // A model that returned prose instead of the agreed shape has still
       // answered; only an empty reply is worth failing over.
       if (parsed) {
-        // Charged only now that an answer exists. A spend that fails is logged
-        // and swallowed: the asker has their answer, and turning a bookkeeping
-        // error into a failed question would take away the thing they came for
-        // over a discrepancy of one.
         if (host && tenantId) {
           try {
             await host.spendQuota(tenantId);
