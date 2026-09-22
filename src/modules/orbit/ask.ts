@@ -1,4 +1,5 @@
 
+import sharp from "sharp";
 import { orbitPromptFor, orbitPromptWithData, orbitPromptWithDocument } from "./prompt.js";
 import { docIndex, relevantKnowledge, selectedHeadings } from "./retrieval.js";
 import { cloudflareChat, cloudflareVisionChat, cloudflareGenerateImage } from "./cloudflare-ai.js";
@@ -44,6 +45,57 @@ const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 /** The default step count. Higher looks better and costs more of the shared
  * daily neuron budget; four is FLUX Schnell's own recommended default. */
 const IMAGE_STEPS = 4;
+
+/** FLUX Schnell on Workers AI takes no width/height/aspect_ratio — it always
+ * renders 1024x1024. Shape comes from cropping that square afterwards, sized
+ * off wording in the request rather than a fixed default. */
+const PORTRAIT_MARKERS = [
+  "portrait", "vertical", "tall", "story", "reel", "poster", "book cover",
+  "phone wallpaper", "mobile wallpaper",
+];
+const LANDSCAPE_MARKERS = [
+  "landscape", "horizontal", "widescreen", "banner", "wallpaper", "panorama",
+  "panoramic", "scenery", "cinematic", "wide shot", "skyline",
+];
+
+type ImageAspect = { w: number; h: number };
+
+function detectImageAspect(question: string): ImageAspect {
+  const q = question.toLowerCase();
+  if (PORTRAIT_MARKERS.some((m) => q.includes(m))) return { w: 3, h: 4 };
+  if (LANDSCAPE_MARKERS.some((m) => q.includes(m))) return { w: 16, h: 9 };
+  return { w: 1, h: 1 };
+}
+
+/** Crops FLUX's fixed 1024x1024 output down to the detected aspect, centred.
+ * Square requests pass through untouched. */
+async function cropToAspect(base64: string, aspect: ImageAspect): Promise<string> {
+  if (aspect.w === aspect.h) return base64;
+
+  const input = Buffer.from(base64, "base64");
+  const image = sharp(input);
+  const meta = await image.metadata();
+  const srcW = meta.width ?? 1024;
+  const srcH = meta.height ?? 1024;
+
+  const targetRatio = aspect.w / aspect.h;
+  let cropW = srcW;
+  let cropH = Math.round(srcW / targetRatio);
+  if (cropH > srcH) {
+    cropH = srcH;
+    cropW = Math.round(srcH * targetRatio);
+  }
+
+  const left = Math.floor((srcW - cropW) / 2);
+  const top = Math.floor((srcH - cropH) / 2);
+
+  const cropped = await image
+    .extract({ left, top, width: cropW, height: cropH })
+    .jpeg({ quality: 90 })
+    .toBuffer();
+
+  return cropped.toString("base64");
+}
 
 
 const AMBIGUOUS_MARKERS = [
@@ -534,13 +586,21 @@ async function askOrbitGenerateImage(
 
   const described = await describeGeneratedImage(raw.image, signal);
 
+  const aspect = detectImageAspect(question);
+  let imageBase64 = raw.image;
+  try {
+    imageBase64 = await cropToAspect(raw.image, aspect);
+  } catch (e) {
+    console.error("[orbit] image crop failed, using square original:", (e as Error).message);
+  }
+
   return {
     ok: true,
     reply: `Here's what I drew: ${described ?? prompt}`,
     suggestions: [],
     model: "flux-schnell",
     modelLabel: "FLUX",
-    imageBase64: raw.image,
+    imageBase64,
   };
 }
 
