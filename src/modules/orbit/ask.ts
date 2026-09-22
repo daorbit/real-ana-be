@@ -46,9 +46,6 @@ const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
  * daily neuron budget; four is FLUX Schnell's own recommended default. */
 const IMAGE_STEPS = 4;
 
-/** FLUX Schnell on Workers AI takes no width/height/aspect_ratio — it always
- * renders 1024x1024. Shape comes from cropping that square afterwards, sized
- * off wording in the request rather than a fixed default. */
 const PORTRAIT_MARKERS = [
   "portrait", "vertical", "tall", "story", "reel", "poster", "book cover",
   "phone wallpaper", "mobile wallpaper",
@@ -56,6 +53,7 @@ const PORTRAIT_MARKERS = [
 const LANDSCAPE_MARKERS = [
   "landscape", "horizontal", "widescreen", "banner", "wallpaper", "panorama",
   "panoramic", "scenery", "cinematic", "wide shot", "skyline",
+  "rectangular", "rectangle", "16:9", "16x9",
 ];
 
 type ImageAspect = { w: number; h: number };
