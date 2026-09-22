@@ -194,32 +194,62 @@ function summarize(ops: EditOp[], labels: Map<string, string>): string {
   const parts = ops.map((op) => {
     switch (op.op) {
       case "removeField":
-        return `removed “${labels.get(op.id) ?? op.id}”`;
+        return `removed the ${labels.get(op.id) ?? op.id} field`;
       case "updateField": {
         const name = labels.get(op.id) ?? op.id;
         const changed = Object.keys(op.patch);
         if (changed.length === 1 && changed[0] === "required") {
-          return `made “${name}” ${op.patch.required ? "required" : "optional"}`;
+          return `made ${name} ${op.patch.required ? "required" : "optional"}`;
         }
-        return `updated “${name}”`;
+        return `updated the ${name} field`;
       }
       case "addField":
-        return `added “${op.field.label}”`;
+        return `added a ${op.field.label} field`;
       case "moveField":
-        return `reordered “${labels.get(op.id) ?? op.id}”`;
+        return `moved the ${labels.get(op.id) ?? op.id} field`;
       case "setForm":
         return "updated the form details";
       case "setTheme":
-        return "updated the theme";
+        return describeThemeChange(op.patch);
       default:
         return "made a change";
     }
   });
 
   if (!parts.length) return "";
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+
+  let sentence: string;
+  if (parts.length === 1) sentence = parts[0];
+  else if (parts.length === 2) sentence = `${parts[0]} and ${parts[1]}`;
+  else sentence = `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+
+  return `Done — ${sentence}.`;
+}
+
+/** Plain names for the theme keys a "setTheme" patch actually touched. */
+const THEME_KEY_NAMES: Record<string, string> = {
+  pageBg: "page background",
+  cardBg: "card background",
+  cardBorder: "card border",
+  accentColor: "accent color",
+  labelColor: "label color",
+  inputBg: "field background",
+  inputBorder: "field border",
+  inputTextColor: "field text color",
+  fontFamily: "font",
+  cardRadius: "corner radius",
+  cardShadow: "card shadow",
+};
+
+function describeThemeChange(patch: GeneratedTheme): string {
+  const names = Object.keys(patch)
+    .map((k) => THEME_KEY_NAMES[k])
+    .filter((n): n is string => Boolean(n));
+
+  if (!names.length) return "updated the theme";
+  if (names.length === 1) return `updated the ${names[0]}`;
+  if (names.length === 2) return `updated the ${names[0]} and ${names[1]}`;
+  return `updated the ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
 export function formsEditReady(): boolean {
