@@ -87,7 +87,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     description: "Ask Orbit about your setup, on open models.",
     // Enough to find out whether Orbit is useful, short enough that someone who
     // finds it useful runs out. Costs us nothing: basic tier is free endpoints.
-    monthlyQuota: 20,
+    monthlyQuota: 10,
     modelTier: "basic",
     maxHistoryTurns: 4,
     maxQuestionChars: 500,
@@ -95,7 +95,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     dataAccess: false,
     imageGeneration: false,
     sortOrder: 0,
-    features: ["Open-weight models", "20 questions a month"],
+    features: ["Open-weight models", "10 questions a month"],
   },
   {
     slug: "orbit-starter",
@@ -151,6 +151,31 @@ export function resolveOrbitPlan(slug?: string | null): OrbitPlanEntry {
     (slug ? getOrbitPlanEntry(slug) : undefined) ??
     getOrbitPlanEntry(DEFAULT_ORBIT_PLAN_SLUG)!
   );
+}
+
+/**
+ * When Orbit Free's question quota dropped from 20/month to 10.
+ *
+ * Same reasoning as the form quota's cutoff in plans.catalog.ts: a workspace
+ * already on Orbit Free before this date keeps the old 20, since this is a
+ * quota cut rather than a fix. Only workspaces that land on Orbit Free after
+ * this date get the new, lower number.
+ */
+export const ORBIT_FREE_QUOTA_CUTOFF = new Date("2026-09-23T00:00:00Z");
+const LEGACY_ORBIT_FREE_QUOTA = 20;
+
+/**
+ * `entry` adjusted for a subscription's age, when it needs it — the Orbit
+ * counterpart to `applyGrandfathering` in plans.catalog.ts. Everything about
+ * the plan besides the grandfathered quota is unchanged.
+ */
+export function applyOrbitGrandfathering(
+  entry: OrbitPlanEntry,
+  subscriptionCreatedAt: Date | null | undefined,
+): OrbitPlanEntry {
+  if (entry.slug !== DEFAULT_ORBIT_PLAN_SLUG) return entry;
+  if (!subscriptionCreatedAt || subscriptionCreatedAt >= ORBIT_FREE_QUOTA_CUTOFF) return entry;
+  return { ...entry, monthlyQuota: LEGACY_ORBIT_FREE_QUOTA };
 }
 
 /**

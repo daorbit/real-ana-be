@@ -13,6 +13,7 @@ import { highestTier, type OrbitEntitlement, type OrbitHost, type OrbitTier } fr
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
   resolveOrbitPlan,
+  applyOrbitGrandfathering,
   type OrbitPlanEntry,
 } from "./orbit-plans.catalog.js";
 import { Subscription } from "../billing/models/Subscription.js";
@@ -72,16 +73,18 @@ export async function effectiveOrbitPlan(workspaceId: string): Promise<OrbitPlan
       ? resolveOrbitPlan(purchasedSlug)
       : null;
 
-  if (!granted && !purchased) return resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
-
   // Compared by model tier, then resolved back to whichever plan carries it —
   // so the winner brings its whole set of limits (quota, history, burst) rather
   // than a mix of the two, which would be impossible to explain on an invoice.
   const best: OrbitTier = highestTier(granted?.modelTier, purchased?.modelTier);
   const winner =
-    purchased?.modelTier === best ? purchased : granted?.modelTier === best ? granted : null;
+    (granted || purchased) &&
+    (purchased?.modelTier === best ? purchased : granted?.modelTier === best ? granted : null);
 
-  return winner ?? resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
+  const resolved = winner ?? resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
+  // Grandfathering only ever touches the Orbit Free entry, so this is a no-op
+  // whenever the winner is any paid tier.
+  return applyOrbitGrandfathering(resolved, sub.get("createdAt") as Date | undefined);
 }
 
 /** A catalogue plan as the entitlement the package understands. */

@@ -3,6 +3,7 @@ import { Workspace } from "../workspace/models/Workspace.js";
 import { Site } from "../analytics/models/Site.js";
 import {
   getPlanCatalogEntry,
+  applyGrandfathering,
   MAX_SITES_PER_WORKSPACE,
   type RangeKey,
   type Frequency,
@@ -174,8 +175,13 @@ function isExpired(sub: { currentPeriodEnd?: Date | null }): boolean {
 export async function currentPlan(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return null;
-  if (isExpired(sub)) return getPlanCatalogEntry("free") ?? null;
-  return getPlanCatalogEntry(sub.planSlug as string) ?? null;
+  const entry = isExpired(sub)
+    ? getPlanCatalogEntry("free")
+    : getPlanCatalogEntry(sub.planSlug as string);
+  if (!entry) return null;
+  // Grandfathering only ever touches the Free entry, so this is a no-op for
+  // every paid plan and for a Free workspace created after the cutoff.
+  return applyGrandfathering(entry, sub.get("createdAt") as Date | undefined);
 }
 
 /**
@@ -583,8 +589,9 @@ export async function quotaSummary(workspaceId: string) {
   // show a workspace quotas it cannot spend.
   const expired = isExpired(sub);
   const boughtSlug = sub.planSlug as string;
-  const plan = getPlanCatalogEntry(expired ? "free" : boughtSlug);
-  if (!plan) return null;
+  const rawPlan = getPlanCatalogEntry(expired ? "free" : boughtSlug);
+  if (!rawPlan) return null;
+  const plan = applyGrandfathering(rawPlan, sub.get("createdAt") as Date | undefined);
   const boughtPlan = getPlanCatalogEntry(boughtSlug);
 
   // Only what is still queued: a sent post is history and holds no slot, which
