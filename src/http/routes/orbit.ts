@@ -509,15 +509,7 @@ router.post("/explain", async (req: AuthedRequest, res: Response) => {
   res.json({ reply: result.reply });
 });
 
-/**
- * The workspace's saved conversations, most recently active first.
- *
- * Scoped to the workspace rather than the asker: Orbit is metered per
- * workspace, so the transcript belongs to the thing that paid for it, and a
- * colleague who can already read the workspace's analytics can read its Orbit
- * history. Each row carries the id of whoever started it so the list can say
- * so.
- */
+
 router.get("/conversations", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res);
   if (!ws) return;
@@ -531,12 +523,18 @@ router.get("/conversations", async (req: AuthedRequest, res: Response) => {
   res.json({ conversations, nextCursor });
 });
 
-/** One conversation with its turns, for restoring it into the panel. */
+/** One conversation with its most recent page of turns, for restoring it into
+ * the panel. `before` (a `seq` cursor) pages further back into older turns. */
 router.get("/conversations/:id", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res);
   if (!ws) return;
 
-  const convo = await readConversation(ws.id, String(req.params.id));
+  const limit = Number(req.query.limit);
+  const before = Number(req.query.before);
+  const convo = await readConversation(ws.id, String(req.params.id), {
+    limit: Number.isFinite(limit) ? limit : undefined,
+    before: Number.isFinite(before) ? before : undefined,
+  });
   // Missing, another workspace's, and deleted are one answer on purpose — the
   // endpoint must not be usable to find out whether an id is real.
   if (!convo) return res.status(404).json({ error: "Conversation not found." });

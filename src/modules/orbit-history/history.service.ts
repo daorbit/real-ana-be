@@ -15,6 +15,9 @@ const MAX_SUGGESTION_CHARS = 200;
 /** One page of the conversation list. */
 const LIST_LIMIT = 30;
 
+/** One page of a single conversation's messages. */
+const MESSAGE_PAGE_LIMIT = 20;
+
 export type RecordedTurn = {
   reply: string;
   suggestions?: string[];
@@ -176,14 +179,12 @@ export async function listConversations(
   return { conversations, nextCursor };
 }
 
-/**
- * One conversation and its turns, in order.
- *
- * Null when it does not exist, belongs to another workspace, or has been
- * deleted — the three are one answer on purpose, so the endpoint cannot be used
- * to learn whether an id is real.
- */
-export async function readConversation(workspaceId: string, conversationId: string) {
+
+export async function readConversation(
+  workspaceId: string,
+  conversationId: string,
+  opts: { limit?: number; before?: number } = {},
+) {
   const id = asObjectId(conversationId);
   if (!id) return null;
 
@@ -194,10 +195,21 @@ export async function readConversation(workspaceId: string, conversationId: stri
   }).lean();
   if (!convo) return null;
 
-  const messages = await OrbitMessage.find({ conversationId: convo._id })
-    .sort({ seq: 1 })
+  const limit = Math.min(Math.max(opts.limit ?? MESSAGE_PAGE_LIMIT, 1), MESSAGE_PAGE_LIMIT);
+
+  const filter: Record<string, unknown> = { conversationId: convo._id };
+  if (typeof opts.before === "number") {
+    filter.seq = { $lt: opts.before };
+  }
+
+  const rows = await OrbitMessage.find(filter)
+    .sort({ seq: -1 })
+    .limit(limit)
     .select("seq role content imageUrl suggestions dataDigest citations failed modelLabel createdAt")
     .lean();
+
+  const nextBefore = rows.length === limit ? rows[rows.length - 1].seq : null;
+  const messages = [...rows].reverse();
 
   return {
     id: String(convo._id),
@@ -205,6 +217,8 @@ export async function readConversation(workspaceId: string, conversationId: stri
     messageCount: convo.messageCount,
     lastMessageAt: convo.lastMessageAt,
     createdAt: convo.createdAt,
+    hasMore: nextBefore != null,
+    nextBefore,
     messages: messages.map((m) => ({
       id: String(m._id),
       seq: m.seq,
