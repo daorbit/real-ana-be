@@ -1,4 +1,3 @@
-import { PDFParse } from "pdf-parse";
 import mammoth from "mammoth";
 
 export const SUPPORTED_DOCUMENT_MIME = new Set([
@@ -22,6 +21,8 @@ function clip(text: string): { text: string; truncated: boolean } {
 }
 
 async function extractPdf(buffer: Buffer): Promise<string> {
+
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data: buffer });
   try {
     const result = await parser.getText();
