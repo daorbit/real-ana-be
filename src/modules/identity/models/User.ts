@@ -3,6 +3,13 @@ import mongoose, { Schema, InferSchemaType } from "mongoose";
 export const ROLES = ["super_admin", "admin", "user"] as const;
 export type Role = (typeof ROLES)[number];
 
+export const REFERRAL_SOURCES = [
+  "search", "social", "podcast", "streaming", "email", "word_of_mouth",
+  "friend_colleague", "youtube", "blog_article", "community", "online_ad",
+  "review_site", "other",
+] as const;
+export type ReferralSource = (typeof REFERRAL_SOURCES)[number];
+
 const userSchema = new Schema(
   {
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -25,11 +32,9 @@ const userSchema = new Schema(
     pinHash: { type: String, default: "" },
     screenLockEnabled: { type: Boolean, default: false },
     lockedAt: { type: Date, default: null },
+    referralSources: { type: [String], enum: REFERRAL_SOURCES, default: [] },
     /** Consecutive wrong-password attempts at /login. Reset on a correct one. */
     loginFailCount: { type: Number, default: 0 },
-    /** Set once loginFailCount hits the limit; /login refuses the account
-     * outright until this passes, regardless of whether the password is
-     * actually correct. */
     loginLockedUntil: { type: Date, default: null },
   },
   { timestamps: true }

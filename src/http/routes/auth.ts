@@ -4,7 +4,7 @@ import { randomInt } from "node:crypto";
 import QRCode from "qrcode";
 import { encryptSecret, decryptSecret } from "../../shared/utils/crypto-box.js";
 import { generateTotpSecret, totpKeyUri, verifyTotpCode } from "../../shared/utils/totp.js";
-import { User } from "../../modules/identity/models/User.js";
+import { User, REFERRAL_SOURCES, type ReferralSource } from "../../modules/identity/models/User.js";
 import { PendingSignup } from "../../modules/identity/models/PendingSignup.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
@@ -116,6 +116,7 @@ async function publicUser(user: InstanceType<typeof User>) {
     avatarUrl: user.avatarUrl ?? "",
     dateLocale: user.dateLocale ?? "",
     timezone: user.timezone ?? "",
+    referralSources: user.referralSources ?? [],
     role: user.role,
     /** Lets the client show "connected with Google" instead of guessing. */
     googleLinked: Boolean(user.googleId),
@@ -850,9 +851,6 @@ router.post("/google", async (req, res) => {
 
     if (!user) {
       const [firstName, ...rest] = profile.name.split(" ");
-      // No passwordHash: this account has no password until its owner sets one.
-      // `role` is left to the schema default — a Google signup cannot ask to be
-      // an admin any more than a password signup can.
       user = await User.create({
         email: profile.email,
         name: profile.name,
@@ -864,9 +862,6 @@ router.post("/google", async (req, res) => {
       created = true;
       welcomeInBackground(user.email, user.name);
     } else if (!user.googleId) {
-      // An existing password account linking Google for the first time. The
-      // avatar is only filled in if empty, so a picture the user chose here is
-      // not overwritten by their Google one.
       user.googleId = profile.sub;
       if (!user.avatarUrl) user.avatarUrl = profile.picture;
       await user.save();
@@ -881,8 +876,7 @@ router.post("/google", async (req, res) => {
 });
 
 router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
-  // The demo user has no database record, so a refresh restores it from the
-  // token alone rather than looking up an id that intentionally matches nothing.
+
   if (req.isDemo) return res.json(demoUser());
 
   const user = await User.findById(req.userId);
@@ -936,14 +930,10 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
   if (body.mobile !== undefined) user.mobile = str(body.mobile, 30);
   if (body.avatarUrl !== undefined) {
     const url = str(body.avatarUrl, 500);
-    // Anything that isn't an http(s) URL ends up in an <img src>, where a
-    // javascript: or data: value is a scripting vector rather than a picture.
+
     if (url && !/^https?:\/\//i.test(url))
       return res.status(400).json({ error: "avatarUrl must be an http(s) URL" });
 
-    // Pointing the avatar somewhere else abandons any file we uploaded for it,
-    // so that file goes too. Best-effort: an orphan in Cloudinary is not worth
-    // failing a profile save over.
     if (user.avatarPublicId && url !== user.avatarUrl) {
       void deleteImage(user.avatarPublicId);
       user.avatarPublicId = "";
@@ -952,10 +942,15 @@ router.patch("/me", requireAuth, blockDemoWrites, async (req: AuthedRequest, res
   }
   if (body.dateLocale !== undefined) user.dateLocale = str(body.dateLocale, 35);
   if (body.timezone !== undefined) user.timezone = str(body.timezone, 64);
+  if (body.referralSources !== undefined) {
+    const list: unknown[] = Array.isArray(body.referralSources) ? body.referralSources : [];
+    const valid = list.filter((s): s is ReferralSource =>
+      typeof s === "string" && (REFERRAL_SOURCES as readonly string[]).includes(s),
+    );
+    user.referralSources = [...new Set(valid)];
+  }
 
-  // `name` is what the rest of the app reads, so keep it in step. An account
-  // that clears both parts keeps its old display name rather than becoming
-  // nameless — the field is required.
+
   const composed = `${user.firstName} ${user.lastName}`.trim();
   if (composed) user.name = composed;
 
