@@ -195,8 +195,39 @@ export type ParseOpsResult =
   | { ok: true; ops: EditOp[] }
   | { ok: false; reason: string };
 
+/** Words worth matching against a prompt — short connective words match everything and prove nothing. */
+function significantWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 2);
+}
 
-export function parseEditOps(raw: unknown, knownIds: Iterable<string>): ParseOpsResult {
+/**
+ * Whether the prompt plausibly names this field.
+ *
+ * A small model asked to change one field sometimes throws in an unrequested
+ * `removeField` alongside the real op — a known failure mode of structured
+ * JSON edits from 8B-class models. There is no way to ask the model "did you
+ * mean to do that", so this is a cheap backstop: a removal only survives if
+ * at least one non-trivial word from the field's own label shows up in what
+ * the author actually typed.
+ */
+function promptNamesField(prompt: string, label: string | undefined): boolean {
+  if (!label) return true;
+  const labelWords = significantWords(label);
+  if (!labelWords.length) return true;
+  const promptWords = new Set(significantWords(prompt));
+  return labelWords.some((w) => promptWords.has(w));
+}
+
+export function parseEditOps(
+  raw: unknown,
+  knownIds: Iterable<string>,
+  /** The author's own request, and each known field's label — used to keep a
+   * `removeField` the model was not actually asked for from going through. */
+  guard?: { prompt: string; labels: Map<string, string> },
+): ParseOpsResult {
   const list = Array.isArray(raw)
     ? raw
     : raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).ops)
@@ -209,7 +240,11 @@ export function parseEditOps(raw: unknown, knownIds: Iterable<string>): ParseOps
   const ops = list
     .slice(0, MAX_OPS)
     .map((entry) => readOp(entry, known))
-    .filter((entry): entry is EditOp => entry !== null);
+    .filter((entry): entry is EditOp => entry !== null)
+    .filter((entry) => {
+      if (!guard || entry.op !== "removeField") return true;
+      return promptNamesField(guard.prompt, guard.labels.get(entry.id));
+    });
 
   if (!ops.length) return { ok: false, reason: "no usable operations" };
   return { ok: true, ops };

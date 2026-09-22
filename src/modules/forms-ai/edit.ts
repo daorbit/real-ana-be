@@ -4,6 +4,7 @@ import {
   FONT_FAMILIES,
   CARD_SHADOWS,
   parseGeneratedTheme,
+  type GeneratedTheme,
 } from "./form-schema.js";
 import { MAX_OPS, parseEditOps, type EditOp } from "./edit-ops.js";
 
@@ -55,10 +56,11 @@ function systemPrompt(): string {
     "- To reword a field, update it. Removing it and adding it back loses its settings and its answers.",
     `- A new field's "type" must be one of: ${GENERATABLE_FIELD_TYPES.join(", ")}.`,
     '- Fields you were given but do not mention are left exactly as they are. That is the normal case — do not list them.',
+    '- Only emit "removeField" when the request explicitly asks to remove, delete, or drop that field. Never remove a field as a side effect of another change.',
     "",
     "Theme:",
     '- Colours are 6-digit hex strings like "#0f172a". Anything else is dropped.',
-    '- Emit "setTheme" only when the request is about appearance. Send the whole palette when you do, not one colour.',
+    '- Emit "setTheme" only when the request is about appearance. Send only the keys the request is actually about — a request about one colour should patch that one key, not the whole palette.',
     '- "textMode" is "light" on a dark card and "dark" on a light one.',
     `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}.`,
     `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}.`,
@@ -165,12 +167,60 @@ function describe(snapshot: EditSnapshot): string {
   }
 
   if (!snapshot.fields.length) lines.push("  (none yet)");
+
+  // Shown so a colour-only request ("make the button green") can patch just
+  // that key with a value that still sits well against what is already
+  // there, instead of guessing at a palette with no idea what it joins.
+  const theme = snapshot.theme;
+  if (theme && Object.keys(theme).length) {
+    lines.push("Current theme:");
+    lines.push(`  ${JSON.stringify(theme)}`);
+  }
+
   return lines.join("\n");
 }
 
 export type EditResult =
-  | { ok: true; ops: EditOp[]; model: string }
+  | { ok: true; ops: EditOp[]; model: string; summary: string }
   | { ok: false; status: number; error: string };
+
+/**
+ * A plain-language line for each op, built from the snapshot's own labels
+ * rather than asked of the model — the ops are already the ground truth for
+ * what changed, so a second model call to describe them would risk saying
+ * something the ops themselves don't back up.
+ */
+function summarize(ops: EditOp[], labels: Map<string, string>): string {
+  const parts = ops.map((op) => {
+    switch (op.op) {
+      case "removeField":
+        return `removed “${labels.get(op.id) ?? op.id}”`;
+      case "updateField": {
+        const name = labels.get(op.id) ?? op.id;
+        const changed = Object.keys(op.patch);
+        if (changed.length === 1 && changed[0] === "required") {
+          return `made “${name}” ${op.patch.required ? "required" : "optional"}`;
+        }
+        return `updated “${name}”`;
+      }
+      case "addField":
+        return `added “${op.field.label}”`;
+      case "moveField":
+        return `reordered “${labels.get(op.id) ?? op.id}”`;
+      case "setForm":
+        return "updated the form details";
+      case "setTheme":
+        return "updated the theme";
+      default:
+        return "made a change";
+    }
+  });
+
+  if (!parts.length) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+}
 
 export function formsEditReady(): boolean {
   return cloudflareReady();
@@ -195,6 +245,7 @@ export async function generateEdit(
   ];
 
   const knownIds = snapshot.fields.map((f) => f.id);
+  const labels = new Map(snapshot.fields.map((f) => [f.id, f.label]));
   let lastDetail = "";
 
   for (const model of MODELS) {
@@ -216,18 +267,18 @@ export async function generateEdit(
     }
 
     const json = extractJson(res.text);
-    const parsed = parseEditOps(json, knownIds);
+    const parsed = parseEditOps(json, knownIds, { prompt: asked, labels });
 
     // The theme is read by its own parser, which applies the contrast
     // corrections that keep a generated palette legible. Parsed separately and
     // appended, so a reply that is only a restyle still produces an operation.
-    const themeOp = readThemeOp(json);
+    const themeOp = readThemeOp(json, snapshot.theme as GeneratedTheme | undefined);
 
     if (parsed.ok) {
       const ops = themeOp ? [...parsed.ops, themeOp] : parsed.ops;
-      return { ok: true, ops, model };
+      return { ok: true, ops, model, summary: summarize(ops, labels) };
     }
-    if (themeOp) return { ok: true, ops: [themeOp], model };
+    if (themeOp) return { ok: true, ops: [themeOp], model, summary: summarize([themeOp], labels) };
 
     lastDetail = `${model}: ${parsed.reason}`;
   }
@@ -237,7 +288,7 @@ export async function generateEdit(
 }
 
 /** The `setTheme` operation in a reply, run through the theme parser. */
-function readThemeOp(json: unknown): EditOp | null {
+function readThemeOp(json: unknown, currentTheme?: GeneratedTheme): EditOp | null {
   if (!json || typeof json !== "object") return null;
   const ops = (json as Record<string, unknown>).ops;
   if (!Array.isArray(ops)) return null;
@@ -247,6 +298,6 @@ function readThemeOp(json: unknown): EditOp | null {
   ) as Record<string, unknown> | undefined;
   if (!raw) return null;
 
-  const parsed = parseGeneratedTheme({ theme: raw.patch });
+  const parsed = parseGeneratedTheme({ theme: raw.patch }, currentTheme);
   return parsed.ok ? { op: "setTheme", patch: parsed.theme } : null;
 }

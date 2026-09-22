@@ -207,7 +207,7 @@ router.post(
     // After the work, never before.
     await spendQuota(workspaceId, "orbit");
 
-    res.json({ ops: result.ops, model: result.model });
+    res.json({ ops: result.ops, model: result.model, summary: result.summary });
   }),
 );
 

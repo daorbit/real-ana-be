@@ -198,7 +198,19 @@ function readable(
   return luminance(background) > 0.4 ? "#1f2937" : "#f8fafc";
 }
 
-function readTheme(raw: unknown): GeneratedTheme | undefined {
+/**
+ * `theme`, with `base` filled in wherever a key is missing — the palette a
+ * partial patch would actually produce once merged onto what is live now.
+ * Contrast only means something against that effective result: checking a
+ * patch in isolation would wave through an `accentColor` that reads fine on
+ * paper but disappears against a `cardBg` the request never touched.
+ */
+function withBase(theme: GeneratedTheme, base?: GeneratedTheme): GeneratedTheme {
+  if (!base) return theme;
+  return { ...base, ...theme };
+}
+
+function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
   const theme: GeneratedTheme = {};
@@ -232,9 +244,32 @@ function readTheme(raw: unknown): GeneratedTheme | undefined {
   const radius = bounded(r.cardRadius, 0, 40);
   if (radius !== undefined) theme.cardRadius = radius;
 
-  theme.labelColor = readable(theme.labelColor, theme.cardBg);
-  theme.inputTextColor = readable(theme.inputTextColor, theme.inputBg);
+  if (!Object.keys(theme).length) return undefined;
 
+  // Corrections run against the effective (patch-over-base) palette, but only
+  // the keys the patch itself set are written back — a partial edit should
+  // still come back partial, not silently grow into a full restyle.
+  const effective = withBase(theme, base);
+
+  if ("labelColor" in theme || (!base && theme.labelColor === undefined)) {
+    const corrected = readable(effective.labelColor, effective.cardBg);
+    if (corrected !== undefined) theme.labelColor = corrected;
+  }
+  if ("inputTextColor" in theme || (!base && theme.inputTextColor === undefined)) {
+    const corrected = readable(effective.inputTextColor, effective.inputBg);
+    if (corrected !== undefined) theme.inputTextColor = corrected;
+  }
+  if ("accentColor" in theme && effective.cardBg) {
+    theme.accentColor = readable(effective.accentColor, effective.cardBg);
+  }
+  if ("cardBg" in theme || "pageBg" in theme) {
+    if (effective.cardBg && effective.pageBg && contrast(effective.cardBg, effective.pageBg) < 1.15) {
+      // The card and the page it sits on are close enough to the same shade
+      // that the card edge would be invisible. Nudge the card toward the
+      // opposite end of the lightness scale rather than leaving it to blend in.
+      theme.cardBg = luminance(effective.pageBg) > 0.4 ? "#1f2937" : "#ffffff";
+    }
+  }
   if (theme.cardBg) {
     theme.textMode = luminance(theme.cardBg) > 0.4 ? "dark" : "light";
   }
@@ -250,12 +285,12 @@ export type ParseThemeResult =
   | { ok: true; theme: GeneratedTheme }
   | { ok: false; reason: string };
 
-export function parseGeneratedTheme(raw: unknown): ParseThemeResult {
+export function parseGeneratedTheme(raw: unknown, base?: GeneratedTheme): ParseThemeResult {
   if (!raw || typeof raw !== "object")
     return { ok: false, reason: "not an object" };
   const r = raw as Record<string, unknown>;
 
-  const theme = readTheme(r.theme) ?? readTheme(r);
+  const theme = readTheme(r.theme, base) ?? readTheme(r, base);
 
   if (!theme) return { ok: false, reason: "no usable theme" };
 
