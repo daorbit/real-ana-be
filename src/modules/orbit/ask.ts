@@ -890,6 +890,7 @@ async function callAnthropic(
     if (!text) return { ok: false, status: 502, detail: "empty completion" };
     return citations.length ? { ok: true, text, citations } : { ok: true, text };
   } catch {
+    console.error(`[orbit] claude envelope unparseable; body: ${res.text.slice(0, 500)}`);
     return { ok: false, status: 502, detail: "unparseable envelope" };
   }
 }
