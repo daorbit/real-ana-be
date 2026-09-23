@@ -173,9 +173,24 @@ export function salvageTruncatedEnvelope(text: string): string | null {
 }
 
 
+export function reformatSearchDump(text: string): string {
+  const pattern = /^1\.\s(.+)\n((?:(?!^1\.\s|^Source:).*\n)*?)^Source:\s*(\S+)\s*$/gim;
+  let index = 0;
+  let sawMatch = false;
+
+  const out = text.replace(pattern, (_match, title: string, body: string, url: string) => {
+    sawMatch = true;
+    index += 1;
+    const label = title.trim().replace(/[.:]+$/, "");
+    return `${index}. ${title.trim()}\n${body}[${label}](${url.trim()})`;
+  });
+
+  return sawMatch ? out : text;
+}
+
 export function tidyProse(text: string): string {
   return (
-    stripCodeFence(text)
+    reformatSearchDump(stripCodeFence(text))
       // Zero-width space, joiner, non-joiner, BOM. Invisible, and they break
       // search, copy and word wrapping wherever they land.
       .replace(/[​-‍﻿]/g, "")
