@@ -70,20 +70,7 @@ const CAPTION_QUALITY_RULES =
   "the platform allows them (see below) — used sparingly and only where they add tone, never a row of them, " +
   "never one after every sentence.";
 
-/**
- * Write a share caption.
- *
- * Runs through Orbit's model plumbing — the fallback chain, the timeouts, the
- * output sanitising — with its own system prompt, because under the support
- * prompt the model correctly refuses "write me a post" as off-topic.
- *
- * Admin-only, like the rest of sharing: this is metered model spend against the
- * workspace, and the caption describes numbers only an admin can publish.
- *
- * Everything the model is told comes from the server's own record of the
- * workspace, not from the request. A client that could supply the figures could
- * also supply instructions, and the caption goes out under the user's name.
- */
+
 router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
@@ -97,15 +84,7 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
   const tone = CAPTION_TONES[platform];
   if (!tone) return res.status(400).json({ error: "Unsupported platform." });
 
-  /**
-   * A caption about something the author names, rather than about their
-   * dashboard.
-   *
-   * The scheduled-post composer writes posts on any subject, so it sends the
-   * subject and nothing else. Without a topic this stays exactly what it was:
-   * a caption describing the workspace's own public dashboard, which is why
-   * the share-enabled check below only guards that path.
-   */
+
   const topic = String(req.body?.topic ?? "").trim().slice(0, 500);
 
   if (topic) {
@@ -180,21 +159,10 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
   res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
 });
 
-/** One exchange in a scheduling conversation, as the client replays it back. */
 type PlanTurn = { role: "user" | "assistant"; content: string };
 
-/** How many exchanges of a planning conversation are carried into the model. */
 const MAX_PLAN_TURNS = 12;
 
-/**
- * The models this route will start on, whatever the client asks for.
- *
- * An allow-list rather than a rejection, because the id arrives from the chat
- * panel's own picker via localStorage — it is a preference about support
- * answers, and a perfectly valid one there can be a model measured as unusable
- * here. Anything outside this set falls back to the route's own default rather
- * than failing the request: the author asked for a post, not for a model.
- */
 const PLAN_MODELS = new Set(["llama-fast", "llama-8b"]);
 
  
@@ -289,14 +257,7 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
         "invent figures, dates, links or claims they did not give you. Return an empty `suggestions` array.",
       host: quantalogOrbitHost,
       tenantId: ws.id,
-      // The author's picked model, honoured as given.
-      //
-      // An earlier version forced a schema-honouring model here, on the theory
-      // that this route needs JSON. Measured, that was wrong twice over: the
-      // structured models are the ones currently failing, and DeepSeek — which
-      // is not one — returns clean JSON and the best captions of anything in
-      // the chain. `parsePlan` handles a fence or a stray sentence, so asking
-      // nicely in the prompt is enough.
+
  
       modelId: PLAN_MODELS.has(String(req.body?.modelId ?? ""))
         ? String(req.body.modelId)
@@ -370,19 +331,11 @@ router.post("/:wid/share/plan", async (req: AuthedRequest, res: Response) => {
     hour: int(parsed.hour, 0, 23, 9),
     minute: int(parsed.minute, 0, 59, 0),
     weekday: int(parsed.weekday, 0, 6, 1),
-    // 29-31 do not exist in every month, so a monthly post pinned there would
-    // silently skip February. The composer's own picker stops at 28 too.
+
     dayOfMonth: int(parsed.dayOfMonth, 1, 28, 1),
   });
 });
 
-/**
- * Draw a picture for the post being planned.
- *
- * Same Cloudflare Flux call and Cloudinary upload/watermark pipeline as the
- * main Orbit assistant's "draw a picture" mode — this just puts it behind the
- * planner's own admin-only access check instead of the support chat's.
- */
 router.post("/:wid/share/plan-image", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
