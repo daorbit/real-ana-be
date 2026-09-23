@@ -872,7 +872,10 @@ async function callAnthropic(
       stop_reason?: string;
     };
 
-    if (data.error) return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
+    if (data.error) {
+      console.error(`[orbit] claude upstream error; body: ${res.text.slice(0, 500)}`);
+      return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
+    }
 
     const textBlocks = data.content?.filter((b) => b.type === "text") ?? [];
     const text = textBlocks.map((b) => b.text ?? "").join("").trim();
