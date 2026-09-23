@@ -626,6 +626,78 @@
     );
   }
 
+  /* ------------------------------------------------------------------
+   * Heatmaps: opt-in raw click position + scroll-depth sampling for
+   * pixel-level overlays, kept separate from the CTA click tracking above
+   * (which only fires on buttons/links and carries no coordinates).
+   * ------------------------------------------------------------------ */
+  var trackHeatmap = opt("heatmap") === "on";
+
+  if (trackHeatmap) {
+    function pageHeight() {
+      var doc = document.documentElement;
+      var body = document.body;
+      return Math.max(
+        doc.scrollHeight, body ? body.scrollHeight : 0,
+        doc.offsetHeight, body ? body.offsetHeight : 0,
+        window.innerHeight || doc.clientHeight || 0
+      );
+    }
+
+    document.addEventListener(
+      "click",
+      function (e) {
+        var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+        var height = pageHeight();
+        if (!vw || !height) return;
+
+        var s = session();
+        post({
+          siteId: siteId,
+          type: "heat_click",
+          path: location.pathname,
+          sessionId: s.id,
+          xPct: (e.clientX / vw) * 100,
+          yPct: ((e.pageY != null ? e.pageY : e.clientY + window.pageYOffset) / height) * 100,
+          viewportW: vw,
+          viewportH: window.innerHeight || 0,
+        });
+      },
+      true
+    );
+
+    // One scroll-depth sample per page, taken when the visitor stops
+    // scrolling for a beat — cheaper than sampling every frame, and a
+    // heatmap only needs "how far did people get", not a continuous trace.
+    var scrollSampleTimer = null;
+    window.addEventListener(
+      "scroll",
+      function () {
+        if (scrollSampleTimer) clearTimeout(scrollSampleTimer);
+        scrollSampleTimer = setTimeout(function () {
+          scrollSampleTimer = null;
+          var height = pageHeight();
+          var viewport = window.innerHeight || document.documentElement.clientHeight || 0;
+          if (!height || height <= viewport) return;
+          var scrolled = window.pageYOffset || document.documentElement.scrollTop || 0;
+          var pctReached = Math.min(100, Math.round(((scrolled + viewport) / height) * 100));
+
+          var s = session();
+          post({
+            siteId: siteId,
+            type: "heat_scroll",
+            path: location.pathname,
+            sessionId: s.id,
+            scrollPct: pctReached,
+            viewportW: window.innerWidth || 0,
+            viewportH: viewport,
+          });
+        }, 500);
+      },
+      { passive: true }
+    );
+  }
+
 
   var trackErrors = script.getAttribute("data-errors") !== "off";
 

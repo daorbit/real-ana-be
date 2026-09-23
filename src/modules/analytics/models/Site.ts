@@ -39,6 +39,7 @@ const siteSchema = new Schema(
       hash: { type: Boolean, default: false },
       clicks: { type: Boolean, default: true },
       errors: { type: Boolean, default: true },
+      heatmap: { type: Boolean, default: false },
       ignorePages: { type: [String], default: [] },
       allowParams: { type: [String], default: [] },
       domain: { type: String, default: "" },

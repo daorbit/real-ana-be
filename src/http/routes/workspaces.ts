@@ -74,6 +74,7 @@ function parseTrackerOptions(raw: unknown) {
     hash: !!o.hash,
     clicks: o.clicks === undefined ? true : !!o.clicks,
     errors: o.errors === undefined ? true : !!o.errors,
+    heatmap: !!o.heatmap,
     ignorePages: list(o.ignorePages),
     allowParams: list(o.allowParams),
     domain: String(o.domain ?? "").trim().slice(0, 253),
