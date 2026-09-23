@@ -162,15 +162,8 @@ export function buildAuthorizeUrl(
    * the two scope lists above for why they are not the same request.
    */
   intent: "login" | "connect" = "connect",
-  /**
-   * Whether to include the analytics read scopes on a connect.
-   *
-   * True on the first attempt and false on the retry that follows an
-   * `unauthorized_scope_error` — see `LINKEDIN_READ_SCOPES`. A login never asks
-   * for them: signing in has no use for post history, and the consent screen
-   * should stay as small as the feature behind it.
-   */
-  withReadScopes = true,
+
+  withReadScopes = false,
 ): string {
   const scopes = intent === "login"
     ? LINKEDIN_LOGIN_SCOPES
@@ -187,14 +180,7 @@ export function buildAuthorizeUrl(
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }
 
-/**
- * Trade an authorization code for an access token.
- *
- * Throws a plain `Error` on failure. The caller turns that into a redirect
- * carrying a generic reason code — LinkedIn's own error text is not something
- * to put in front of a user, and it is not logged either, because the failing
- * request body contains the client secret.
- */
+
 export async function exchangeCodeForToken(code: string): Promise<LinkedInToken> {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -211,15 +197,7 @@ export async function exchangeCodeForToken(code: string): Promise<LinkedInToken>
   });
 
   if (status !== 200 || !data?.access_token) {
-    // LinkedIn's own `error` / `error_description` are named explicitly rather
-    // than dumping the response: those two fields are diagnostic and safe,
-    // while the whole body echoes the request on some failures — and the
-    // request carried the client secret.
-    //
-    // Worth being specific here because every cause looks the same from
-    // outside: a code already used, a code older than its 30-minute life, a
-    // `redirect_uri` that differs by one character from the registered one, or
-    // a client secret that was rotated. The description names which.
+
     const detail = [data?.error, data?.error_description]
       .filter((v) => typeof v === "string" && v)
       .join(": ");
@@ -228,8 +206,6 @@ export async function exchangeCodeForToken(code: string): Promise<LinkedInToken>
     );
   }
 
-  // LinkedIn documents ~60 days. The fallback keeps a missing field from
-  // producing an Invalid Date that would read as permanently expired.
   const seconds = Number(data.expires_in) || 60 * 24 * 60 * 60;
 
   return {
@@ -239,13 +215,7 @@ export async function exchangeCodeForToken(code: string): Promise<LinkedInToken>
   };
 }
 
-/**
- * Fetch the member's profile from the OpenID userinfo endpoint.
- *
- * `sub` and nothing else is treated as required: LinkedIn omits `email` when
- * the member has no verified address, and a connection is still perfectly
- * usable without one.
- */
+
 export async function fetchLinkedInProfile(accessToken: string): Promise<LinkedInProfile> {
   const { status, data } = await axios.get(USERINFO_URL, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -254,9 +224,7 @@ export async function fetchLinkedInProfile(accessToken: string): Promise<LinkedI
   });
 
   if (status !== 200 || !data?.sub) {
-    // Same reasoning as the exchange above: name LinkedIn's error fields, not
-    // the whole body. A 403 here usually means the app is missing the "Sign In
-    // with LinkedIn using OpenID Connect" product.
+
     const detail = [data?.error, data?.message, data?.error_description]
       .filter((v) => typeof v === "string" && v)
       .join(": ");
@@ -280,13 +248,7 @@ export async function fetchLinkedInProfile(accessToken: string): Promise<LinkedI
   };
 }
 
-/**
- * Ask LinkedIn to invalidate a token we are about to forget.
- *
- * Best-effort by design: the local row is deleted either way, because a user
- * who clicked Disconnect must end up disconnected even if LinkedIn is down.
- * Returns whether the call was accepted, only so the caller can log it.
- */
+
 export async function revokeLinkedInToken(accessToken: string): Promise<boolean> {
   try {
     const body = new URLSearchParams({
