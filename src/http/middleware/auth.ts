@@ -72,8 +72,10 @@ export function requireAuth(
   }
 }
 
-export const requireUnlocked = asyncHandler<AuthedRequest>(async (req, res, next) => {
+export const requireUnlocked = asyncHandler<AuthedRequest & { apiKeyId?: string }>(async (req, res, next) => {
   if (req.isDemo) return next();
+
+  if (req.apiKeyId) return next();
   const user = await User.findById(req.userId).select("lockedAt");
   if (user?.lockedAt) return res.status(423).json({ error: "screen is locked", locked: true });
   next();

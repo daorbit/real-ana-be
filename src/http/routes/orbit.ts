@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import { requireAuth, AuthedRequest } from "../middleware/auth.js";
+import { requireWorkspaceEitherAuth, type OrbitRequest } from "../middleware/orbit-access.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
   ORBIT_MODELS,
@@ -11,7 +11,6 @@ import {
   SUPPORTED_DOCUMENT_MIME,
   type OrbitTurn,
 } from "../../modules/orbit/index.js";
-import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { quotaSummary } from "../../modules/billing/quota.service.js";
 import { effectiveOrbitPlan, quantalogOrbitHost } from "../../modules/orbit/orbit-host.js";
 import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
@@ -30,7 +29,6 @@ import { checkImageDataUrl, cloudinaryConfigured, uploadImage } from "../../infr
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 
 const router = Router({ mergeParams: true });
-router.use(requireAuth);
 
 const WINDOW_MS = 60 * 60 * 1000;
 
@@ -47,7 +45,7 @@ const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 const SUPER_ADMIN_ONLY_MODELS = new Set(["claude"]);
 
-async function isSuperAdmin(req: AuthedRequest): Promise<boolean> {
+async function isSuperAdmin(req: OrbitRequest): Promise<boolean> {
   if (req.impersonatorId) return false;
   const user = await User.findById(req.userId).select("role");
   return user?.role === "super_admin";
@@ -112,8 +110,8 @@ async function remainingQuestions(workspaceId: string, plan: OrbitPlanEntry) {
 }
 
 
-router.get("/status", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res);
+router.get("/status", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
   const plan = await effectiveOrbitPlan(ws.id);
@@ -142,12 +140,12 @@ router.get("/status", async (req: AuthedRequest, res: Response) => {
   });
 });
 
-router.post("/ask", async (req: AuthedRequest, res: Response) => {
+router.post("/ask", async (req: OrbitRequest, res: Response) => {
   if (!orbitConfigured()) {
     return res.status(503).json({ error: "Orbit is not available on this server." });
   }
 
-  const ws = await requireWorkspace(req, res);
+  const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
   const plan = await effectiveOrbitPlan(ws.id);
@@ -263,23 +261,12 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
 
   const startedAt = Date.now();
 
-  /*
-   * Stops the model call when the browser hangs up.
-   *
-   * Pressing stop in the panel aborts the request, which closes the socket;
-   * without this the call it was paying for runs to completion and is charged
-   * for anyway, into a response nobody will read. Node fires `close` on the
-   * request for a normal finish too, so the listener is removed as soon as
-   * there is an answer — see the `finally` below.
-   */
+ 
   const hungUp = new AbortController();
   const onClose = () => hungUp.abort();
   req.on("close", onClose);
 
-  // The quota check and the spend both happen inside `askOrbit`, against the
-  // host — that is what keeps "never charge for an unanswered question" true
-  // for every embedder rather than depending on each route remembering it. A
-  // 402 comes back here as an ordinary failed result.
+
   let result;
   try {
     result = await askOrbit(question, {
@@ -301,10 +288,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     req.off("close", onClose);
   }
 
-  // Nobody is listening. Nothing was spent — `askOrbit` returns before the
-  // charge once its signal fires — and nothing is stored, because a question
-  // that was withdrawn is not part of the conversation. Writing to a closed
-  // socket would throw, so this returns without a response at all.
+
   if (hungUp.signal.aborted) return;
 
   if (!result.ok) {
@@ -318,12 +302,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
       });
     }
 
-    // Store the failure too, but only inside an existing thread. A question
-    // that could not be answered is the most useful row in the collection —
-    // it is a gap in the knowledge base or a bug, and keeping only successes
-    // hides both. Starting a brand new conversation from a failure is the one
-    // case worth skipping: it would fill the sidebar with threads that have
-    // nothing in them but an error.
+
     if (conversationId) {
       void recordExchange({
         workspaceId: ws.id,
@@ -342,10 +321,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     return res.status(result.status).json({ error: result.error });
   }
 
-  // A drawn image comes back as bytes, not a URL — uploaded here rather than
-  // handed to the browser raw, both so a saved thread has something to show
-  // later and so the response carries an ordinary URL like every other image
-  // in the app, not a multi-megabyte data URL on every answer.
+
   let generatedImageUrl: string | undefined;
   if (result.imageBase64) {
     try {
@@ -369,11 +345,6 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     }
   }
 
-  // Awaited, unlike the failure path, because the response carries the id back
-  // — the browser needs it to put the next question in the same thread. It
-  // never throws: `recordExchange` returns null on any storage problem and the
-  // answer goes out regardless, leaving the conversation in memory only, which
-  // is exactly how this route behaved before it stored anything.
   const savedId = await recordExchange({
     workspaceId: ws.id,
     userId: req.userId!,
@@ -400,14 +371,7 @@ router.post("/ask", async (req: AuthedRequest, res: Response) => {
     model: result.model,
     modelLabel: result.modelLabel,
     imageUrl: generatedImageUrl,
-    // Stored with the turn, not recomputed on read.
-    //
-    // This used to be deliberately unsaved, on the reasoning that a live table
-    // stays fresh — but nothing ever refetched it, so reopening a thread simply
-    // lost the table. Freshness was also the wrong goal: the prose above it
-    // quotes these exact figures, so replacing them with today's would leave an
-    // answer arguing with its own evidence. The panel captions it with the date
-    // it was taken instead.
+
     dataDigest: result.dataDigest,
     citations: result.citations,
     /** The thread this landed in. Null when it could not be stored. */
@@ -438,12 +402,12 @@ const EXPLAIN_HOURLY_LIMIT = 30;
  * to use Orbit indefinitely without it ever reaching the bill. The hourly rate
  * limit below still stands on top of the quota.
  */
-router.post("/explain", async (req: AuthedRequest, res: Response) => {
+router.post("/explain", async (req: OrbitRequest, res: Response) => {
   if (!orbitConfigured()) {
     return res.status(503).json({ error: "Orbit is not available on this server." });
   }
 
-  const ws = await requireWorkspace(req, res);
+  const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
   const plan = await effectiveOrbitPlan(ws.id);
@@ -510,8 +474,8 @@ router.post("/explain", async (req: AuthedRequest, res: Response) => {
 });
 
 
-router.get("/conversations", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res);
+router.get("/conversations", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
   const limit = Number(req.query.limit);
@@ -525,8 +489,8 @@ router.get("/conversations", async (req: AuthedRequest, res: Response) => {
 
 /** One conversation with its most recent page of turns, for restoring it into
  * the panel. `before` (a `seq` cursor) pages further back into older turns. */
-router.get("/conversations/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res);
+router.get("/conversations/:id", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
   const limit = Number(req.query.limit);
@@ -548,8 +512,8 @@ router.get("/conversations/:id", async (req: AuthedRequest, res: Response) => {
  * The generated title is the first question, which is frequently not what the
  * thread turned out to be about.
  */
-router.patch("/conversations/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res, "editor");
+router.patch("/conversations/:id", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res, "editor");
   if (!ws) return;
 
   const title = String(req.body?.title ?? "").trim();
@@ -567,8 +531,8 @@ router.patch("/conversations/:id", async (req: AuthedRequest, res: Response) => 
  * A soft delete — the turns stay so a complaint about a bad answer can still be
  * looked at, and the sweep that removes them for real is a separate job.
  */
-router.delete("/conversations/:id", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res, "editor");
+router.delete("/conversations/:id", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res, "editor");
   if (!ws) return;
 
   const removed = await deleteConversation(ws.id, String(req.params.id));
@@ -582,8 +546,8 @@ router.delete("/conversations/:id", async (req: AuthedRequest, res: Response) =>
 const MAX_BULK_DELETE = 100;
 
 /** Remove several conversations from the list at once. */
-router.post("/conversations/bulk-delete", async (req: AuthedRequest, res: Response) => {
-  const ws = await requireWorkspace(req, res, "editor");
+router.post("/conversations/bulk-delete", async (req: OrbitRequest, res: Response) => {
+  const ws = await requireWorkspaceEitherAuth(req, res, "editor");
   if (!ws) return;
 
   const ids = Array.isArray(req.body?.ids)

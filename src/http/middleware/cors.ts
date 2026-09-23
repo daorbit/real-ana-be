@@ -13,3 +13,12 @@ export const dashboardCors = cors({
     cb(new Error(`Origin not allowed: ${origin}`));
   },
 });
+
+export const orbitCors = cors({
+  origin: (origin, cb) => {
+    if (!origin || dashboardOrigins.includes(origin) || origin.startsWith("chrome-extension://")) {
+      return cb(null, true);
+    }
+    cb(new Error(`Origin not allowed: ${origin}`));
+  },
+});

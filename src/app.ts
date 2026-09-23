@@ -41,22 +41,16 @@ import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
-import { dashboardCors } from "./http/middleware/cors.js";
+import { dashboardCors, orbitCors } from "./http/middleware/cors.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
+import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
 
 const app = express();
-// Deployed behind a proxy (Vercel), so the socket address is the proxy's. Trust
-// the forwarding headers it sets, otherwise every caller looks like one IP and
-// per-address limits would be meaningless.
+
 app.set("trust proxy", true);
-// Avatar uploads carry a base64 image in the JSON body, which is far past the
-// 100kb default. The larger limit is scoped to that one path rather than applied
-// globally — every other endpoint takes small JSON, and a generous body limit on
-// all of them is free memory for anyone who wants to spend ours.
+
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
-// Same story for a LinkedIn post: the share card is a 1200x630 PNG drawn in the
-// browser and sent as a base64 data URL, since there is no hosted copy of it to
-// give LinkedIn instead.
+
 app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
 // And for a scheduled post, whose image arrives the same way before being
 // uploaded to Cloudinary.
@@ -77,23 +71,17 @@ app.use("/api/webhooks/razorpay", express.raw({ type: "application/json" }));
 // needs the exact bytes too — registered before the global json parser.
 app.use("/api/webhooks/cashfree", express.raw({ type: "application/json" }));
 app.use(express.json());
-// The tracker sends beacons as text/plain (an application/json beacon would
-// trigger a CORS preflight, which sendBeacon cannot perform). Parse those too.
+
 app.use(express.text({ type: ["text/plain", "text/*"] }));
 
 // Open CORS: tracker + collect run on arbitrary customer domains
 const openCors = cors({ origin: "*" });
 
-// Open CORS: a status ping carries nothing sensitive, and callers checking
-// "is the backend up" (curl, uptime monitors, this repo's own scripts) are
-// rarely the dashboard origin.
+
 app.get("/api/health", openCors, (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
 
-// A human landing on the bare API URL (checking a deploy in a browser) gets a
-// page instead of a JSON blob or a 404 — the same status the health check
-// reports, just readable.
 app.get("/", openCors, (_req: Request, res: Response) => {
   const uptime = process.uptime();
   const h = Math.floor(uptime / 3600);
@@ -267,7 +255,7 @@ app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
 // Mounted under a workspace because Orbit is now metered against one: the AI
 // tier, its question quota, and its addon credits all live on the workspace's
 // subscription, the same as audits and crawls.
-app.use("/api/workspaces/:wid/orbit", dashboardCors, requireUnlocked, orbitRoutes);
+app.use("/api/workspaces/:wid/orbit", orbitCors, requireApiKeyOrAuth, requireUnlocked, orbitRoutes);
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —
