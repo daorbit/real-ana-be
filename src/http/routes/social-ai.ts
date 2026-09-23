@@ -39,7 +39,11 @@ const CAPTION_TONES: Record<string, string> = {
     "line, then two or three short paragraphs (1-3 sentences each) each separated by a blank line so it reads " +
     "as distinct beats rather than one block. One or two well-placed emoji at most — as a bullet or accent, " +
     "never more than one per line. End with a blank line, then three to five specific, relevant hashtags on " +
-    "their own line (no generic filler tags like #business or #success).",
+    "their own line (no generic filler tags like #business or #success). LinkedIn's post field has no markdown " +
+    "or HTML — the only way anything reads as bold there is actual bold Unicode characters (𝗹𝗶𝗸𝗲 𝘁𝗵𝗶𝘀), " +
+    "the same characters LinkedIn's own bold toolbar button inserts. Use them, sparingly, on the hook line or " +
+    "one or two key phrases — never a whole sentence or paragraph in bold, and never use asterisks or `**` for " +
+    "emphasis, since LinkedIn shows those literally.",
   facebook:
     "Facebook: warm and conversational. A short hook line, a blank line, then one or two short paragraphs, each " +
     "separated by a blank line. Emoji welcome where they land naturally, not stacked. At most two specific " +
