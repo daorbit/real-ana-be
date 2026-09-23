@@ -212,6 +212,8 @@ app.use("/api/social/posts", dashboardCors, requireUnlocked, socialPostRoutes);
 // settings live, so it has to stay reachable while the screen is locked — the
 // individual data-bearing routes below are the ones the lock actually guards.
 app.use("/api/auth", dashboardCors, authRoutes);
+
+app.use("/api/workspaces/:wid/orbit", orbitCors, requireApiKeyOrAuth, requireUnlocked, orbitRoutes);
 // Before the general workspace router: both mount on the same prefix, and the
 // composer's two routes are specific paths that a later `/:wid/...` pattern
 // could otherwise shadow.
@@ -249,13 +251,6 @@ app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
 // plus account-level notices that belong to no workspace at all.
 app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
-// Orbit AI, the in-app assistant. The in-app support form it used to hand over
-// to is now a da-forms form embedded on the Help page, which posts to da-forms
-// rather than here.
-// Mounted under a workspace because Orbit is now metered against one: the AI
-// tier, its question quota, and its addon credits all live on the workspace's
-// subscription, the same as audits and crawls.
-app.use("/api/workspaces/:wid/orbit", orbitCors, requireApiKeyOrAuth, requireUnlocked, orbitRoutes);
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —
