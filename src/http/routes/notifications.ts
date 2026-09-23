@@ -34,7 +34,7 @@ function present(row: InstanceType<typeof Notification>) {
 }
 
 router.get("/unread-count", async (req: AuthedRequest, res: Response) => {
-  const count = await Notification.countDocuments({ userId: req.userId, seenAt: null });
+  const count = await Notification.countDocuments({ userId: req.userId, readAt: null });
   res.json({ count });
 });
 
