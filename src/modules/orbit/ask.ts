@@ -829,6 +829,52 @@ function anthropicBaseUrl(): string {
 }
 const MAX_WEB_SEARCHES = 3;
 
+/**
+ * Reassembles an Anthropic Messages SSE stream into the same
+ * `{ content, error }` shape the non-streaming endpoint returns, so the
+ * caller can handle either without knowing which one it got. Some Anthropic
+ * proxies stream even when a request never asked for it.
+ */
+function parseAnthropicSse(body: string): {
+  content?: { type: string; text: string; citations?: { url?: string; title?: string }[] }[];
+  error?: { message?: string };
+} {
+  let text = "";
+  const citations: { url?: string; title?: string }[] = [];
+  let error: { message?: string } | undefined;
+
+  for (const chunk of body.split("\n\n")) {
+    const dataLine = chunk
+      .split("\n")
+      .find((line) => line.startsWith("data:"));
+    if (!dataLine) continue;
+
+    let event: {
+      type?: string;
+      delta?: { type?: string; text?: string; citation?: { url?: string; title?: string } };
+      error?: { message?: string };
+    };
+    try {
+      event = JSON.parse(dataLine.slice(5).trim());
+    } catch {
+      continue;
+    }
+
+    if (event.type === "error") {
+      error = event.error;
+    } else if (event.type === "content_block_delta") {
+      if (event.delta?.type === "text_delta" && event.delta.text) {
+        text += event.delta.text;
+      } else if (event.delta?.type === "citations_delta" && event.delta.citation) {
+        citations.push(event.delta.citation);
+      }
+    }
+  }
+
+  if (error) return { error };
+  return { content: [{ type: "text", text, citations }] };
+}
+
 async function callAnthropic(
   model: OrbitModel,
   question: string,
@@ -862,15 +908,17 @@ async function callAnthropic(
   if (!res.ok) return res;
 
   try {
-    const data = JSON.parse(res.text) as {
-      content?: {
-        type?: string;
-        text?: string;
-        citations?: { url?: string; title?: string }[];
-      }[];
-      error?: { message?: string };
-      stop_reason?: string;
-    };
+    const data = res.text.trimStart().startsWith("event:")
+      ? parseAnthropicSse(res.text)
+      : (JSON.parse(res.text) as {
+          content?: {
+            type?: string;
+            text?: string;
+            citations?: { url?: string; title?: string }[];
+          }[];
+          error?: { message?: string };
+          stop_reason?: string;
+        });
 
     if (data.error) {
       console.error(`[orbit] claude upstream error; body: ${res.text.slice(0, 500)}`);
