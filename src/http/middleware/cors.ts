@@ -16,6 +16,7 @@ export const dashboardCors = cors({
 
 export const orbitCors = cors({
   origin: (origin, cb) => {
+    console.log("[orbitCors] origin received:", JSON.stringify(origin));
     if (!origin || dashboardOrigins.includes(origin) || origin.startsWith("chrome-extension://")) {
       return cb(null, true);
     }
