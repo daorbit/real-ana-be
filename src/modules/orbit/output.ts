@@ -1,49 +1,14 @@
-/**
- * Cleaning up what a language model actually returns.
- *
- * Asking five models for the same JSON shape gets five dialects of it. Some
- * honour a schema; some wrap the object in a ``` fence; some emit the fence
- * with a language tag; some answer in prose and ignore the shape entirely; and
- * some — the failure this module was written for — return a JSON object whose
- * `reply` is *itself* a serialised JSON object, so one parse leaves the user
- * reading `{"reply":"To fix your SEO…` in the chat window.
- *
- * The rule throughout: never lose a usable answer over its formatting. A model
- * that returned prose instead of the agreed envelope has still answered the
- * question, and showing that text beats showing an error. Only genuinely empty
- * output is a failure worth passing back.
- *
- * Kept apart from `orbit.ts` because none of this is Orbit-specific — it is the
- * general problem of taking text from a model and getting a known shape out of
- * it, and it is the kind of code that earns its own tests.
- */
 
-/** How many times to unwrap a reply that turns out to be more JSON. */
 const MAX_UNWRAP_DEPTH = 3;
 
-/**
- * Strip a markdown code fence, if the whole string is wrapped in one.
- *
- * Models that cannot be schema-constrained routinely answer with
- * ```json\n{…}\n``` — the fence is formatting they were never asked for, and it
- * is what makes an otherwise valid object fail to parse.
- *
- * Only a fence enclosing the entire string is removed. A fence *inside* an
- * answer is a code sample the user asked for, and stripping it would corrupt
- * the very thing they need to copy.
- */
+
 export function stripCodeFence(text: string): string {
   const trimmed = text.trim();
   const fenced = /^```[a-z]*\s*\n?([\s\S]*?)\n?\s*```$/i.exec(trimmed);
   return fenced ? fenced[1].trim() : trimmed;
 }
 
-/**
- * Parse JSON that may be fenced, or may not be JSON at all.
- *
- * Returns null rather than throwing: a model returning prose is an expected
- * outcome here, not an exception.
- */
+
 export function parseLooseJson<T = unknown>(text: string): T | null {
   const cleaned = stripCodeFence(text);
   if (!cleaned) return null;
@@ -55,26 +20,7 @@ export function parseLooseJson<T = unknown>(text: string): T | null {
   }
 }
 
-/**
- * Find an envelope a model appended to its own prose answer.
- *
- * The failure this exists for: a weaker model writes the answer as prose, then —
- * because it was asked for an object — restates the whole thing as a fenced
- * ```json block underneath. Neither branch of `sanitiseModelAnswer` caught it:
- * the string as a whole is not JSON, and the fence does not wrap the *entire*
- * string, so `stripCodeFence` leaves it alone and the user reads the answer
- * followed by a slab of raw JSON.
- *
- * The block is the model's own restatement, not content the user asked for, so
- * the right move is to prefer it and drop the prose — it carries the
- * `suggestions` the prose version lost.
- *
- * Deliberately narrow. Only a fenced object at the very *end* of the text
- * qualifies, and only one that actually has a usable `reply`. A JSON sample in
- * the middle of an answer is something the user needs to copy, and an arbitrary
- * object at the end (a config example closing an answer) is not an envelope
- * either — both are left where they are.
- */
+
 export function extractTrailingEnvelope(
   text: string,
 ): { envelope: Record<string, unknown>; prose: string } | null {
@@ -92,21 +38,7 @@ export function extractTrailingEnvelope(
   return { envelope, prose: trimmed.slice(0, match.index).trim() };
 }
 
-/**
- * Resolve a field that may have been serialised more than once.
- *
- * The case this exists for: a model is asked for `{reply, suggestions}`, and
- * returns `{"reply": "{\"reply\":\"…\",\"suggestions\":[]}"}` — the object it
- * was asked for, wrapped in another copy of itself. Parsing once gives a string
- * that is still JSON, and rendering it puts raw JSON in front of the user.
- *
- * So the value is unwrapped while it keeps looking like the envelope, up to a
- * small depth. Bounded because an unbounded loop on hostile input is how a
- * cleanup routine becomes a denial of service, and three is already more
- * nesting than any real model produces.
- *
- * `key` names the field to keep descending into.
- */
+
 export function unwrapNested(
   value: unknown,
   key: string,
@@ -142,10 +74,6 @@ export function salvageTruncatedEnvelope(text: string): string | null {
   const opening = /^\{\s*(?:"reply"|'reply'|reply)\s*:\s*"/.exec(trimmed);
   if (!opening) return null;
 
-  // Walk the string body, honouring escapes, until the closing quote or the end
-  // of what we were given. Scanning by hand rather than by regex because the
-  // whole point is that this input is malformed: `[\s\S]*?"` would stop at the
-  // first escaped quote inside the answer and truncate it further.
   let out = "";
   for (let i = opening[0].length; i < trimmed.length; i++) {
     const ch = trimmed[i];
@@ -188,9 +116,17 @@ export function reformatSearchDump(text: string): string {
   return sawMatch ? out : text;
 }
 
+
+export function linkifyBareUrls(text: string): string {
+  return text.replace(
+    /(^|[^[])\b([A-Za-z0-9][\w .'-]{0,80}?)\s*\((https?:\/\/[^\s()]+)\)/g,
+    (match, before: string, label: string, url: string) => `${before}[${label.trim()}](${url})`,
+  );
+}
+
 export function tidyProse(text: string): string {
   return (
-    reformatSearchDump(stripCodeFence(text))
+    linkifyBareUrls(reformatSearchDump(stripCodeFence(text)))
       // Zero-width space, joiner, non-joiner, BOM. Invisible, and they break
       // search, copy and word wrapping wherever they land.
       .replace(/[​-‍﻿]/g, "")
@@ -327,12 +263,6 @@ function splitTrailingQuestions(reply: string): { reply: string; questions: stri
     if (body && items.length > 0) return { reply: body, questions: items.slice(0, 3) };
   }
 
-  // The single-line form: an unstructured model (Cloudflare's Llama does this)
-  // ends the reply with `suggestions: first thing, second thing` on one line,
-  // comma-separated, rather than a JSON array or a bulleted block. Neither the
-  // headed regex above (it wants a newline after the colon) nor the
-  // question-mark line-walker below catches it, so the chips come back empty
-  // and the junk line stays stuck on the end of the answer.
   const inlineList =
     /\n[ \t]*(?:\*\*)?(?:suggestions?|follow[- ]?ups?(?:\s+questions?)?|related questions?)(?:\*\*)?[ \t]*:[ \t]*(.+?)[ \t]*$/i.exec(
       reply,
