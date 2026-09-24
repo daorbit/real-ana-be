@@ -14,11 +14,21 @@ export const dashboardCors = cors({
   },
 });
 
-export const orbitCors = cors({
-  origin: (origin, cb) => {
-    if (!origin || dashboardOrigins.includes(origin) || origin.startsWith("chrome-extension://")) {
-      return cb(null, true);
-    }
-    cb(new Error(`Origin not allowed: ${origin}`));
-  },
+function sameHost(origin: string, host: string | undefined): boolean {
+  try {
+    return Boolean(host) && new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+export const orbitCors = cors((req, cb) => {
+  const origin = req.headers.origin;
+  const allowed =
+    !origin ||
+    dashboardOrigins.includes(origin) ||
+    origin.startsWith("chrome-extension://") ||
+    sameHost(origin, req.headers.host);
+  if (allowed) return cb(null, { origin: true });
+  cb(new Error(`Origin not allowed: ${origin}`));
 });

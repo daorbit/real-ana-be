@@ -8,6 +8,7 @@ import { Marker, MARKER_KINDS } from "../../modules/analytics/models/Marker.js";
 import { GoogleLocation } from "../../modules/reviews/models/GoogleLocation.js";
 import { GoogleReview } from "../../modules/reviews/models/GoogleReview.js";
 import { requireApiKey, ApiKeyRequest } from "../middleware/api-key.js";
+import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { computeStats, parseFilters } from "../../modules/analytics/stats.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
 
@@ -17,6 +18,24 @@ router.use(requireApiKey);
 const BASE = process.env.PUBLIC_BASE_URL ?? "http://localhost:4000";
 const snippetFor = (siteId: string) =>
   `<script async src="${BASE}/tracker.js" data-site="${siteId}"></script>`;
+
+router.get("/me", async (req: ApiKeyRequest, res: Response) => {
+  const [workspace, key] = await Promise.all([
+    Workspace.findById(req.workspaceId).select("name"),
+    ApiKey.findById(req.apiKeyId).select("name prefix expiresAt createdAt"),
+  ]);
+  if (!workspace || !key) return res.status(401).json({ error: "invalid API key" });
+  res.json({
+    workspace: { id: workspace.id, name: workspace.get("name") },
+    key: {
+      id: key.id,
+      name: key.get("name"),
+      prefix: key.get("prefix"),
+      createdAt: key.get("createdAt"),
+      expiresAt: key.get("expiresAt") ?? null,
+    },
+  });
+});
 
 // ---- Projects ----
 router.post("/projects", async (req: ApiKeyRequest, res: Response) => {
