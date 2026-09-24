@@ -528,7 +528,7 @@ router.post("/login", async (req, res) => {
             event: "login.locked",
             lockedUntil: until,
           },
-          link: "/app/settings",
+          link: "/app/settings/security",
         });
         return res.status(423).json({
           error: "too many failed attempts — this account is temporarily locked",
@@ -983,7 +983,7 @@ router.post("/me/password", requireAuth, blockDemoWrites, async (req: AuthedRequ
       type: "security.alert",
       userId: String(user._id),
       data: { what: "Your password was changed.", event: "password.changed" },
-      link: "/app/settings",
+      link: "/app/settings/security",
     });
 
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
@@ -1215,7 +1215,7 @@ router.post("/reset-password", async (req, res) => {
       type: "security.alert",
       userId: String(user._id),
       data: { what: "Your password was reset.", event: "password.reset" },
-      link: "/app/settings",
+      link: "/app/settings/security",
     });
 
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>

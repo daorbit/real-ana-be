@@ -43,7 +43,7 @@ export function twoFactorBackupCodesHtml(codes: string[], name?: string): string
      ${warningPanel(
        `<strong style="color:${C.text}">Keep these somewhere safe</strong> — anyone with a code and your password can sign in. They won't be shown again after this email, in your account or anywhere else.`,
      )}
-     ${line(`Turn two-factor authentication off any time from <a href="${LINKS.app}/app/settings" style="color:${THEMES[BANNER].accentDeep};font-weight:600;text-decoration:none">Settings</a> if you no longer want it.`, 18)}
+     ${line(`Turn two-factor authentication off any time from <a href="${LINKS.app}/app/settings/security" style="color:${THEMES[BANNER].accentDeep};font-weight:600;text-decoration:none">Settings</a> if you no longer want it.`, 18)}
      ${signOff()}`,
   );
 }
@@ -57,7 +57,7 @@ ${codes.join("\n")}
 
 Keep these somewhere safe — anyone with a code and your password can sign in. They won't be shown again after this email, in your account or anywhere else.
 
-Turn two-factor authentication off any time from Settings if you no longer want it: ${LINKS.app}/app/settings
+Turn two-factor authentication off any time from Settings if you no longer want it: ${LINKS.app}/app/settings/security
 
 The Quantalog Team`;
 }

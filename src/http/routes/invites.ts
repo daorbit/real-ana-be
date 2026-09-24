@@ -116,7 +116,7 @@ router.post("/:token/accept", requireAuth, async (req: AuthedRequest, res: Respo
         workspaceName: workspace.get("name"),
         role: invite.role,
       },
-      link: `/app/settings/members`,
+      link: "/app/members",
     });
   }
 
