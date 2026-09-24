@@ -11,7 +11,8 @@ import {
 
 const BANNER: BannerName = "install-snippet";
 
-const SNIPPET = '<script async src="https://cdn.quantalog.daorbit.in/q.js" data-site="YOUR-SITE-ID"></script>';
+const TRACKER_ORIGIN = (process.env.PUBLIC_BASE_URL || "https://quantalog-be.daorbit.in").replace(/\/+$/, "");
+const SNIPPET = `<script async src="${TRACKER_ORIGIN}/tracker.js" data-site="YOUR-SITE-ID"></script>`;
 
 const STEPS = [
   { title: "Paste it before &lt;/head&gt;", body: "Anywhere in the head works. One line, on every page you want counted." },
