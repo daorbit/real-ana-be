@@ -40,6 +40,7 @@ import orbitRoutes from "./http/routes/orbit.js";
 import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
+import { renderStatusPage } from "./http/views/status-page.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 import { dashboardCors, orbitCors } from "./http/middleware/cors.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
@@ -83,44 +84,7 @@ app.get("/api/health", openCors, (_req: Request, res: Response) => {
 });
 
 app.get("/", openCors, (_req: Request, res: Response) => {
-  const uptime = process.uptime();
-  const h = Math.floor(uptime / 3600);
-  const m = Math.floor((uptime % 3600) / 60);
-  const s = Math.floor(uptime % 60);
-  res.type("html").send(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Quantalog API</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light dark; }
-  body {
-    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: #0b0e14; color: #e6e6e6;
-  }
-  .card {
-    padding: 2.5rem 3rem; border-radius: 12px; background: #12161f;
-    border: 1px solid #232838; text-align: center; min-width: 280px;
-  }
-  .dot {
-    display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-    background: #3fd97f; margin-right: 8px; box-shadow: 0 0 8px #3fd97f;
-  }
-  h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 0.5rem; }
-  p { margin: 0.25rem 0; color: #9aa3b2; font-size: 0.9rem; }
-  code { color: #6fb3ff; }
-</style>
-</head>
-<body>
-  <div class="card">
-    <h1><span class="dot"></span>Quantalog API is running</h1>
-    <p>uptime: ${h}h ${m}m ${s}s</p>
-    <p>health check: <code>/api/health</code></p>
-  </div>
-</body>
-</html>`);
+  res.type("html").send(renderStatusPage(process.uptime()));
 });
 
 // Public tracking surface (any origin)
