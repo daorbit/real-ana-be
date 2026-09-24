@@ -8,7 +8,11 @@ import {
   NOTIFICATION_TYPES,
   isNotificationType,
 } from "../../modules/notifications/types.js";
-import { vapidPublicKey, pushConfigured } from "../../modules/notifications/push.service.js";
+import {
+  vapidPublicKey,
+  pushConfigured,
+  sendTestPush,
+} from "../../modules/notifications/push.service.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 
 const router = Router();
@@ -200,6 +204,26 @@ router.post("/push/subscribe", async (req: AuthedRequest, res: Response) => {
   );
 
   res.json({ ok: true });
+});
+
+router.post("/push/test", async (req: AuthedRequest, res: Response) => {
+  if (!pushConfigured()) {
+    return res.status(503).json({ error: "Push notifications aren't set up on this server." });
+  }
+  const result = await sendTestPush(String(req.userId));
+  if (!result.subscriptions) {
+    return res.status(409).json({
+      error: "This account has no registered browsers. Turn browser notifications off and on again.",
+      ...result,
+    });
+  }
+  if (!result.sent) {
+    return res.status(502).json({
+      error: "The push service rejected the notification. Turn browser notifications off and on again.",
+      ...result,
+    });
+  }
+  res.json(result);
 });
 
 router.post("/push/unsubscribe", async (req: AuthedRequest, res: Response) => {
