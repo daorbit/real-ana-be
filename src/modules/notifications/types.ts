@@ -58,7 +58,7 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
   /** Someone invited you to a workspace. You may not be a member yet — that is the point. */
   "invite.received": { scope: "user", minRole: "viewer", optional: true, push: true, mailedElsewhere: true },
   /** Someone you invited accepted. Goes to the admins who can act on the membership. */
-  "invite.accepted": { scope: "workspace", minRole: "admin", optional: true, push: false, mailedElsewhere: false },
+  "invite.accepted": { scope: "workspace", minRole: "admin", optional: true, push: true, mailedElsewhere: false },
   /**
    * Your access to a workspace was withdrawn.
    *
@@ -67,14 +67,14 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
    * Not optional: silently losing access is the kind of thing someone has to
    * be told, or they are left staring at a workspace that has vanished.
    */
-  "member.removed": { scope: "user", minRole: "viewer", optional: false, push: false, mailedElsewhere: false },
+  "member.removed": { scope: "user", minRole: "viewer", optional: false, push: true, mailedElsewhere: false },
   /** Your role in a workspace changed — what you may do changed with it. */
-  "role.changed": { scope: "user", minRole: "viewer", optional: false, push: false, mailedElsewhere: false },
+  "role.changed": { scope: "user", minRole: "viewer", optional: false, push: true, mailedElsewhere: false },
   /** A scheduled report finished and is ready to read. */
-  "report.ready": { scope: "workspace", minRole: "viewer", optional: true, push: false, mailedElsewhere: true },
+  "report.ready": { scope: "workspace", minRole: "viewer", optional: true, push: true, mailedElsewhere: true },
   /** A paid plan is within days of lapsing. Whoever can renew it should hear this. */
   "plan.ending": { scope: "workspace", minRole: "admin", optional: true, push: true, mailedElsewhere: true },
-  "payment.received": { scope: "workspace", minRole: "admin", optional: true, push: false, mailedElsewhere: true },
+  "payment.received": { scope: "workspace", minRole: "admin", optional: true, push: true, mailedElsewhere: true },
   /**
    * A charge did not go through.
    *
@@ -87,9 +87,9 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
    * and it is not optional — past the cap, data is being dropped.
    */
   "quota.exceeded": { scope: "workspace", minRole: "admin", optional: false, push: true, mailedElsewhere: true },
-  "seo.audit.done": { scope: "workspace", minRole: "viewer", optional: true, push: false, mailedElsewhere: false },
+  "seo.audit.done": { scope: "workspace", minRole: "viewer", optional: true, push: true, mailedElsewhere: false },
   /** A tracked competitor overtook you, or you them, on a watched keyword. */
-  "seo.rank.changed": { scope: "workspace", minRole: "viewer", optional: true, push: false, mailedElsewhere: false },
+  "seo.rank.changed": { scope: "workspace", minRole: "viewer", optional: true, push: true, mailedElsewhere: false },
   /**
    * The site stopped sending events.
    *
@@ -99,15 +99,15 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
    */
   "tracking.stopped": { scope: "workspace", minRole: "editor", optional: false, push: true, mailedElsewhere: true },
   /** A scheduled post did not go out. Whoever scheduled it thinks it did. */
-  "social.post.failed": { scope: "workspace", minRole: "editor", optional: false, push: false, mailedElsewhere: true },
+  "social.post.failed": { scope: "workspace", minRole: "editor", optional: false, push: true, mailedElsewhere: true },
   /** A new lead came in through a capture form — same shape as a submission. */
-  "lead.captured": { scope: "workspace", minRole: "editor", optional: true, push: false, mailedElsewhere: true },
+  "lead.captured": { scope: "workspace", minRole: "editor", optional: true, push: true, mailedElsewhere: true },
 
   "admin.message": { scope: "user", minRole: "viewer", optional: true, push: true, mailedElsewhere: true },
 
   "security.alert": { scope: "user", minRole: "viewer", optional: false, push: true, mailedElsewhere: true },
 
-  "form.submission": { scope: "workspace", minRole: "editor", optional: true, push: false, mailedElsewhere: true },
+  "form.submission": { scope: "workspace", minRole: "editor", optional: true, push: true, mailedElsewhere: true },
 };
 
 export function isNotificationType(value: unknown): value is NotificationType {

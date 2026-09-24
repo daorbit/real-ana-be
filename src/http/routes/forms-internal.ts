@@ -240,7 +240,7 @@ router.post(
       type: "form.submission",
       workspaceId: req.params.workspaceId,
       data: { formTitle, formId, answers },
-      link: "/app/leads",
+      link: "/app/lead-capture",
     });
 
     res.status(204).end();

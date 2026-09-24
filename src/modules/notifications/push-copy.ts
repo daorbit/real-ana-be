@@ -106,7 +106,6 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
     }
 
     case "seo.rank.changed": {
-      // `push: false` in the registry — present for exhaustiveness.
       const keyword = str(data, "keyword", "a tracked keyword");
       return { title: "Ranking changed", body: `Your ranking for ${keyword} changed.` };
     }
@@ -117,7 +116,6 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
     }
 
     case "social.post.failed": {
-      // `push: false` in the registry — present for exhaustiveness.
       const channel = str(data, "channel");
       return {
         title: "Post didn't go out",
@@ -128,7 +126,6 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
     }
 
     case "lead.captured": {
-      // `push: false` in the registry — present for exhaustiveness.
       const form = str(data, "formTitle", "a form");
       return { title: "New lead", body: `A new lead came in on ${form}.` };
     }
@@ -150,8 +147,6 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
     }
 
     case "form.submission": {
-      // Never actually sent — the type's `push: false` in the registry stops
-      // `deliver` from calling this. Present for the switch's exhaustiveness.
       const form = str(data, "formTitle", "a form");
       return { title: "New submission", body: `A new response came in on ${form}.` };
     }
