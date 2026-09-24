@@ -33,7 +33,7 @@ import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { Project } from "../../modules/workspace/models/Project.js";
-import { generateKey } from "../middleware/api-key.js";
+import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
@@ -1117,7 +1117,11 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const { name } = req.body ?? {};
+  const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 80) : "";
+  const expiresAt = expiryFromDays(req.body?.expiresInDays);
+  if (expiresAt === undefined) {
+    return res.status(400).json({ error: "expiresInDays must be one of 7, 30, 60, 90, 180, 365 or null" });
+  }
   const { raw, keyHash, prefix } = generateKey();
   const key = await ApiKey.create({
     workspaceId: ws.id,
@@ -1125,6 +1129,7 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
     name: name || "Default key",
     keyHash,
     prefix,
+    expiresAt,
   });
   res.status(201).json({
     id: key.id,
@@ -1132,6 +1137,7 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
     prefix: key.prefix,
     key: raw,
     createdAt: key.createdAt,
+    expiresAt: key.get("expiresAt") ?? null,
   });
 });
 
@@ -1140,9 +1146,9 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false }).sort({
-    createdAt: -1,
-  });
+  const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false })
+    .sort({ createdAt: -1 })
+    .populate<{ userId: { name?: string; email?: string } | null }>("userId", "name email");
   res.json(
     keys.map((k) => ({
       id: k.id,
@@ -1150,8 +1156,24 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
       prefix: k.prefix,
       lastUsedAt: k.lastUsedAt,
       createdAt: k.get("createdAt"),
+      expiresAt: k.get("expiresAt") ?? null,
+      createdBy: k.userId ? { name: k.userId.name, email: k.userId.email } : null,
     })),
   );
+});
+
+router.patch("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const name = typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 80) : "";
+  if (!name) return res.status(400).json({ error: "name is required" });
+  const key = await ApiKey.findOneAndUpdate(
+    { _id: req.params.kid, workspaceId: access.workspace.id, revoked: false },
+    { name },
+    { new: true },
+  );
+  if (!key) return res.status(404).json({ error: "key not found" });
+  res.json({ id: key.id, name: key.name });
 });
 
 // Revoke a key

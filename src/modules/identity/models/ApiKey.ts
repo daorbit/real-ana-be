@@ -8,6 +8,7 @@ const apiKeySchema = new Schema(
     keyHash: { type: String, required: true, index: true }, // sha256 of raw key
     prefix: { type: String, required: true }, // e.g. sk_live_ab12 (for display)
     lastUsedAt: { type: Date },
+    expiresAt: { type: Date, default: null },
     revoked: { type: Boolean, default: false },
   },
   { timestamps: true }

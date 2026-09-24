@@ -259,6 +259,7 @@ router.get(
       showPoweredBy: brand.showPoweredBy,
       poweredByLabel: brand.poweredByLabel,
       editable: brand.editable,
+      header: brand.header,
     });
   }),
 );

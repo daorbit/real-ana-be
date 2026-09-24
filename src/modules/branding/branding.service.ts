@@ -13,7 +13,11 @@ export const DEFAULT_BRAND_LOGO =
 export const POWERED_BY_LABEL =
   process.env.BRAND_POWERED_BY?.trim() || "Powered by Quantalog Forms";
 
- 
+export interface BrandHeader {
+  name?: string;
+  logoUrl?: string;
+}
+
 export interface ResolvedBranding {
   name: string;
   logoUrl?: string;
@@ -27,6 +31,7 @@ export interface ResolvedBranding {
   /** Whether Orbit's watermark is left on pictures it draws for this
    * workspace. True unless a Pro workspace has switched it off. */
   watermarkAiImages: boolean;
+  header: BrandHeader | null;
 
   defaults: { name: string; logoUrl?: string };
   /** What the workspace stored, regardless of whether its plan honours it. */
@@ -75,6 +80,10 @@ export async function resolveBranding(workspaceId: string): Promise<ResolvedBran
     // A workspace that isn't Pro can't have switched it off, whatever it has
     // stored from a previous Pro period — same rule as `showPoweredBy`.
     watermarkAiImages: !editable || storedView.watermarkAiImages,
+    header:
+      editable && (storedView.name || storedView.logoUrl)
+        ? { name: storedView.name, logoUrl: storedView.logoUrl }
+        : null,
     defaults: { name: DEFAULT_BRAND_NAME, logoUrl: DEFAULT_BRAND_LOGO },
     stored: storedView,
   };
