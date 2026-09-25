@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Response, NextFunction, Request } from "express";
 import { nanoid } from "nanoid";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
+import { recordKeyRequest, watchKeyFailures } from "../../modules/identity/api-key-usage.service.js";
 
 export interface ApiKeyRequest extends Request {
   workspaceId?: string;
@@ -39,7 +40,7 @@ export async function findActiveKey(raw: string): Promise<KeyLookup> {
   if (expiresAt && expiresAt.getTime() <= Date.now()) {
     return { ok: false, error: "API key has expired" };
   }
-  ApiKey.updateOne({ _id: key._id }, { lastUsedAt: new Date() }).catch(() => {});
+  await recordKeyRequest(key.id, String(key.workspaceId));
   return { ok: true, key };
 }
 
@@ -58,5 +59,6 @@ export async function requireApiKey(
 
   req.workspaceId = String(found.key.workspaceId);
   req.apiKeyId = found.key.id;
+  watchKeyFailures(res, found.key.id);
   next();
 }

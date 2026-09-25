@@ -34,6 +34,7 @@ import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey, expiryFromDays } from "../middleware/api-key.js";
+import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
@@ -1155,11 +1156,19 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
       name: k.name,
       prefix: k.prefix,
       lastUsedAt: k.lastUsedAt,
+      requestCount: k.get("requestCount") ?? 0,
       createdAt: k.get("createdAt"),
       expiresAt: k.get("expiresAt") ?? null,
       createdBy: k.userId ? { name: k.userId.name, email: k.userId.email } : null,
     })),
   );
+});
+
+router.get("/:wid/keys/usage", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const usage = await workspaceKeyUsage(access.workspace.id, parseUsageWindow(req.query.days));
+  res.json(usage);
 });
 
 router.patch("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {

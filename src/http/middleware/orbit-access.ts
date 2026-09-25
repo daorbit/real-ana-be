@@ -1,6 +1,7 @@
 import { Response, NextFunction } from "express";
 import { requireAuth, AuthedRequest } from "./auth.js";
 import { findActiveKey } from "./api-key.js";
+import { watchKeyFailures } from "../../modules/identity/api-key-usage.service.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
@@ -33,6 +34,7 @@ export async function requireApiKeyOrAuth(
   req.apiKeyId = key.id;
   req.apiKeyWorkspaceId = String(key.workspaceId);
   req.userId = String(workspace.get("userId"));
+  watchKeyFailures(res, key.id);
   next();
 }
 
