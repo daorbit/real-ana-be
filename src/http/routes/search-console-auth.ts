@@ -62,7 +62,7 @@ function closePopup(res: Response, status: string, reason?: string, diagnostic?:
     failureTitle: "Could not connect Search Console",
     message: (reason && REASON_TEXT[reason]) || "Something went wrong connecting Search Console.",
     diagnostic,
-    fallbackUrl: `${studioBase()}/app/seo?section=search&${params.toString()}`,
+    fallbackUrl: `${studioBase()}/app/search-console?${params.toString()}`,
   });
 }
 
