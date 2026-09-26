@@ -68,6 +68,46 @@ function clearAttemptFailures(key: string): void {
   attemptCounters.delete(key);
 }
 
+async function confirmOwnership(
+  user: InstanceType<typeof User>,
+  body: { password?: unknown; code?: unknown },
+): Promise<boolean> {
+  if (user.passwordHash) return bcrypt.compare(String(body.password ?? ""), user.passwordHash);
+
+  const code = String(body.code ?? "").replace(/\s+/g, "");
+  if (user.totpEnabled && user.totpSecretEnc && /^\d{6}$/.test(code)) {
+    const secret = decryptSecret(user.totpSecretEnc);
+    if (secret && (await verifyTotpCode(code, secret))) return true;
+  }
+  if (user.pinHash && /^\d{4}$/.test(code)) return bcrypt.compare(code, user.pinHash);
+  return false;
+}
+
+async function rejectUnconfirmed(
+  user: InstanceType<typeof User>,
+  body: { password?: unknown; code?: unknown },
+  res: Response,
+): Promise<boolean> {
+  const throttleKey = `confirm:${user.id}`;
+  const throttledUntil = checkAttemptThrottle(throttleKey);
+  if (throttledUntil) {
+    res.status(429).json({
+      error: "too many attempts — try again later",
+      retryAt: new Date(throttledUntil).toISOString(),
+    });
+    return true;
+  }
+
+  if (await confirmOwnership(user, body)) {
+    clearAttemptFailures(throttleKey);
+    return false;
+  }
+
+  recordAttemptFailure(throttleKey);
+  res.status(401).json({ error: user.passwordHash ? "incorrect password" : "incorrect PIN or code" });
+  return true;
+}
+
 /**
  * The demo session's stand-in user id.
  *
@@ -669,18 +709,17 @@ router.post("/2fa/enable", requireAuth, async (req: AuthedRequest, res) => {
   }
 });
 
-/** Turns 2FA off. Requires the current password — this is a security
+/** Turns 2FA off. Requires the current password (or, on a social-only
+ * account, the PIN or a live code) — this is a security
  * downgrade, and a stolen session token alone should not be enough to
  * quietly remove the second factor protecting the account it belongs to. */
 router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
   try {
-    const { password } = req.body ?? {};
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "not found" });
     if (!user.totpEnabled) return res.status(400).json({ error: "2fa is already off" });
 
-    if (!user.passwordHash || !(await bcrypt.compare(password ?? "", user.passwordHash)))
-      return res.status(401).json({ error: "incorrect password" });
+    if (await rejectUnconfirmed(user, req.body ?? {}, res)) return;
 
     user.totpEnabled = false;
     user.totpSecretEnc = "";
@@ -753,16 +792,13 @@ router.post("/me/screen-lock/enable", requireAuth, blockDemoWrites, async (req: 
   }
 });
 
-/** Turns the screen lock off. Requires the current password, same security-
- * downgrade rule as disabling 2FA. */
+/** Turns the screen lock off. Same confirmation rule as disabling 2FA. */
 router.post("/me/screen-lock/disable", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
   try {
-    const { password } = req.body ?? {};
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "not found" });
 
-    if (!user.passwordHash || !(await bcrypt.compare(password ?? "", user.passwordHash)))
-      return res.status(401).json({ error: "incorrect password" });
+    if (await rejectUnconfirmed(user, req.body ?? {}, res)) return;
 
     user.screenLockEnabled = false;
     user.lockedAt = null;
