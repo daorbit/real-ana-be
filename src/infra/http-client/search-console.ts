@@ -88,6 +88,56 @@ export async function listSearchConsoleSites(accessToken: string): Promise<Searc
     }));
 }
 
+export type SearchConsoleSitemap = {
+  path: string;
+  type: string;
+  isIndex: boolean;
+  isPending: boolean;
+  lastSubmitted: string | null;
+  lastDownloaded: string | null;
+  errors: number;
+  warnings: number;
+  submitted: number;
+  indexed: number;
+};
+
+export async function listSearchConsoleSitemaps(
+  accessToken: string,
+  siteUrl: string,
+): Promise<SearchConsoleSitemap[]> {
+  const data = await googleGetJson<{
+    sitemap?: Array<{
+      path?: string;
+      type?: string;
+      isSitemapsIndex?: boolean;
+      isPending?: boolean;
+      lastSubmitted?: string;
+      lastDownloaded?: string;
+      errors?: string | number;
+      warnings?: string | number;
+      contents?: Array<{ type?: string; submitted?: string | number; indexed?: string | number }>;
+    }>;
+  }>(`${WEBMASTERS_API}/sites/${encodeURIComponent(siteUrl)}/sitemaps`, accessToken);
+
+  return (data.sitemap ?? [])
+    .filter((entry) => entry.path)
+    .map((entry) => {
+      const contents = entry.contents ?? [];
+      return {
+        path: String(entry.path),
+        type: String(entry.type ?? ""),
+        isIndex: Boolean(entry.isSitemapsIndex),
+        isPending: Boolean(entry.isPending),
+        lastSubmitted: entry.lastSubmitted ?? null,
+        lastDownloaded: entry.lastDownloaded ?? null,
+        errors: Number(entry.errors ?? 0),
+        warnings: Number(entry.warnings ?? 0),
+        submitted: contents.reduce((sum, c) => sum + Number(c.submitted ?? 0), 0),
+        indexed: contents.reduce((sum, c) => sum + Number(c.indexed ?? 0), 0),
+      };
+    });
+}
+
 export type SearchAnalyticsDimension = "date" | "query" | "page" | "country" | "device";
 
 export type SearchAnalyticsRow = {

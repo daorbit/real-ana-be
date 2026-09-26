@@ -2,14 +2,16 @@ import { SearchConsoleConnection } from "./models/SearchConsoleConnection.js";
 import { SearchConsoleCache } from "./models/SearchConsoleCache.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
+  listSearchConsoleSitemaps,
   querySearchAnalytics,
   refreshSearchConsoleToken,
   type SearchAnalyticsRow,
+  type SearchConsoleSitemap,
 } from "../../infra/http-client/search-console.js";
 import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const TOP_ROWS = 50;
+const TOP_ROWS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const PERFORMANCE_RANGES = [7, 28, 90, 180, 365, 480] as const;
@@ -114,6 +116,13 @@ export function isUsablePermission(permissionLevel: string): boolean {
 
 type Metrics = { clicks: number; impressions: number; ctr: number; position: number };
 
+export type SiteRef = {
+  workspaceId: string;
+  siteId: string;
+  connectionId: string;
+  propertyUrl: string;
+};
+
 export type SearchPerformance = {
   propertyUrl: string;
   days: number;
@@ -127,8 +136,43 @@ export type SearchPerformance = {
   fetchedAt: string;
 };
 
+export const BREAKDOWN_DIMENSIONS = ["query", "page", "country", "device"] as const;
+export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
+
+export type SearchBreakdown = {
+  dimension: BreakdownDimension;
+  days: number;
+  startDate: string;
+  endDate: string;
+  rows: Array<Metrics & { key: string; previousClicks: number | null; previousPosition: number | null }>;
+  fetchedAt: string;
+};
+
+export type SearchSitemaps = {
+  sitemaps: SearchConsoleSitemap[];
+  fetchedAt: string;
+};
+
+const ROW_LIMITS: Record<BreakdownDimension, number> = {
+  query: 1000,
+  page: 1000,
+  country: 250,
+  device: 10,
+};
+
 function isoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function periods(days: number) {
+  const end = new Date(Date.now() - DAY_MS);
+  const start = new Date(end.getTime() - (days - 1) * DAY_MS);
+  const previousEnd = new Date(start.getTime() - DAY_MS);
+  const previousStart = new Date(previousEnd.getTime() - (days - 1) * DAY_MS);
+  return {
+    current: { startDate: isoDay(start), endDate: isoDay(end) },
+    previous: { startDate: isoDay(previousStart), endDate: isoDay(previousEnd) },
+  };
 }
 
 function metricsOf(row?: SearchAnalyticsRow): Metrics {
@@ -140,75 +184,116 @@ function metricsOf(row?: SearchAnalyticsRow): Metrics {
   };
 }
 
-export async function getSearchPerformance(input: {
-  workspaceId: string;
-  siteId: string;
-  connectionId: string;
-  propertyUrl: string;
-  days: number;
-  refresh?: boolean;
-}): Promise<SearchPerformance> {
-  const key = `performance:${input.propertyUrl}:${input.days}`;
+async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
+  const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).lean();
+  if (hit && hit.expiresAt.getTime() > Date.now()) return hit.data as T;
 
-  if (!input.refresh) {
-    const cached = await SearchConsoleCache.findOne({ siteId: input.siteId, key }).lean();
-    if (cached && cached.expiresAt.getTime() > Date.now()) return cached.data as SearchPerformance;
-  }
-
-  const accessToken = await usableSearchConsoleToken(input.connectionId);
-
-  const end = new Date(Date.now() - DAY_MS);
-  const start = new Date(end.getTime() - (input.days - 1) * DAY_MS);
-  const previousEnd = new Date(start.getTime() - DAY_MS);
-  const previousStart = new Date(previousEnd.getTime() - (input.days - 1) * DAY_MS);
-
-  const range = { startDate: isoDay(start), endDate: isoDay(end) };
-
-  const [totals, previous, daily, queries, pages] = await Promise.all([
-    querySearchAnalytics(accessToken, input.propertyUrl, range),
-    querySearchAnalytics(accessToken, input.propertyUrl, {
-      startDate: isoDay(previousStart),
-      endDate: isoDay(previousEnd),
-    }),
-    querySearchAnalytics(accessToken, input.propertyUrl, { ...range, dimensions: ["date"] }),
-    querySearchAnalytics(accessToken, input.propertyUrl, {
-      ...range,
-      dimensions: ["query"],
-      rowLimit: TOP_ROWS,
-    }),
-    querySearchAnalytics(accessToken, input.propertyUrl, {
-      ...range,
-      dimensions: ["page"],
-      rowLimit: TOP_ROWS,
-    }),
-  ]);
-
-  const result: SearchPerformance = {
-    propertyUrl: input.propertyUrl,
-    days: input.days,
-    startDate: range.startDate,
-    endDate: range.endDate,
-    totals: metricsOf(totals[0]),
-    previous: previous.length ? metricsOf(previous[0]) : null,
-    daily: daily
-      .map((row) => ({ date: row.keys[0] ?? "", ...metricsOf(row) }))
-      .sort((a, b) => a.date.localeCompare(b.date)),
-    queries: queries.map((row) => ({ query: row.keys[0] ?? "", ...metricsOf(row) })),
-    pages: pages.map((row) => ({ page: row.keys[0] ?? "", ...metricsOf(row) })),
-    fetchedAt: new Date().toISOString(),
-  };
-
+  const data = await load();
   await SearchConsoleCache.findOneAndUpdate(
-    { siteId: input.siteId, key },
+    { siteId: site.siteId, key },
     {
-      workspaceId: input.workspaceId,
-      siteId: input.siteId,
+      workspaceId: site.workspaceId,
+      siteId: site.siteId,
       key,
-      data: result,
+      data,
       expiresAt: new Date(Date.now() + CACHE_TTL_MS),
     },
     { upsert: true },
   );
+  return data;
+}
 
-  return result;
+export async function clearSiteCache(siteId: string): Promise<void> {
+  await SearchConsoleCache.deleteMany({ siteId });
+}
+
+export function getSearchPerformance(site: SiteRef, days: number): Promise<SearchPerformance> {
+  return cached(site, `performance:${site.propertyUrl}:${days}`, async () => {
+    const accessToken = await usableSearchConsoleToken(site.connectionId);
+    const range = periods(days);
+
+    const [totals, previous, daily, queries, pages] = await Promise.all([
+      querySearchAnalytics(accessToken, site.propertyUrl, range.current),
+      querySearchAnalytics(accessToken, site.propertyUrl, range.previous),
+      querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, dimensions: ["date"] }),
+      querySearchAnalytics(accessToken, site.propertyUrl, {
+        ...range.current,
+        dimensions: ["query"],
+        rowLimit: TOP_ROWS,
+      }),
+      querySearchAnalytics(accessToken, site.propertyUrl, {
+        ...range.current,
+        dimensions: ["page"],
+        rowLimit: TOP_ROWS,
+      }),
+    ]);
+
+    return {
+      propertyUrl: site.propertyUrl,
+      days,
+      startDate: range.current.startDate,
+      endDate: range.current.endDate,
+      totals: metricsOf(totals[0]),
+      previous: previous.length ? metricsOf(previous[0]) : null,
+      daily: daily
+        .map((row) => ({ date: row.keys[0] ?? "", ...metricsOf(row) }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      queries: queries.map((row) => ({ query: row.keys[0] ?? "", ...metricsOf(row) })),
+      pages: pages.map((row) => ({ page: row.keys[0] ?? "", ...metricsOf(row) })),
+      fetchedAt: new Date().toISOString(),
+    };
+  });
+}
+
+export function getSearchBreakdown(
+  site: SiteRef,
+  dimension: BreakdownDimension,
+  days: number,
+): Promise<SearchBreakdown> {
+  return cached(site, `breakdown:${dimension}:${site.propertyUrl}:${days}`, async () => {
+    const accessToken = await usableSearchConsoleToken(site.connectionId);
+    const range = periods(days);
+    const rowLimit = ROW_LIMITS[dimension];
+
+    const [current, previous] = await Promise.all([
+      querySearchAnalytics(accessToken, site.propertyUrl, {
+        ...range.current,
+        dimensions: [dimension],
+        rowLimit,
+      }),
+      querySearchAnalytics(accessToken, site.propertyUrl, {
+        ...range.previous,
+        dimensions: [dimension],
+        rowLimit,
+      }),
+    ]);
+
+    const before = new Map(previous.map((row) => [row.keys[0] ?? "", row]));
+
+    return {
+      dimension,
+      days,
+      startDate: range.current.startDate,
+      endDate: range.current.endDate,
+      rows: current.map((row) => {
+        const key = row.keys[0] ?? "";
+        const earlier = before.get(key);
+        return {
+          key,
+          ...metricsOf(row),
+          previousClicks: earlier ? earlier.clicks : null,
+          previousPosition: earlier ? earlier.position : null,
+        };
+      }),
+      fetchedAt: new Date().toISOString(),
+    };
+  });
+}
+
+export function getSearchSitemaps(site: SiteRef): Promise<SearchSitemaps> {
+  return cached(site, `sitemaps:${site.propertyUrl}`, async () => {
+    const accessToken = await usableSearchConsoleToken(site.connectionId);
+    const sitemaps = await listSearchConsoleSitemaps(accessToken, site.propertyUrl);
+    return { sitemaps, fetchedAt: new Date().toISOString() };
+  });
 }

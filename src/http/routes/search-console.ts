@@ -9,13 +9,20 @@ import {
 } from "../../infra/http-client/search-console.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
+  BREAKDOWN_DIMENSIONS,
   clampRange,
+  clearSiteCache,
   explainSearchConsoleError,
+  getSearchBreakdown,
   getSearchPerformance,
+  getSearchSitemaps,
   isUsablePermission,
   propertyMatchesDomain,
   usableSearchConsoleToken,
+  type BreakdownDimension,
+  type SiteRef,
 } from "../../modules/seo/search-console.service.js";
+import { AppError, badRequest } from "../../shared/errors/index.js";
 import { currentPlan } from "../../modules/billing/quota.service.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
@@ -29,6 +36,7 @@ router.use(requireAuth);
 router.use(blockDemoWrites);
 
 function googleFailure(res: Response, err: unknown) {
+  if (err instanceof AppError) return res.status(err.status).json({ error: err.message });
   const status = err instanceof GoogleApiError ? err.status : 502;
   return res.status(status).json({
     error: explainSearchConsoleError(err),
@@ -190,41 +198,72 @@ router.delete(
   }),
 );
 
-async function sendPerformance(req: AuthedRequest, res: Response, days: unknown, refresh: boolean) {
+async function linkedSite(req: AuthedRequest, res: Response): Promise<SiteRef | null> {
   const found = await resolveSite(req);
-  if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-  if (!(await requirePaid(res, found.ws.id))) return;
+  if (siteRefused(found)) {
+    res.status(found.status).json({ error: found.error });
+    return null;
+  }
+  if (!(await requirePaid(res, found.ws.id))) return null;
 
   const siteId = String(found.site.get("siteId"));
   const link = await SearchConsoleProperty.findOne({ siteId });
-  if (!link) return res.status(404).json({ error: "No Search Console property is linked to this site" });
+  if (!link) {
+    res.status(404).json({ error: "No Search Console property is linked to this site" });
+    return null;
+  }
 
   const connection = await SearchConsoleConnection.findOne({ workspaceId: found.ws.id });
-  if (!connection) return res.status(404).json({ error: "Search Console is not connected" });
-
-  try {
-    const performance = await getSearchPerformance({
-      workspaceId: found.ws.id,
-      siteId,
-      connectionId: String(connection._id),
-      propertyUrl: String(link.get("propertyUrl")),
-      days: clampRange(days),
-      refresh,
-    });
-    res.json(performance);
-  } catch (err) {
-    googleFailure(res, err);
+  if (!connection) {
+    res.status(404).json({ error: "Search Console is not connected" });
+    return null;
   }
+
+  return {
+    workspaceId: String(found.ws.id),
+    siteId,
+    connectionId: String(connection._id),
+    propertyUrl: String(link.get("propertyUrl")),
+  };
+}
+
+function withLinkedSite(load: (site: SiteRef, req: AuthedRequest) => Promise<unknown>) {
+  return asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const site = await linkedSite(req, res);
+    if (!site) return;
+    try {
+      res.json(await load(site, req));
+    } catch (err) {
+      googleFailure(res, err);
+    }
+  });
 }
 
 router.get(
   "/:wid/sites/:siteId/search-console/performance",
-  asyncHandler((req: AuthedRequest, res: Response) => sendPerformance(req, res, req.query.days, false)),
+  withLinkedSite((site, req) => getSearchPerformance(site, clampRange(req.query.days))),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/breakdown",
+  withLinkedSite((site, req) => {
+    const dimension = String(req.query.dimension ?? "query") as BreakdownDimension;
+    if (!BREAKDOWN_DIMENSIONS.includes(dimension)) throw badRequest("unknown dimension");
+    return getSearchBreakdown(site, dimension, clampRange(req.query.days));
+  }),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/sitemaps",
+  withLinkedSite((site) => getSearchSitemaps(site)),
 );
 
 router.post(
-  "/:wid/sites/:siteId/search-console/performance/refresh",
-  asyncHandler((req: AuthedRequest, res: Response) => sendPerformance(req, res, req.body?.days, true)),
+  "/:wid/sites/:siteId/search-console/refresh",
+  withLinkedSite(async (site, req) => {
+    await clearSiteCache(site.siteId);
+    return getSearchPerformance(site, clampRange(req.body?.days));
+  }),
 );
 
 export default router;
