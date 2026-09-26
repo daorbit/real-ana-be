@@ -867,6 +867,10 @@ router.post("/google", async (req, res) => {
       await user.save();
     }
 
+    if (user.totpEnabled) {
+      return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
+    }
+
     const token = signToken(user.id);
     res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
   } catch (e) {

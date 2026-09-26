@@ -24,7 +24,9 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { decryptSecret, encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
-import { requireAuth, blockDemoWrites, signToken, jwtSecret, AuthedRequest } from "../middleware/auth.js";
+import {
+  requireAuth, blockDemoWrites, signToken, signPending2faToken, jwtSecret, AuthedRequest,
+} from "../middleware/auth.js";
 import { badRequest, forbidden } from "../../shared/errors/index.js";
 
 /**
@@ -222,11 +224,12 @@ function escapeHtml(value: string): string {
  * Where a sign-in attempt returns to: the login page, which knows how to store
  * a token and route onward.
  */
-function loginUrl(status: string, detail?: string, token?: string): string {
+function loginUrl(status: string, detail?: string, token?: string, pendingToken?: string): string {
   const base = studioBase();
   const params = new URLSearchParams({ linkedinLogin: status });
   if (detail) params.set("reason", detail);
   if (token) params.set("token", token);
+  if (pendingToken) params.set("pendingToken", pendingToken);
   return `${base}/login?${params.toString()}`;
 }
 
@@ -533,11 +536,13 @@ router.get(
     // the verified email so an existing password or Google account is linked
     // rather than duplicated, and create one only if neither matches.
     let issuedToken: string | null = null;
+    let pending2faToken: string | null = null;
     if (mode === "login") {
       try {
         const resolved = await resolveLoginUser(profile);
         userId = resolved.id;
-        issuedToken = signToken(resolved.id);
+        if (resolved.totpEnabled) pending2faToken = signPending2faToken(resolved.id);
+        else issuedToken = signToken(resolved.id);
       } catch (e) {
         console.error("[linkedin] login failed:", e instanceof Error ? e.message : e);
         return res.redirect(loginUrl("error", "login_failed"));
@@ -589,8 +594,10 @@ router.get(
       // On a login flow the sign-in itself succeeded; failing to store the
       // posting token must not cost the user their session, so they are still
       // let in and simply arrive without LinkedIn connected for posting.
-      if (!issuedToken) return closePopup(res, "error", "save_failed", detail);
+      if (!issuedToken && !pending2faToken) return closePopup(res, "error", "save_failed", detail);
     }
+
+    if (pending2faToken) return res.redirect(loginUrl("2fa", undefined, undefined, pending2faToken));
 
     // A login hands the freshly signed token to the app, which stores it and
     // completes the sign-in. This is the one place a token travels in a URL:
