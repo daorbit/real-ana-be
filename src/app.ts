@@ -21,6 +21,8 @@ import shareRoutes from "./http/routes/share.js";
 import seoPublicRoutes from "./http/routes/seo-public.js";
 import plansPublicRoutes from "./http/routes/plans-public.js";
 import seoRoutes from "./http/routes/seo.js";
+import searchConsoleRoutes from "./http/routes/search-console.js";
+import searchConsoleAuthRoutes from "./http/routes/search-console-auth.js";
 import competitorRoutes from "./http/routes/competitors.js";
 import competitorBriefRoutes from "./http/routes/competitor-brief.js";
 import billingRoutes from "./http/routes/billing.js";
@@ -167,6 +169,8 @@ app.use("/auth/instagram", instagramRoutes);
 
 app.use("/api/auth/google-business", googleReviewsRoutes);
 
+app.use("/api/auth/search-console", searchConsoleAuthRoutes);
+
 // Scheduled social posts. Scoped to the signed-in user rather than a workspace
 // prefix: a schedule publishes with that user's own LinkedIn token.
 app.use("/api/social/posts", dashboardCors, requireUnlocked, socialPostRoutes);
@@ -190,6 +194,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, formsTokenRoutes);
 // SEO audits hang off the same prefix; kept in their own router so the
 // workspace module stays about workspaces.
 app.use("/api/workspaces", dashboardCors, requireUnlocked, seoRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, searchConsoleRoutes);
 // Competitor tracking keeps the `/seo/competitors` paths but lives in its own
 // router: it is the only place the server fetches a host the user typed, and
 // that is worth being able to read in one file.

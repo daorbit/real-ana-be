@@ -32,6 +32,7 @@ import {
 } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
 import { badRequest, notFound } from "../../shared/errors/index.js";
+import { renderOAuthPopup, studioBase } from "../oauth-popup.js";
 
  
 
@@ -50,10 +51,6 @@ type StatePayload = {
   nonce: string;
   kind: "google-business-oauth";
 };
-
-function studioBase(): string {
-  return (process.env.STUDIO_BASE_URL ?? "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
-}
 
 /** What went wrong, in words, for the reasons a user can actually act on. */
 const REASON_TEXT: Record<string, string> = {
@@ -74,86 +71,27 @@ const REASON_TEXT: Record<string, string> = {
   save_failed: "The connection could not be saved. Please try again.",
 };
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/**
- * End the flow from inside the popup, without loading the studio into it.
- *
- * The popup is a disposable window whose only job is to carry the consent
- * screen. Redirecting it to the studio makes it render a second full copy of
- * the application just to read one query parameter, and on a failure strands
- * the user on an error URL that looks like the app broke.
- *
- * A few lines of HTML instead: post the outcome to the opener, then close. The
- * fallback matters as much as the happy path — with no opener the flow ran as a
- * full-page navigation (a blocked popup), and the only sensible destination is
- * back into the app.
- */
 function closePopup(
   res: Response,
   status: string,
   detail?: string,
-  /**
-   * Our own diagnostic text, in small print.
-   *
-   * Only ever a message this server wrote — never a Google response body, a
-   * token, or a secret. It exists because the person looking at this page
-   * cannot see the server log.
-   */
   diagnostic?: string,
 ): void {
   const ok = status === "connected";
   const params = new URLSearchParams({ google: status });
   if (!ok && detail) params.set("reason", detail);
-  const target = `${studioBase()}/?${params.toString()}`;
-  const message = (detail && REASON_TEXT[detail]) || "Something went wrong connecting Google.";
 
-  res.type("html").send(`<!doctype html>
-<meta charset="utf-8">
-<title>Google Business Profile</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<body style="margin:0;font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;
-             display:grid;place-items:center;min-height:100vh;background:#f6f7f9;color:#1c1e21">
-  <div style="max-width:340px;padding:28px;text-align:center">
-    ${ok
-      ? `<p style="font-size:15px;font-weight:600;margin:0">Google connected</p>
-         <p style="color:#65676b;margin:8px 0 0">You can close this window.</p>`
-      : `<p style="font-size:15px;font-weight:600;margin:0">Could not connect Google</p>
-         <p style="color:#65676b;margin:8px 0 16px">${escapeHtml(message)}</p>
-         ${diagnostic
-           ? `<p style="color:#8a8d91;font-size:12px;margin:0 0 16px;word-break:break-word">
-                ${escapeHtml(diagnostic)}
-              </p>`
-           : ""}
-         <button onclick="window.close()"
-           style="border:1px solid #ccd0d5;background:#fff;border-radius:6px;
-                  padding:7px 16px;font:inherit;cursor:pointer">Close</button>`}
-  </div>
-</body>
-<script>
-  (function () {
-    var msg = {
-      source: "quantalog-google-reviews",
-      status: ${JSON.stringify(status)},
-      reason: ${JSON.stringify(detail ?? "")}
-    };
-    if (window.opener && window.opener !== window) {
-      // The opener validates the origin, so it is named explicitly here.
-      window.opener.postMessage(msg, ${JSON.stringify(studioBase())});
-      // Only a success closes itself. A failure stays on screen with the
-      // reason: a window that opens and vanishes tells the user nothing.
-      if (${JSON.stringify(ok)}) window.close();
-    } else {
-      window.location.replace(${JSON.stringify(target)});
-    }
-  })();
-</script>`);
+  renderOAuthPopup(res, {
+    source: "quantalog-google-reviews",
+    title: "Google Business Profile",
+    status,
+    reason: detail,
+    successTitle: "Google connected",
+    failureTitle: "Could not connect Google",
+    message: (detail && REASON_TEXT[detail]) || "Something went wrong connecting Google.",
+    diagnostic,
+    fallbackUrl: `${studioBase()}/?${params.toString()}`,
+  });
 }
 
 /**
