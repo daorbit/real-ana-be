@@ -156,6 +156,86 @@ export type SearchAnalyticsFilter = {
   expression: string;
 };
 
+export type SearchUrlInspectionIssue = {
+  severity: string;
+  message: string;
+  type?: string;
+};
+
+export type SearchUrlInspection = {
+  indexStatus: string;
+  coverageState?: string;
+  pageFetchState?: string;
+  robotsTxtState?: string;
+  lastCrawled?: string | null;
+  issues: SearchUrlInspectionIssue[];
+};
+
+export async function inspectSearchConsoleUrl(
+  accessToken: string,
+  siteUrl: string,
+  pageUrl: string,
+): Promise<SearchUrlInspection> {
+  const data = await googlePostJson<{
+    inspectionResult?: {
+      inspectionStatus?: string;
+      indexStatusResult?: {
+        coverageState?: string;
+        indexingState?: string;
+        pageFetchState?: string;
+        robotsTxtState?: string;
+        lastCrawlTime?: string;
+      };
+      issues?: Array<{
+        severity?: string;
+        message?: string;
+        type?: string;
+      }>;
+    };
+  }>(
+    "https://searchconsole.googleapis.com/v1/urlInspection.index:inspect",
+    accessToken,
+    { inspectionUrl: pageUrl, siteUrl },
+  );
+
+  const inspection = data.inspectionResult ?? {};
+  const index = inspection.indexStatusResult ?? {};
+  const rawStatus = index.coverageState ?? index.indexingState ?? inspection.inspectionStatus ?? "unknown";
+  const issues = (inspection.issues ?? [])
+    .filter((issue) => issue.message)
+    .map((issue) => ({
+      severity: String(issue.severity ?? "info"),
+      message: String(issue.message),
+      type: issue.type ? String(issue.type) : undefined,
+    }));
+
+  const indexStatus =
+    rawStatus === "INDEXED"
+      ? "Indexed in Google search"
+      : rawStatus === "PARTIALLY_INDEXED"
+        ? "Partially indexed"
+        : rawStatus === "URL_NOT_IN_INDEX"
+          ? "Not indexed"
+          : rawStatus === "DISALLOWED"
+            ? "Blocked by robots or directives"
+            : rawStatus === "CRAWLED"
+              ? "Crawled by Google"
+              : rawStatus === "notFound"
+                ? "Page not found"
+                : rawStatus === "unknown"
+                  ? "No recent index signal"
+                  : rawStatus.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return {
+    indexStatus,
+    coverageState: index.coverageState,
+    pageFetchState: index.pageFetchState,
+    robotsTxtState: index.robotsTxtState,
+    lastCrawled: index.lastCrawlTime ?? null,
+    issues,
+  };
+}
+
 export async function querySearchAnalytics(
   accessToken: string,
   siteUrl: string,

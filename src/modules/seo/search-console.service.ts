@@ -3,6 +3,7 @@ import { SearchConsoleConnection } from "./models/SearchConsoleConnection.js";
 import { SearchConsoleCache } from "./models/SearchConsoleCache.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
+  inspectSearchConsoleUrl,
   listSearchConsoleSitemaps,
   querySearchAnalytics,
   refreshSearchConsoleToken,
@@ -211,6 +212,12 @@ export type SearchDrilldown = {
   previous: Metrics | null;
   daily: Array<Metrics & { date: string }>;
   related: Array<Metrics & { key: string }>;
+  indexStatus?: string;
+  coverageState?: string;
+  pageFetchState?: string;
+  robotsTxtState?: string;
+  lastCrawled?: string | null;
+  issues?: Array<{ severity: string; message: string; type?: string }>;
   fetchedAt: string;
 };
 
@@ -493,7 +500,7 @@ export function getSearchDrilldown(
     const filters = [{ dimension, operator: "equals" as const, expression: value }];
     const counterpart = dimension === "query" ? "page" : "query";
 
-    const [totals, previous, daily, related] = await Promise.all([
+    const [totals, previous, daily, related, inspection] = await Promise.all([
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.previous, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters, dimensions: ["date"] }),
@@ -504,6 +511,7 @@ export function getSearchDrilldown(
         dimensions: [counterpart],
         rowLimit: 50,
       }),
+      dimension === "page" ? inspectSearchConsoleUrl(accessToken, site.propertyUrl, value) : Promise.resolve(null),
     ]);
 
     return {
@@ -517,6 +525,12 @@ export function getSearchDrilldown(
         .map((row) => ({ date: row.keys[0] ?? "", ...metricsOf(row) }))
         .sort((a, b) => a.date.localeCompare(b.date)),
       related: related.map((row) => ({ key: row.keys[0] ?? "", ...metricsOf(row) })),
+      indexStatus: inspection?.indexStatus,
+      coverageState: inspection?.coverageState,
+      pageFetchState: inspection?.pageFetchState,
+      robotsTxtState: inspection?.robotsTxtState,
+      lastCrawled: inspection?.lastCrawled ?? null,
+      issues: inspection?.issues ?? [],
       fetchedAt: new Date().toISOString(),
     };
   });
