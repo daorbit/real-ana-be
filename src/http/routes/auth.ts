@@ -661,6 +661,12 @@ router.post("/2fa/verify", async (req, res) => {
 
 router.post("/2fa/setup", requireAuth, async (req: AuthedRequest, res) => {
   try {
+    if (req.isDemo || req.body?.sandbox === true) {
+      const secret = generateTotpSecret();
+      const qrDataUrl = await QRCode.toDataURL(totpKeyUri(demoUser().email, secret));
+      return res.json({ secret, qrDataUrl });
+    }
+
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ error: "not found" });
     if (user.totpEnabled) return res.status(400).json({ error: "2fa is already on" });
