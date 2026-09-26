@@ -132,6 +132,24 @@ export function clampType(value: unknown): SearchType {
   return (SEARCH_TYPES as readonly string[]).includes(String(value)) ? (value as SearchType) : "web";
 }
 
+export type SearchIndexSummaryPage = {
+  url: string;
+  indexStatus: string;
+  pageFetchState?: string;
+  lastCrawled?: string | null;
+  issues: Array<{ severity: string; message: string; type?: string }>;
+};
+
+export type SearchIndexSummary = {
+  totalPages: number;
+  indexed: number;
+  notIndexed: number;
+  blocked: number;
+  issueCount: number;
+  pages: SearchIndexSummaryPage[];
+  fetchedAt: string;
+};
+
 export type SearchPerformance = {
   propertyUrl: string;
   days: number;
@@ -143,6 +161,7 @@ export type SearchPerformance = {
   daily: Array<Metrics & { date: string }>;
   queries: Array<Metrics & { query: string }>;
   pages: Array<Metrics & { page: string }>;
+  indexingSummary?: SearchIndexSummary;
   fetchedAt: string;
 };
 
@@ -312,6 +331,35 @@ export function getSearchPerformance(site: SiteRef, days: number, type: SearchTy
       }),
     ]);
 
+    const indexedPages = await Promise.all(
+      [...new Map(pages.map((row) => [row.keys[0] ?? "", row])).values()]
+        .map((row) => row.keys[0] ?? "")
+        .filter(Boolean)
+        .slice(0, 10)
+        .map(async (pageUrl) => {
+          try {
+            const inspection = await inspectSearchConsoleUrl(accessToken, site.propertyUrl, pageUrl);
+            return {
+              url: pageUrl,
+              indexStatus: inspection.indexStatus,
+              pageFetchState: inspection.pageFetchState,
+              lastCrawled: inspection.lastCrawled,
+              issues: inspection.issues,
+            };
+          } catch {
+            return {
+              url: pageUrl,
+              indexStatus: "No recent index signal",
+              issues: [],
+            };
+          }
+        }),
+    );
+
+    const indexed = indexedPages.filter((page) => page.indexStatus.includes("Indexed")).length;
+    const notIndexed = indexedPages.filter((page) => page.indexStatus.includes("Not indexed")).length;
+    const blocked = indexedPages.filter((page) => /(Blocked|Disallowed|robots|directives)/i.test(page.indexStatus)).length;
+
     return {
       propertyUrl: site.propertyUrl,
       days,
@@ -325,6 +373,15 @@ export function getSearchPerformance(site: SiteRef, days: number, type: SearchTy
         .sort((a, b) => a.date.localeCompare(b.date)),
       queries: queries.map((row) => ({ query: row.keys[0] ?? "", ...metricsOf(row) })),
       pages: pages.map((row) => ({ page: row.keys[0] ?? "", ...metricsOf(row) })),
+      indexingSummary: {
+        totalPages: indexedPages.length,
+        indexed,
+        notIndexed,
+        blocked,
+        issueCount: indexedPages.filter((page) => page.issues.length > 0).length,
+        pages: indexedPages,
+        fetchedAt: new Date().toISOString(),
+      },
       fetchedAt: new Date().toISOString(),
     };
   });
