@@ -190,34 +190,41 @@ router.delete(
   }),
 );
 
+async function sendPerformance(req: AuthedRequest, res: Response, days: unknown, refresh: boolean) {
+  const found = await resolveSite(req);
+  if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+  if (!(await requirePaid(res, found.ws.id))) return;
+
+  const siteId = String(found.site.get("siteId"));
+  const link = await SearchConsoleProperty.findOne({ siteId });
+  if (!link) return res.status(404).json({ error: "No Search Console property is linked to this site" });
+
+  const connection = await SearchConsoleConnection.findOne({ workspaceId: found.ws.id });
+  if (!connection) return res.status(404).json({ error: "Search Console is not connected" });
+
+  try {
+    const performance = await getSearchPerformance({
+      workspaceId: found.ws.id,
+      siteId,
+      connectionId: String(connection._id),
+      propertyUrl: String(link.get("propertyUrl")),
+      days: clampRange(days),
+      refresh,
+    });
+    res.json(performance);
+  } catch (err) {
+    googleFailure(res, err);
+  }
+}
+
 router.get(
   "/:wid/sites/:siteId/search-console/performance",
-  asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-    if (!(await requirePaid(res, found.ws.id))) return;
+  asyncHandler((req: AuthedRequest, res: Response) => sendPerformance(req, res, req.query.days, false)),
+);
 
-    const siteId = String(found.site.get("siteId"));
-    const link = await SearchConsoleProperty.findOne({ siteId });
-    if (!link) return res.status(404).json({ error: "No Search Console property is linked to this site" });
-
-    const connection = await SearchConsoleConnection.findOne({ workspaceId: found.ws.id });
-    if (!connection) return res.status(404).json({ error: "Search Console is not connected" });
-
-    try {
-      const performance = await getSearchPerformance({
-        workspaceId: found.ws.id,
-        siteId,
-        connectionId: String(connection._id),
-        propertyUrl: String(link.get("propertyUrl")),
-        days: clampRange(req.query.days),
-        refresh: req.query.refresh === "1",
-      });
-      res.json(performance);
-    } catch (err) {
-      googleFailure(res, err);
-    }
-  }),
+router.post(
+  "/:wid/sites/:siteId/search-console/performance/refresh",
+  asyncHandler((req: AuthedRequest, res: Response) => sendPerformance(req, res, req.body?.days, true)),
 );
 
 export default router;
