@@ -171,6 +171,22 @@ export type SearchUrlInspection = {
   issues: SearchUrlInspectionIssue[];
 };
 
+function normalizeGoogleValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    for (const key of ["state", "text", "value", "date", "time", "isoDate", "formatted", "seconds"]) {
+      const candidate = obj[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate;
+      if (typeof candidate === "number") return String(candidate);
+    }
+    if (typeof obj.seconds === "number") return new Date(obj.seconds * 1000).toISOString();
+  }
+  return "";
+}
+
 export async function inspectSearchConsoleUrl(
   accessToken: string,
   siteUrl: string,
@@ -178,13 +194,13 @@ export async function inspectSearchConsoleUrl(
 ): Promise<SearchUrlInspection> {
   const data = await googlePostJson<{
     inspectionResult?: {
-      inspectionStatus?: string;
+      inspectionStatus?: unknown;
       indexStatusResult?: {
-        coverageState?: string;
-        indexingState?: string;
-        pageFetchState?: string;
-        robotsTxtState?: string;
-        lastCrawlTime?: string;
+        coverageState?: unknown;
+        indexingState?: unknown;
+        pageFetchState?: unknown;
+        robotsTxtState?: unknown;
+        lastCrawlTime?: unknown;
       };
       issues?: Array<{
         severity?: string;
@@ -200,7 +216,12 @@ export async function inspectSearchConsoleUrl(
 
   const inspection = data.inspectionResult ?? {};
   const index = inspection.indexStatusResult ?? {};
-  const rawStatus = index.coverageState ?? index.indexingState ?? inspection.inspectionStatus ?? "unknown";
+  const statusState = normalizeGoogleValue(
+    (inspection.inspectionStatus as { state?: unknown } | undefined)?.state ?? inspection.inspectionStatus,
+  );
+  const rawStatus = normalizeGoogleValue(
+    index.coverageState ?? index.indexingState ?? (statusState || "unknown"),
+  );
   const issues = (inspection.issues ?? [])
     .filter((issue) => issue.message)
     .map((issue) => ({
@@ -222,16 +243,16 @@ export async function inspectSearchConsoleUrl(
               ? "Crawled by Google"
               : rawStatus === "notFound"
                 ? "Page not found"
-                : rawStatus === "unknown"
+                : rawStatus === "unknown" || rawStatus === ""
                   ? "No recent index signal"
                   : rawStatus.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   return {
     indexStatus,
-    coverageState: index.coverageState,
-    pageFetchState: index.pageFetchState,
-    robotsTxtState: index.robotsTxtState,
-    lastCrawled: index.lastCrawlTime ?? null,
+    coverageState: normalizeGoogleValue(index.coverageState) || undefined,
+    pageFetchState: normalizeGoogleValue(index.pageFetchState) || undefined,
+    robotsTxtState: normalizeGoogleValue(index.robotsTxtState) || undefined,
+    lastCrawled: normalizeGoogleValue(index.lastCrawlTime) || null,
     issues,
   };
 }
