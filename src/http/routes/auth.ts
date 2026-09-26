@@ -730,6 +730,10 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
     user.totpEnabled = false;
     user.totpSecretEnc = "";
     user.totpBackupCodeHashes = [];
+    if (user.screenLockEnabled && !user.pinHash) {
+      user.screenLockEnabled = false;
+      user.lockedAt = null;
+    }
     await user.save();
 
     res.json({ ok: true });
