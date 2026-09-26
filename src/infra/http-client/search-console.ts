@@ -148,6 +148,14 @@ export type SearchAnalyticsRow = {
   position: number;
 };
 
+export type SearchType = "web" | "image" | "video" | "news";
+
+export type SearchAnalyticsFilter = {
+  dimension: "query" | "page" | "country" | "device";
+  operator: "equals" | "contains";
+  expression: string;
+};
+
 export async function querySearchAnalytics(
   accessToken: string,
   siteUrl: string,
@@ -156,6 +164,9 @@ export async function querySearchAnalytics(
     endDate: string;
     dimensions?: SearchAnalyticsDimension[];
     rowLimit?: number;
+    startRow?: number;
+    type?: SearchType;
+    filters?: SearchAnalyticsFilter[];
   },
 ): Promise<SearchAnalyticsRow[]> {
   const data = await googlePostJson<{
@@ -174,7 +185,12 @@ export async function querySearchAnalytics(
       endDate: request.endDate,
       dimensions: request.dimensions ?? [],
       rowLimit: request.rowLimit ?? 1000,
+      startRow: request.startRow ?? 0,
+      type: request.type ?? "web",
       dataState: "all",
+      ...(request.filters?.length
+        ? { dimensionFilterGroups: [{ groupType: "and", filters: request.filters }] }
+        : {}),
     },
   );
 

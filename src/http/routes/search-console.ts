@@ -10,16 +10,21 @@ import {
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
   BREAKDOWN_DIMENSIONS,
+  BREAKDOWN_SORTS,
   clampRange,
+  clampType,
   clearSiteCache,
   explainSearchConsoleError,
-  getSearchBreakdown,
+  getSearchBreakdownPage,
+  getSearchDrilldown,
+  getSearchInsights,
   getSearchPerformance,
   getSearchSitemaps,
   isUsablePermission,
   propertyMatchesDomain,
   usableSearchConsoleToken,
   type BreakdownDimension,
+  type BreakdownSort,
   type SiteRef,
 } from "../../modules/seo/search-console.service.js";
 import { AppError, badRequest } from "../../shared/errors/index.js";
@@ -241,7 +246,9 @@ function withLinkedSite(load: (site: SiteRef, req: AuthedRequest) => Promise<unk
 
 router.get(
   "/:wid/sites/:siteId/search-console/performance",
-  withLinkedSite((site, req) => getSearchPerformance(site, clampRange(req.query.days))),
+  withLinkedSite((site, req) =>
+    getSearchPerformance(site, clampRange(req.query.days), clampType(req.query.type)),
+  ),
 );
 
 router.get(
@@ -249,7 +256,32 @@ router.get(
   withLinkedSite((site, req) => {
     const dimension = String(req.query.dimension ?? "query") as BreakdownDimension;
     if (!BREAKDOWN_DIMENSIONS.includes(dimension)) throw badRequest("unknown dimension");
-    return getSearchBreakdown(site, dimension, clampRange(req.query.days));
+    const sort = String(req.query.sort ?? "clicks") as BreakdownSort;
+    return getSearchBreakdownPage(site, dimension, clampRange(req.query.days), clampType(req.query.type), {
+      page: Number(req.query.page ?? 1) || 1,
+      pageSize: Number(req.query.pageSize ?? 50) || 50,
+      sort: BREAKDOWN_SORTS.includes(sort) ? sort : "clicks",
+      desc: req.query.dir !== "asc",
+      q: String(req.query.q ?? "").slice(0, 200),
+    });
+  }),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/insights",
+  withLinkedSite((site, req) =>
+    getSearchInsights(site, clampRange(req.query.days), clampType(req.query.type)),
+  ),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/drilldown",
+  withLinkedSite((site, req) => {
+    const dimension = String(req.query.dimension ?? "");
+    const value = String(req.query.value ?? "").slice(0, 2048);
+    if (dimension !== "query" && dimension !== "page") throw badRequest("dimension must be query or page");
+    if (!value) throw badRequest("value is required");
+    return getSearchDrilldown(site, dimension, value, clampRange(req.query.days), clampType(req.query.type));
   }),
 );
 
@@ -262,7 +294,7 @@ router.post(
   "/:wid/sites/:siteId/search-console/refresh",
   withLinkedSite(async (site, req) => {
     await clearSiteCache(site.siteId);
-    return getSearchPerformance(site, clampRange(req.body?.days));
+    return getSearchPerformance(site, clampRange(req.body?.days), clampType(req.body?.type));
   }),
 );
 
