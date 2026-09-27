@@ -13,6 +13,7 @@ import {
   type SearchUrlInspection,
 } from "../../infra/http-client/search-console.js";
 import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
+import { pageViewSeries, pageViewsByPath, pathOf, type PageViewSeries } from "./search-page-views.js";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const TOP_ROWS = 10;
@@ -143,7 +144,7 @@ export type SearchPerformance = {
   previous: Metrics | null;
   daily: Array<Metrics & { date: string }>;
   queries: Array<Metrics & { query: string }>;
-  pages: Array<Metrics & { page: string }>;
+  pages: Array<Metrics & { page: string; views: number }>;
   fetchedAt: string;
 };
 
@@ -154,6 +155,7 @@ export type BreakdownRow = Metrics & {
   key: string;
   previousClicks: number | null;
   previousPosition: number | null;
+  views?: number;
 };
 
 type BreakdownData = {
@@ -164,7 +166,7 @@ type BreakdownData = {
   fetchedAt: string;
 };
 
-export const BREAKDOWN_SORTS = ["key", "clicks", "change", "impressions", "ctr", "position"] as const;
+export const BREAKDOWN_SORTS = ["key", "clicks", "change", "impressions", "ctr", "position", "views"] as const;
 export type BreakdownSort = (typeof BREAKDOWN_SORTS)[number];
 
 export type BreakdownPage = {
@@ -213,6 +215,7 @@ export type SearchDrilldown = {
   previous: Metrics | null;
   daily: Array<Metrics & { date: string }>;
   related: Array<Metrics & { key: string }>;
+  views?: PageViewSeries;
   fetchedAt: string;
 };
 
@@ -314,7 +317,7 @@ export async function clearSiteCache(siteId: string): Promise<void> {
   await SearchConsoleCache.deleteMany({ siteId });
 }
 
-export function getSearchPerformance(site: SiteRef, days: number, type: SearchType): Promise<SearchPerformance> {
+function loadPerformance(site: SiteRef, days: number, type: SearchType) {
   return cached(site, `performance:${type}:${site.propertyUrl}:${days}`, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
@@ -354,6 +357,18 @@ export function getSearchPerformance(site: SiteRef, days: number, type: SearchTy
       fetchedAt: new Date().toISOString(),
     };
   });
+}
+
+function viewsFor(site: SiteRef, days: number): Promise<Record<string, number>> {
+  return cached(site, `views:${days}`, () => pageViewsByPath(site.siteId, periods(days).current));
+}
+
+export async function getSearchPerformance(site: SiteRef, days: number, type: SearchType): Promise<SearchPerformance> {
+  const [performance, views] = await Promise.all([loadPerformance(site, days, type), viewsFor(site, days)]);
+  return {
+    ...performance,
+    pages: performance.pages.map((p) => ({ ...p, views: views[pathOf(p.page)] ?? 0 })),
+  };
 }
 
 function loadBreakdown(
@@ -430,13 +445,23 @@ export async function getSearchBreakdownPage(
   type: SearchType,
   options: { page: number; pageSize: number; sort: BreakdownSort; desc: boolean; q: string },
 ): Promise<BreakdownPage> {
-  const data = await loadBreakdown(site, dimension, days, type);
+  const [data, views] = await Promise.all([
+    loadBreakdown(site, dimension, days, type),
+    dimension === "page" ? viewsFor(site, days) : Promise.resolve(null),
+  ]);
   const q = options.q.trim().toLowerCase();
 
-  const filtered = q ? data.rows.filter((row) => row.key.toLowerCase().includes(q)) : data.rows;
+  const rows = views ? data.rows.map((row) => ({ ...row, views: views[pathOf(row.key)] ?? 0 })) : data.rows;
+  const filtered = q ? rows.filter((row) => row.key.toLowerCase().includes(q)) : rows;
 
   const value = (row: BreakdownRow): number | string =>
-    options.sort === "key" ? row.key.toLowerCase() : options.sort === "change" ? changeOf(row) : row[options.sort];
+    options.sort === "key"
+      ? row.key.toLowerCase()
+      : options.sort === "change"
+        ? changeOf(row)
+        : options.sort === "views"
+          ? (row.views ?? 0)
+          : row[options.sort];
 
   const sorted = [...filtered].sort((a, b) => {
     const av = value(a);
@@ -526,7 +551,7 @@ export function getSearchDrilldown(
     const filters = [{ dimension, operator: "equals" as const, expression: value }];
     const counterpart = dimension === "query" ? "page" : "query";
 
-    const [totals, previous, daily, related] = await Promise.all([
+    const [totals, previous, daily, related, views] = await Promise.all([
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.previous, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters, dimensions: ["date"] }),
@@ -537,6 +562,9 @@ export function getSearchDrilldown(
         dimensions: [counterpart],
         rowLimit: 50,
       }),
+      dimension === "page"
+        ? pageViewSeries(site.siteId, value, range.current, range.previous)
+        : Promise.resolve(undefined),
     ]);
 
     return {
@@ -550,6 +578,7 @@ export function getSearchDrilldown(
         .map((row) => ({ date: row.keys[0] ?? "", ...metricsOf(row) }))
         .sort((a, b) => a.date.localeCompare(b.date)),
       related: related.map((row) => ({ key: row.keys[0] ?? "", ...metricsOf(row) })),
+      views,
       fetchedAt: new Date().toISOString(),
     };
   });
