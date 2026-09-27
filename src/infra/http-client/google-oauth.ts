@@ -60,7 +60,7 @@ export function classifyGoogleError(err: unknown): GoogleApiError {
     .join(" ")
     .toUpperCase();
 
-  if (status === 401) return new GoogleApiError("revoked", 401, message);
+  if (status === 401) return new GoogleApiError("revoked", 409, message);
 
   if (status === 429 || reasons.includes("RATE_LIMIT") || reasons.includes("QUOTA_EXCEEDED"))
     return new GoogleApiError("quota", 429, message);
@@ -203,7 +203,7 @@ export async function refreshGoogleToken(
         (err.response?.data as { error?: string } | undefined)?.error ?? "",
       );
       if (reason === "invalid_grant" || reason === "invalid_client")
-        throw new GoogleApiError("revoked", 401, "Google authorisation was revoked");
+        throw new GoogleApiError("revoked", 409, "Google authorisation was revoked");
     }
     throw classifyGoogleError(err);
   }
