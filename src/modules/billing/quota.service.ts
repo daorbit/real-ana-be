@@ -3,7 +3,6 @@ import { Workspace } from "../workspace/models/Workspace.js";
 import { Site } from "../analytics/models/Site.js";
 import {
   getPlanCatalogEntry,
-  applyGrandfathering,
   MAX_SITES_PER_WORKSPACE,
   type RangeKey,
   type Frequency,
@@ -67,33 +66,7 @@ export async function renewalWouldExceedCap(
   return remainingMs >= MAX_PREPAID_CYCLES * CYCLE_DAYS[cycle] * DAY_MS;
 }
 
-/**
- * Everything in this module is scoped to a *workspace*, not an account: a plan
- * is bought per workspace, so quota, limits, and expiry are all per workspace
- * too. `userId` is still passed to the write paths because a new subscription
- * row needs an owner, but it is never what a limit is counted against.
- *
- * There is no scheduled monthly rollover in this system — a period is exactly
- * one purchase, and this function is the only thing that ever resets the
- * cycle's usage counters. So every activation, renewal included, resets them:
- * a renewal buys a fresh allowance, and if it did not reset the counters the
- * buyer would pay for a month with nothing left in it.
- *
- * What a renewal changes is only the *start point* of the new period:
- *
- *  - **Fresh period** — a first purchase, a tier change, a cycle switch, or a
- *    renewal after the previous period already lapsed. Runs from now.
- *
- *  - **Stacked renewal** — the same plan and cycle bought again while the
- *    current period is still live. The new cycle is added onto the existing
- *    end date, so the buyer keeps the days they had already paid for rather
- *    than forfeiting the remainder.
- *
- * Which of the two it is is decided here, from the stored subscription, not by
- * the caller — so the webhook and the client-side verify call cannot disagree,
- * and a renewal whose payment only lands after the period expires correctly
- * degrades to a fresh period.
- */
+
 export async function activatePlanPeriod(
   workspaceId: string,
   userId: string,
@@ -104,9 +77,6 @@ export async function activatePlanPeriod(
   const existing = await Subscription.findOne({ workspaceId });
   const stacking = isSamePlanRenewal(existing, planSlug, cycle);
 
-  // A stacked renewal pushes the expiry out from the current end date; every
-  // other activation dates it from now. The fresh allowance itself begins now
-  // in both cases, which is what `currentPeriodStart` records.
   const base = stacking ? existing!.currentPeriodEnd! : now;
   const periodEnd = new Date(base.getTime() + CYCLE_DAYS[cycle] * DAY_MS);
 
@@ -161,38 +131,17 @@ function isExpired(sub: { currentPeriodEnd?: Date | null }): boolean {
   return sub.currentPeriodEnd.getTime() < Date.now();
 }
 
-/**
- * The catalogue plan this workspace may use right now.
- *
- * A lapsed paid period falls back to Free rather than to nothing. Cutting a
- * workspace off entirely would leave it worse off than one that never paid —
- * unable to read the history it already bought — and the events kept flowing in
- * from a tracker that has no idea about billing. Free is the floor: tracking
- * continues at Free's allowance, the data stays readable at Free's ranges, and
- * only the paid features lock.
- *
- * Null still means "no subscription row at all" or an unknown slug, which is a
- * different thing from an expired one and is left to the caller.
- */
+
 export async function currentPlan(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return null;
   const entry = isExpired(sub)
     ? getPlanCatalogEntry("free")
     : getPlanCatalogEntry(sub.planSlug as string);
-  if (!entry) return null;
-  // Grandfathering only ever touches the Free entry, so this is a no-op for
-  // every paid plan and for a Free workspace created after the cutoff.
-  return applyGrandfathering(entry, sub.get("createdAt") as Date | undefined);
+  return entry ?? null;
 }
 
-/**
- * The plan actually paid for, ignoring the Free fallback above.
- *
- * Only for deciding what may be bought next: a lapsed Pro workspace is on Free
- * for access purposes, but it must still be able to buy Starter, which the
- * downgrade guard would otherwise refuse.
- */
+
 export async function paidPlan(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub || isExpired(sub)) return null;
@@ -221,26 +170,11 @@ export async function activateOrbitPeriod(
   );
 }
 
-/**
- * The answer to "may this workspace do that?".
- *
- * `limit` describes the cap that stopped it, and travels to the client so the
- * upgrade dialog can name which allowance ran out rather than making the reader
- * infer it from the sentence. Optional: a check that has nothing to count (a
- * feature the plan simply does not include) sends the prose alone.
- */
 export type QuotaCheck =
   | { ok: true }
   | { ok: false; error: string; limit?: PlanLimitInfo };
 
-/**
- * Whether `workspaceId` may hold one more site.
- *
- * The cap is flat across tiers (see `MAX_SITES_PER_WORKSPACE`) — the way to
- * track more sites is another workspace, which is another subscription. An
- * unpaid/lapsed workspace is refused outright rather than falling back to the
- * cap, so a workspace whose period ended cannot keep growing.
- */
+
 export async function canCreateSite(
   workspaceId: string,
 ): Promise<QuotaCheck> {
@@ -260,13 +194,7 @@ export async function canCreateSite(
   return { ok: true };
 }
 
-/**
- * Whether a workspace's media library has room for `count` more files.
- *
- * The cap is the plan's `maxMediaAssets` plus any addon slots bought on top —
- * same additive shape as `addonPostSlots`, since deleting a file frees its
- * slot back up rather than drawing down a balance.
- */
+
 export async function canUploadMedia(
   workspaceId: string,
   count: number,
@@ -310,14 +238,7 @@ export async function canUseRange(
   return { ok: true };
 }
 
-/**
- * Whether this workspace's plan may compare against the given baseline.
- *
- * Unlike `canUseRange`, a refusal here does not fail the request: the caller
- * falls back to "previous", which every tier has. Losing the year-over-year
- * overlay is a missing comparison, not a missing report, and 402-ing the whole
- * stats payload over it would blank a dashboard the plan is entitled to see.
- */
+
 export async function canUseCompare(
   workspaceId: string,
   mode: string,
@@ -592,9 +513,8 @@ export async function quotaSummary(workspaceId: string) {
   // show a workspace quotas it cannot spend.
   const expired = isExpired(sub);
   const boughtSlug = sub.planSlug as string;
-  const rawPlan = getPlanCatalogEntry(expired ? "free" : boughtSlug);
-  if (!rawPlan) return null;
-  const plan = applyGrandfathering(rawPlan, sub.get("createdAt") as Date | undefined);
+  const plan = getPlanCatalogEntry(expired ? "free" : boughtSlug);
+  if (!plan) return null;
   const boughtPlan = getPlanCatalogEntry(boughtSlug);
 
   // Only what is still queued: a sent post is history and holds no slot, which

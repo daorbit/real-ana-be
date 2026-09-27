@@ -219,34 +219,6 @@ export const PLAN_CATALOG: PlanCatalogEntry[] = (() => {
   });
 })();
 
-/**
- * When the Free plan's form-submission quota dropped from 100/month to 10.
- *
- * A workspace already on Free before this date keeps the old 100 — this is a
- * quota cut, not a bug fix, and a workspace that built a form's usage around
- * the number it signed up under should not have that pulled out from under it
- * silently. Only new Free workspaces get the new, lower number.
- */
-export const FREE_FORM_QUOTA_CUTOFF = new Date("2026-09-23T00:00:00Z");
-const LEGACY_FREE_FORM_QUOTA = 100;
-
-/**
- * `entry` adjusted for a subscription's age, when it needs it.
- *
- * The only caller-visible effect right now is the Free plan's grandfathered
- * form quota; everything else about the plan is unchanged. Takes the whole
- * resolved entry rather than a slug so callers that already have one (most of
- * quota.service.ts) don't do a second catalogue lookup.
- */
-export function applyGrandfathering(
-  entry: PlanCatalogEntry,
-  subscriptionCreatedAt: Date | null | undefined,
-): PlanCatalogEntry {
-  if (entry.slug !== "free") return entry;
-  if (!subscriptionCreatedAt || subscriptionCreatedAt >= FREE_FORM_QUOTA_CUTOFF) return entry;
-  return { ...entry, monthlySubmissionQuota: LEGACY_FREE_FORM_QUOTA };
-}
-
 export function getPlanCatalogEntry(slug: string): PlanCatalogEntry | undefined {
   return PLAN_CATALOG.find((p) => p.slug === slug);
 }

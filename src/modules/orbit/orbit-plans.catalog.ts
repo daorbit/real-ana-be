@@ -156,18 +156,16 @@ export function resolveOrbitPlan(slug?: string | null): OrbitPlanEntry {
 /**
  * When Orbit Free's question quota dropped from 20/month to 10.
  *
- * Same reasoning as the form quota's cutoff in plans.catalog.ts: a workspace
- * already on Orbit Free before this date keeps the old 20, since this is a
- * quota cut rather than a fix. Only workspaces that land on Orbit Free after
+ * A workspace already on Orbit Free before this date keeps the old 20, since
+ * this is a quota cut rather than a fix. Only workspaces that land on Orbit Free after
  * this date get the new, lower number.
  */
 export const ORBIT_FREE_QUOTA_CUTOFF = new Date("2026-09-23T00:00:00Z");
 const LEGACY_ORBIT_FREE_QUOTA = 20;
 
 /**
- * `entry` adjusted for a subscription's age, when it needs it — the Orbit
- * counterpart to `applyGrandfathering` in plans.catalog.ts. Everything about
- * the plan besides the grandfathered quota is unchanged.
+ * `entry` adjusted for a subscription's age, when it needs it. Everything
+ * about the plan besides the grandfathered quota is unchanged.
  */
 export function applyOrbitGrandfathering(
   entry: OrbitPlanEntry,
