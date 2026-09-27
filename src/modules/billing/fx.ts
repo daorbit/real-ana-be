@@ -2,30 +2,10 @@ import axios from "axios";
 import { AppSetting } from "../../config/AppSetting.js";
 import { Plan } from "./models/Plan.js";
 import { AddonPack } from "./models/AddonPack.js";
-import { listResolvedPlans, listResolvedOrbitPlans } from "./plan-pricing.js";
+import { listResolvedPlans, listResolvedOrbitPlans, asPriceMap } from "./plan-pricing.js";
 import { CURRENCIES, type Currency } from "./currency.js";
 
-/**
- * USD pricing, derived from the INR price an admin actually types.
- *
- * Prices are authored once, in INR. Keeping a second hand-maintained USD
- * number alongside it means the two drift apart the moment the rupee moves,
- * and nobody notices until a US customer is quoted last quarter's price. So
- * the USD column is computed from a live rate instead.
- *
- * Two things trigger a reprice, and both call `repriceAllPlans` below:
- *
- *  - a nightly `node-cron` job (`lib/fx-cron.ts`), so prices track the rate
- *    without anyone remembering to look;
- *  - an admin button, for when the rate has moved and waiting for tonight
- *    isn't acceptable.
- *
- * The last fetched rate is cached in `AppSetting` so the admin screen can show
- * what the current prices were computed from without spending an API call on
- * every page load.
- */
 
-/** Base currency every stored price is authored in. */
 export const FX_BASE: Currency = "INR";
 
 const SETTING_FX_RATES = "fx.rates";
@@ -46,13 +26,7 @@ export function fxConfigured(): boolean {
   return Boolean(process.env.EXCHANGERATE_API_KEY);
 }
 
-/**
- * Live rates for `FX_BASE`, straight from the provider.
- *
- * Throws rather than falling back to a cached value: the caller is about to
- * rewrite every plan's price, and doing that from a rate of unknown age is
- * exactly the silent staleness this whole module exists to prevent.
- */
+
 export async function fetchRates(): Promise<FxSnapshot> {
   const key = process.env.EXCHANGERATE_API_KEY;
   if (!key) throw new Error("EXCHANGERATE_API_KEY is not set");
@@ -94,13 +68,7 @@ export async function getCachedRates(): Promise<FxSnapshot | null> {
   return value && Number.isFinite(value.rates?.USD) ? value : null;
 }
 
-/**
- * Convert a minor-unit amount from `FX_BASE` into `currency`.
- *
- * Both currencies here have two decimal places, so the minor-unit factor
- * cancels out and the rate applies directly to the stored integer. Rounding is
- * to the nearest cent — Razorpay only accepts integers.
- */
+
 export function convertMinor(amountMinor: number, currency: Currency, snapshot: FxSnapshot): number {
   if (currency === FX_BASE) return amountMinor;
   const rate = snapshot.rates[currency];
@@ -132,30 +100,11 @@ export type RepriceResult = {
   addons: RepricedAddon[];
 };
 
-/**
- * Recompute every plan's non-base price from its base price at the current rate.
- *
- * Shared by the admin button and the nightly job so the two can't drift into
- * doing subtly different things to the same prices.
- *
- * Fetches the rate fresh rather than reading the cache: the point of a reprice
- * is that the new numbers reflect today's rate, not whenever someone last
- * looked. If the fetch fails this throws and nothing is touched — a partial
- * reprice, where some prices moved and others didn't, is worse than none.
- */
+
 export async function repriceAllPlans(): Promise<RepriceResult> {
   const snapshot = await fetchRates();
   const derived = CURRENCIES.filter((c) => c !== FX_BASE);
-  /**
-   * Both ladders, minus whatever carries no price.
-   *
-   * Orbit tiers are granted by the analytics plan rather than sold on their own,
-   * so their catalogue entries define no price and their rows sit at zero. Put
-   * through the conversion they conveniently produce zero in every currency —
-   * and then appear in the nightly report as real products repriced to nothing,
-   * which is what this filter exists to stop. A tier that ever does get a price
-   * starts being repriced again on its own, with no change here.
-   */
+
   const priced = (p: { priceMonthly: Record<string, number>; priceYearly: Record<string, number> }) =>
     (p.priceMonthly[FX_BASE] ?? 0) > 0 || (p.priceYearly[FX_BASE] ?? 0) > 0;
 
@@ -174,14 +123,12 @@ export async function repriceAllPlans(): Promise<RepriceResult> {
     repriced.push({ slug: plan.slug, name: plan.name, priceMonthly, priceYearly });
   }
 
-  // Add-on packs are priced in INR the same way and sold in every currency, so
-  // they track the rate on the same run — otherwise their USD price stays
-  // frozen at whatever it was when the pack was created, while plans move.
+
   const addons = await AddonPack.find();
   const repricedAddons: RepricedAddon[] = [];
 
   for (const addon of addons) {
-    const price = { ...(addon.get("price") as Record<string, number>) };
+    const price = { ...(asPriceMap(addon.get("price")) as Record<string, number>) };
     // Same reason as the plans above: nothing to convert, and reporting it as
     // repriced says a pack changed price when it has none to change.
     if ((price[FX_BASE] ?? 0) <= 0) continue;

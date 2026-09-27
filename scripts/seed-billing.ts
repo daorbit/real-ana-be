@@ -22,8 +22,8 @@ async function main() {
   console.log("Ensuring a price row exists for every catalogue plan...");
   const defaultPrices: Record<string, { priceMonthly: number; priceYearly: number }> = {
     free: { priceMonthly: 0, priceYearly: 0 },
-    starter: { priceMonthly: 99900, priceYearly: 999900 }, // ₹999/mo, ₹9,999/yr
-    pro: { priceMonthly: 299900, priceYearly: 2999900 }, // ₹2,999/mo, ₹29,999/yr
+    starter: { priceMonthly: 119900, priceYearly: 1199000 },
+    pro: { priceMonthly: 349900, priceYearly: 3499000 },
   };
 
   for (const plan of PLAN_CATALOG) {

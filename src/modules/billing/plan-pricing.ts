@@ -91,7 +91,7 @@ export async function getResolvedOrbitPlan(slug: string): Promise<ResolvedOrbitP
 }
 
 /** A price subdocument (or a plain object, when read via `.lean()`) as a plain price map. */
-function asPriceMap(value: unknown): PriceMap | undefined {
+export function asPriceMap(value: unknown): PriceMap | undefined {
   if (!value) return undefined;
   const obj = value as { toObject?: () => PriceMap };
   return typeof obj.toObject === "function" ? obj.toObject() : (value as PriceMap);

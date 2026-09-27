@@ -31,6 +31,7 @@ import {
 import { DEFAULT_ORBIT_PLAN_SLUG } from "../../modules/orbit/orbit-plans.catalog.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { applyCoupon } from "../../modules/billing/coupons.js";
+import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency } from "../../modules/billing/currency.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
@@ -171,8 +172,14 @@ async function openOrder(params: {
 
 /* --------------------------------- catalogue -------------------------------- */
 
-router.get("/plans", async (_req: AuthedRequest, res: Response) => {
-  res.json(await listResolvedPlans());
+router.get("/plans", async (req: AuthedRequest, res: Response) => {
+  const plans = await listResolvedPlans();
+  if (!req.query.workspaceId) return res.json(plans);
+
+  const workspace = await resolveAccessibleWorkspace(req, req.query.workspaceId);
+  if ("error" in workspace) return res.json(plans);
+
+  res.json(await Promise.all(plans.map((plan) => applyPriceLock(workspace.id, plan))));
 });
 
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
@@ -200,8 +207,9 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const cycle: BillingCycle = req.body?.cycle === "yearly" ? "yearly" : "monthly";
   const currency = resolveCurrency(req.body?.currency);
 
-  const plan = await getResolvedPlan(planSlug);
-  if (!plan) return res.status(404).json({ error: "plan not found" });
+  const listed = await getResolvedPlan(planSlug);
+  if (!listed) return res.status(404).json({ error: "plan not found" });
+  const plan = await applyPriceLock(workspace.id, listed);
 
   const active = await paidPlan(workspace.id);
   if (active && getPlanCatalogEntry(plan.slug)!.sortOrder < active.sortOrder) {
