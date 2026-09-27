@@ -211,7 +211,7 @@ export async function inspectSearchConsoleUrl(
       }>;
     };
   }>(
-    "https://searchconsole.googleapis.com/v1/urlInspection.index:inspect",
+    "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect",
     accessToken,
     { inspectionUrl: pageUrl, siteUrl },
   );
