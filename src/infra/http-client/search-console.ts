@@ -164,6 +164,7 @@ export type SearchUrlInspectionIssue = {
 
 export type SearchUrlInspection = {
   indexStatus: string;
+  verdict?: string;
   coverageState?: string;
   pageFetchState?: string;
   robotsTxtState?: string;
@@ -196,6 +197,7 @@ export async function inspectSearchConsoleUrl(
     inspectionResult?: {
       inspectionStatus?: unknown;
       indexStatusResult?: {
+        verdict?: unknown;
         coverageState?: unknown;
         indexingState?: unknown;
         pageFetchState?: unknown;
@@ -230,8 +232,17 @@ export async function inspectSearchConsoleUrl(
       type: issue.type ? String(issue.type) : undefined,
     }));
 
+  const verdict = normalizeGoogleValue(index.verdict);
+  const coverage = normalizeGoogleValue(index.coverageState).toLowerCase();
+
   const indexStatus =
-    rawStatus === "INDEXED"
+    /blocked|robots|noindex|disallow/.test(coverage)
+      ? "Blocked by robots or directives"
+      : coverage.includes("not indexed") || coverage.includes("unknown to google")
+        ? "Not indexed"
+        : verdict === "PASS" || coverage.includes("indexed")
+          ? "Indexed in Google search"
+          : rawStatus === "INDEXED"
       ? "Indexed in Google search"
       : rawStatus === "PARTIALLY_INDEXED"
         ? "Partially indexed"
@@ -249,6 +260,7 @@ export async function inspectSearchConsoleUrl(
 
   return {
     indexStatus,
+    verdict: verdict || undefined,
     coverageState: normalizeGoogleValue(index.coverageState) || undefined,
     pageFetchState: normalizeGoogleValue(index.pageFetchState) || undefined,
     robotsTxtState: normalizeGoogleValue(index.robotsTxtState) || undefined,
