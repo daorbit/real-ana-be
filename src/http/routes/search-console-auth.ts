@@ -37,7 +37,7 @@ const REASON_TEXT: Record<string, string> = {
     "Search Console is not set up on this deployment yet. An administrator needs to add the Google credentials.",
   demo: "Search Console cannot be connected from a demo session.",
   no_access: "You need admin access to this workspace to connect Search Console.",
-  plan_required: "Search Console needs this workspace on a paid plan.",
+  plan_required: "This workspace has no active plan. Choose a plan to connect Search Console.",
   invalid_state: "That connection attempt expired. Close this window and start again.",
   missing_code: "Google did not return an authorisation code. Please try again.",
   denied: "You cancelled the Google authorisation.",
@@ -66,9 +66,8 @@ function closePopup(res: Response, status: string, reason?: string, diagnostic?:
   });
 }
 
-async function onPaidPlan(workspaceId: string): Promise<boolean> {
-  const plan = await currentPlan(workspaceId);
-  return Boolean(plan && plan.slug !== "free");
+async function hasActivePlan(workspaceId: string): Promise<boolean> {
+  return Boolean(await currentPlan(workspaceId));
 }
 
 router.get("/config", (_req: Request, res: Response) => {
@@ -101,7 +100,7 @@ router.get(
 
     const access = await resolveAccess({ userId } as AuthedRequest, "admin", workspaceId);
     if (isDenied(access)) return closePopup(res, "error", "no_access");
-    if (!(await onPaidPlan(workspaceId))) return closePopup(res, "error", "plan_required");
+    if (!(await hasActivePlan(workspaceId))) return closePopup(res, "error", "plan_required");
 
     const state = jwt.sign(
       { userId, workspaceId, nonce: randomBytes(16).toString("hex"), kind: STATE_KIND } satisfies StatePayload,
