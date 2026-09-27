@@ -20,13 +20,14 @@ import {
   type OrbitPlanEntry,
 } from "../orbit/orbit-plans.catalog.js";
 
-export type QuotaKind = "audit" | "crawl" | "orbit";
+export type QuotaKind = "audit" | "crawl" | "orbit" | "inspection";
 
 /** Where each quota kind keeps its usage and its purchased credits. */
 const QUOTA_FIELDS: Record<QuotaKind, { used: string; credits: string }> = {
   audit: { used: "auditsUsed", credits: "addonAuditCredits" },
   crawl: { used: "crawlsUsed", credits: "addonCrawlCredits" },
   orbit: { used: "orbitUsed", credits: "addonOrbitCredits" },
+  inspection: { used: "inspectionsUsed", credits: "addonInspectionCredits" },
 };
 
 const CYCLE_DAYS: Record<BillingCycle, number> = { monthly: 30, yearly: 365 };
@@ -121,6 +122,7 @@ export async function activatePlanPeriod(
         currentPeriodEnd: periodEnd,
         auditsUsed: 0,
         crawlsUsed: 0,
+        inspectionsUsed: 0,
         eventsUsed: 0,
         formSubmissionsUsed: 0,
         expiryRemindersSent: [],
@@ -535,6 +537,7 @@ async function planAllowance(
 
   const plan = isExpired(sub) ? null : getPlanCatalogEntry(sub.planSlug as string);
   if (!plan) return null;
+  if (kind === "inspection") return plan.monthlyInspectionQuota;
   return kind === "audit" ? plan.monthlyAuditQuota : plan.monthlyCrawlQuota;
 }
 
@@ -667,6 +670,17 @@ export async function quotaSummary(workspaceId: string) {
       addonCredits: (sub.get("addonFormSubmissionCredits") as number) ?? 0,
       notificationEmails: plan.formNotificationEmails,
       fileUploads: plan.formFileUploads,
+    },
+    search: {
+      maxDays: plan.searchMaxDays,
+      rowLimit: plan.searchRowLimit,
+      insights: plan.searchInsights,
+      pageViews: plan.searchPageViews,
+      inspections: {
+        planQuota: plan.monthlyInspectionQuota,
+        used: (sub.get("inspectionsUsed") as number) ?? 0,
+        addonCredits: (sub.get("addonInspectionCredits") as number) ?? 0,
+      },
     },
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,

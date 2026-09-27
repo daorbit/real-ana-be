@@ -28,6 +28,7 @@ import {
   explainSearchConsoleError,
   searchSiteRef,
 } from "../../modules/seo/search-console.service.js";
+import { searchEntitlement } from "../../modules/seo/search-entitlements.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
   recordExchange,
@@ -524,6 +525,8 @@ router.post("/search", async (req: OrbitRequest, res: Response) => {
 
   const site = await searchSiteRef(String(ws.id), siteId);
   if (!site) return res.status(404).json({ error: "No Search Console property is linked to this site." });
+  const searchPlan = await searchEntitlement(String(ws.id));
+  const days = Math.min(clampRange(req.body?.days), searchPlan?.maxDays ?? 7);
 
   const hungUp = new AbortController();
   const onClose = () => hungUp.abort();
@@ -533,7 +536,7 @@ router.post("/search", async (req: OrbitRequest, res: Response) => {
   try {
     result = await askSearchOrbit({
       site,
-      days: clampRange(req.body?.days),
+      days,
       type: clampType(req.body?.type),
       mode,
       metric,

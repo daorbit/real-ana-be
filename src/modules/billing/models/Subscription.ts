@@ -58,6 +58,8 @@ const subscriptionSchema = new Schema(
      */
     auditsUsed: { type: Number, default: 0 },
     crawlsUsed: { type: Number, default: 0 },
+    inspectionsUsed: { type: Number, default: 0 },
+    addonInspectionCredits: { type: Number, default: 0 },
     /**
      * Analytics events ingested this cycle.
      *

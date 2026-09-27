@@ -19,6 +19,7 @@ import {
   getSearchDrilldown,
   getSearchInsights,
   getSearchInspection,
+  isInspectionCached,
   getSearchPerformance,
   getSearchSitemaps,
   isUsablePermission,
@@ -29,7 +30,14 @@ import {
   type SiteRef,
 } from "../../modules/seo/search-console.service.js";
 import { AppError, badRequest } from "../../shared/errors/index.js";
-import { currentPlan } from "../../modules/billing/quota.service.js";
+import { hasQuota, spendQuota } from "../../modules/billing/quota.service.js";
+import {
+  ensureSearchDays,
+  ensureSearchInsights,
+  searchEntitlement,
+  SearchPlanDenied,
+  type SearchEntitlement,
+} from "../../modules/seo/search-entitlements.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
@@ -48,18 +56,6 @@ function googleFailure(res: Response, err: unknown) {
     error: explainSearchConsoleError(err),
     kind: err instanceof GoogleApiError ? err.kind : "unknown",
   });
-}
-
-async function requirePaid(res: Response, workspaceId: string): Promise<boolean> {
-  const plan = await currentPlan(workspaceId);
-  if (plan && plan.slug !== "free") return true;
-  planLimit(
-    res,
-    "Search Console needs this workspace on a paid plan",
-    { kind: "searchConsole", label: "Search Console", plan: plan?.name },
-    "plan_required",
-  );
-  return false;
 }
 
 router.get(
@@ -148,7 +144,6 @@ router.put(
   asyncHandler(async (req: AuthedRequest, res: Response) => {
     const found = await resolveSite(req, "admin");
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-    if (!(await requirePaid(res, found.ws.id))) return;
 
     const propertyUrl = String(req.body?.propertyUrl ?? "").trim();
     if (!propertyUrl) return res.status(400).json({ error: "propertyUrl is required" });
@@ -204,13 +199,15 @@ router.delete(
   }),
 );
 
-async function linkedSite(req: AuthedRequest, res: Response): Promise<SiteRef | null> {
+async function linkedSite(
+  req: AuthedRequest,
+  res: Response,
+): Promise<{ site: SiteRef; ent: SearchEntitlement } | null> {
   const found = await resolveSite(req);
   if (siteRefused(found)) {
     res.status(found.status).json({ error: found.error });
     return null;
   }
-  if (!(await requirePaid(res, found.ws.id))) return null;
 
   const siteId = String(found.site.get("siteId"));
   const link = await SearchConsoleProperty.findOne({ siteId });
@@ -225,73 +222,112 @@ async function linkedSite(req: AuthedRequest, res: Response): Promise<SiteRef | 
     return null;
   }
 
+  const ent = await searchEntitlement(String(found.ws.id));
+  if (!ent) {
+    planLimit(res, "This workspace has no active plan", { kind: "searchConsole", label: "Search visibility" }, "plan_required");
+    return null;
+  }
+
   return {
-    workspaceId: String(found.ws.id),
-    siteId,
-    connectionId: String(connection._id),
-    propertyUrl: String(link.get("propertyUrl")),
+    ent,
+    site: {
+      workspaceId: String(found.ws.id),
+      siteId,
+      connectionId: String(connection._id),
+      propertyUrl: String(link.get("propertyUrl")),
+    },
   };
 }
 
-function withLinkedSite(load: (site: SiteRef, req: AuthedRequest) => Promise<unknown>) {
+function withLinkedSite(
+  load: (site: SiteRef, req: AuthedRequest, ent: SearchEntitlement) => Promise<unknown>,
+) {
   return asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const site = await linkedSite(req, res);
-    if (!site) return;
+    const linked = await linkedSite(req, res);
+    if (!linked) return;
     try {
-      res.json(await load(site, req));
+      res.json(await load(linked.site, req, linked.ent));
     } catch (err) {
+      if (err instanceof SearchPlanDenied) return planLimit(res, err.message, err.limit, err.code);
       googleFailure(res, err);
     }
   });
 }
 
+function daysFrom(value: unknown, ent: SearchEntitlement): number {
+  const days = clampRange(value);
+  ensureSearchDays(ent, days);
+  return days;
+}
+
 router.get(
   "/:wid/sites/:siteId/search-console/performance",
-  withLinkedSite((site, req) =>
-    getSearchPerformance(site, clampRange(req.query.days), clampType(req.query.type)),
+  withLinkedSite((site, req, ent) =>
+    getSearchPerformance(site, daysFrom(req.query.days, ent), clampType(req.query.type), ent.pageViews),
   ),
 );
 
 router.get(
   "/:wid/sites/:siteId/search-console/breakdown",
-  withLinkedSite((site, req) => {
+  withLinkedSite((site, req, ent) => {
     const dimension = String(req.query.dimension ?? "query") as BreakdownDimension;
     if (!BREAKDOWN_DIMENSIONS.includes(dimension)) throw badRequest("unknown dimension");
     const sort = String(req.query.sort ?? "clicks") as BreakdownSort;
-    return getSearchBreakdownPage(site, dimension, clampRange(req.query.days), clampType(req.query.type), {
+    return getSearchBreakdownPage(site, dimension, daysFrom(req.query.days, ent), clampType(req.query.type), {
       page: Number(req.query.page ?? 1) || 1,
       pageSize: Number(req.query.pageSize ?? 50) || 50,
       sort: BREAKDOWN_SORTS.includes(sort) ? sort : "clicks",
       desc: req.query.dir !== "asc",
       q: String(req.query.q ?? "").slice(0, 200),
+      rowLimit: dimension === "device" ? null : ent.rowLimit,
+      withViews: ent.pageViews,
     });
   }),
 );
 
 router.get(
   "/:wid/sites/:siteId/search-console/insights",
-  withLinkedSite((site, req) =>
-    getSearchInsights(site, clampRange(req.query.days), clampType(req.query.type)),
-  ),
+  withLinkedSite((site, req, ent) => {
+    ensureSearchInsights(ent);
+    return getSearchInsights(site, daysFrom(req.query.days, ent), clampType(req.query.type), ent.insightRows);
+  }),
 );
 
 router.get(
   "/:wid/sites/:siteId/search-console/drilldown",
-  withLinkedSite((site, req) => {
+  withLinkedSite(async (site, req, ent) => {
     const dimension = String(req.query.dimension ?? "");
     const value = String(req.query.value ?? "").slice(0, 2048);
     if (dimension !== "query" && dimension !== "page") throw badRequest("dimension must be query or page");
     if (!value) throw badRequest("value is required");
-    return getSearchDrilldown(site, dimension, value, clampRange(req.query.days), clampType(req.query.type));
+    const drill = await getSearchDrilldown(site, dimension, value, daysFrom(req.query.days, ent), clampType(req.query.type));
+    return ent.pageViews ? drill : { ...drill, views: undefined };
   }),
 );
 
 router.get(
   "/:wid/sites/:siteId/search-console/inspection",
-  withLinkedSite((site, req) => {
+  withLinkedSite(async (site, req, ent) => {
     const url = String(req.query.url ?? "").slice(0, 2048);
     if (!url) throw badRequest("url is required");
-    return getSearchInspection(site, url);
+    if (await isInspectionCached(site, url)) return getSearchInspection(site, url);
+
+    if (!(await hasQuota(site.workspaceId, "inspection"))) {
+      throw ent.inspectionQuota > 0
+        ? new SearchPlanDenied(
+            `You've used all ${ent.inspectionQuota} Google index checks this month. Upgrade for more.`,
+            { kind: "search_inspections", label: "Google index checks", quota: ent.inspectionQuota, plan: ent.planName },
+            "quota_exceeded",
+          )
+        : new SearchPlanDenied(
+            "Checking a page's Google index status is included from the Starter plan.",
+            { kind: "search_inspections", label: "Google index checks", plan: ent.planName },
+          );
+    }
+
+    const inspection = await getSearchInspection(site, url);
+    await spendQuota(site.workspaceId, "inspection");
+    return inspection;
   }),
 );
 
@@ -302,9 +338,10 @@ router.get(
 
 router.post(
   "/:wid/sites/:siteId/search-console/refresh",
-  withLinkedSite(async (site, req) => {
+  withLinkedSite(async (site, req, ent) => {
+    const days = daysFrom(req.body?.days, ent);
     await clearSiteCache(site.siteId);
-    return getSearchPerformance(site, clampRange(req.body?.days), clampType(req.body?.type));
+    return getSearchPerformance(site, days, clampType(req.body?.type), ent.pageViews);
   }),
 );
 

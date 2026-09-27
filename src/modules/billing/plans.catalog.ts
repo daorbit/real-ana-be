@@ -43,7 +43,16 @@ export type PlanCatalogEntry = {
    * caption stays there until someone is paying.
    */
   formBranding: boolean;
+  searchMaxDays: number;
+  searchRowLimit: number | null;
+  searchInsights: SearchInsightsAccess;
+  searchPageViews: boolean;
+  monthlyInspectionQuota: number;
 };
+
+export type SearchInsightsAccess = "none" | "limited" | "full";
+
+export const SEARCH_INSIGHTS_LIMITED_ROWS = 5;
 
 export type Frequency = "daily" | "weekly" | "monthly";
 
@@ -65,6 +74,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "3 scheduled social posts",
       "Monthly report by email",
       "Shareable public dashboard",
+      "Google Search visibility: last 7 days, top 10 queries & pages",
     ],
     sortOrder: 0,
 
@@ -82,6 +92,11 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formFileUploads: false,
     formBranding: false,
     maxMediaAssets: 10,
+    searchMaxDays: 7,
+    searchRowLimit: 10,
+    searchInsights: "none",
+    searchPageViews: false,
+    monthlyInspectionQuota: 0,
   },
   {
     slug: "starter",
@@ -96,6 +111,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Custom comparison periods",
       "Scheduled LinkedIn posts, including repeating",
       "Lead capture forms with email notifications",
+      "Google Search visibility: 3 months, every query & page, search insights",
+      "100 Google index checks / month",
     ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -112,6 +129,11 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formFileUploads: true,
     formBranding: false,
     maxMediaAssets: 50,
+    searchMaxDays: 90,
+    searchRowLimit: null,
+    searchInsights: "limited",
+    searchPageViews: true,
+    monthlyInspectionQuota: 100,
   },
   {
     slug: "pro",
@@ -127,6 +149,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Year-over-year comparison",
       "Unlimited scheduled social posts",
       "Lead capture forms with file uploads",
+      "Google Search visibility: 16 months with full insights",
+      "1,000 Google index checks / month",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -143,6 +167,11 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     formFileUploads: true,
     formBranding: true,
     maxMediaAssets: 500,
+    searchMaxDays: 480,
+    searchRowLimit: null,
+    searchInsights: "full",
+    searchPageViews: true,
+    monthlyInspectionQuota: 1000,
   },
 ];
 
@@ -164,6 +193,14 @@ const SUPERSEDES: Record<string, string[]> = {
   "Scheduled LinkedIn posts, including repeating": ["3 scheduled social posts"],
   "Lead capture forms with email notifications": ["1 lead capture form, up to 10 submissions / month"],
   "Lead capture forms with file uploads": ["Lead capture forms with email notifications"],
+  "Google Search visibility: 3 months, every query & page, search insights": [
+    "Google Search visibility: last 7 days, top 10 queries & pages",
+  ],
+  "Google Search visibility: 16 months with full insights": [
+    "Google Search visibility: 3 months, every query & page, search insights",
+    "Google Search visibility: last 7 days, top 10 queries & pages",
+  ],
+  "1,000 Google index checks / month": ["100 Google index checks / month"],
 };
 
  

@@ -159,7 +159,7 @@ export type SearchPerformance = {
   previous: Metrics | null;
   daily: Array<Metrics & { date: string }>;
   queries: Array<Metrics & { query: string }>;
-  pages: Array<Metrics & { page: string; views: number }>;
+  pages: Array<Metrics & { page: string; views?: number }>;
   fetchedAt: string;
 };
 
@@ -196,6 +196,7 @@ export type BreakdownPage = {
   page: number;
   pageSize: number;
   truncated: boolean;
+  limitedTo: number | null;
   fetchedAt: string;
 };
 
@@ -218,6 +219,7 @@ export type SearchInsights = {
   newQueries: InsightRow[];
   lostQueries: Array<{ key: string; previousClicks: number; previousImpressions: number }>;
   counts: { queries: number; pages: number; newQueries: number; lostQueries: number };
+  limited: boolean;
   fetchedAt: string;
 };
 
@@ -378,8 +380,17 @@ function viewsFor(site: SiteRef, days: number): Promise<Record<string, number>> 
   return cached(site, `views:${days}`, () => pageViewsByPath(site.siteId, periods(days).current));
 }
 
-export async function getSearchPerformance(site: SiteRef, days: number, type: SearchType): Promise<SearchPerformance> {
-  const [performance, views] = await Promise.all([loadPerformance(site, days, type), viewsFor(site, days)]);
+export async function getSearchPerformance(
+  site: SiteRef,
+  days: number,
+  type: SearchType,
+  withViews = true,
+): Promise<SearchPerformance> {
+  const [performance, views] = await Promise.all([
+    loadPerformance(site, days, type),
+    withViews ? viewsFor(site, days) : Promise.resolve(null),
+  ]);
+  if (!views) return performance;
   return {
     ...performance,
     pages: performance.pages.map((p) => ({ ...p, views: views[pathOf(p.page)] ?? 0 })),
@@ -458,15 +469,25 @@ export async function getSearchBreakdownPage(
   dimension: BreakdownDimension,
   days: number,
   type: SearchType,
-  options: { page: number; pageSize: number; sort: BreakdownSort; desc: boolean; q: string },
+  options: {
+    page: number;
+    pageSize: number;
+    sort: BreakdownSort;
+    desc: boolean;
+    q: string;
+    rowLimit?: number | null;
+    withViews?: boolean;
+  },
 ): Promise<BreakdownPage> {
   const [data, views] = await Promise.all([
     loadBreakdown(site, dimension, days, type),
-    dimension === "page" ? viewsFor(site, days) : Promise.resolve(null),
+    dimension === "page" && options.withViews !== false ? viewsFor(site, days) : Promise.resolve(null),
   ]);
   const q = options.q.trim().toLowerCase();
 
-  const rows = views ? data.rows.map((row) => ({ ...row, views: views[pathOf(row.key)] ?? 0 })) : data.rows;
+  const limit = options.rowLimit && data.rows.length > options.rowLimit ? options.rowLimit : null;
+  const allowed = limit ? [...data.rows].sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, limit) : data.rows;
+  const rows = views ? allowed.map((row) => ({ ...row, views: views[pathOf(row.key)] ?? 0 })) : allowed;
   const filtered = q ? rows.filter((row) => row.key.toLowerCase().includes(q)) : rows;
 
   const value = (row: BreakdownRow): number | string =>
@@ -498,6 +519,7 @@ export async function getSearchBreakdownPage(
     rows: sorted.slice((page - 1) * pageSize, page * pageSize),
     total: sorted.length,
     totalAll: data.rows.length,
+    limitedTo: limit,
     page,
     pageSize,
     truncated: data.rows.length >= ROW_LIMITS[dimension],
@@ -505,14 +527,19 @@ export async function getSearchBreakdownPage(
   };
 }
 
-export async function getSearchInsights(site: SiteRef, days: number, type: SearchType): Promise<SearchInsights> {
+export async function getSearchInsights(
+  site: SiteRef,
+  days: number,
+  type: SearchType,
+  limit: number = INSIGHT_ROWS,
+): Promise<SearchInsights> {
   const [queries, pages] = await Promise.all([
     loadBreakdown(site, "query", days, type),
     loadBreakdown(site, "page", days, type),
   ]);
 
   const top = <T>(list: T[], score: (item: T) => number) =>
-    [...list].sort((a, b) => score(b) - score(a)).slice(0, INSIGHT_ROWS);
+    [...list].sort((a, b) => score(b) - score(a)).slice(0, limit);
 
   const clickDelta = (row: BreakdownRow) => row.clicks - (row.previousClicks ?? 0);
 
@@ -542,13 +569,14 @@ export async function getSearchInsights(site: SiteRef, days: number, type: Searc
     risingPages: top(withHistory(pages.rows).filter((r) => clickDelta(r) > 0), clickDelta),
     fallingPages: top(withHistory(pages.rows).filter((r) => clickDelta(r) < 0), (r) => -clickDelta(r)),
     newQueries: top(newQueries, (row) => row.clicks),
-    lostQueries: queries.lost.slice(0, INSIGHT_ROWS),
+    lostQueries: queries.lost.slice(0, limit),
     counts: {
       queries: queries.rows.length,
       pages: pages.rows.length,
       newQueries: newQueries.length,
       lostQueries: queries.lost.length,
     },
+    limited: limit < INSIGHT_ROWS,
     fetchedAt: queries.fetchedAt,
   };
 }
@@ -606,8 +634,20 @@ export function getSearchSitemaps(site: SiteRef): Promise<SearchSitemaps> {
     return { sitemaps, fetchedAt: new Date().toISOString() };
   });
 }
+function inspectionKey(site: SiteRef, url: string) {
+  return `inspect:${hashKey(`${site.propertyUrl}|${url}`)}`;
+}
+
+export async function isInspectionCached(site: SiteRef, url: string): Promise<boolean> {
+  const key = inspectionKey(site, url);
+  const hot = memory.get(`${site.siteId}|${key}`);
+  if (hot && hot.expiresAt > Date.now()) return true;
+  const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).select("expiresAt").lean();
+  return Boolean(hit && hit.expiresAt.getTime() > Date.now());
+}
+
 export function getSearchInspection(site: SiteRef, url: string): Promise<SearchInspection> {
-  return cached(site, `inspect:${hashKey(`${site.propertyUrl}|${url}`)}`, async () => {
+  return cached(site, inspectionKey(site, url), async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const inspection = await inspectSearchConsoleUrl(accessToken, site.propertyUrl, url);
     return { ...inspection, url, fetchedAt: new Date().toISOString() };
