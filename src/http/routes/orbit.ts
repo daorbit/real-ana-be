@@ -17,6 +17,19 @@ import type { OrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js"
 import { explainMetricChange, type ExplainMetric } from "../../modules/orbit/explain.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import {
+  askSearchOrbit,
+  SEARCH_ORBIT_METRICS,
+  type SearchOrbitMetric,
+  type SearchOrbitMode,
+} from "../../modules/orbit/search-orbit.js";
+import {
+  clampRange,
+  clampType,
+  explainSearchConsoleError,
+  searchSiteRef,
+} from "../../modules/seo/search-console.service.js";
+import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
+import {
   recordExchange,
   listConversations,
   readConversation,
@@ -473,6 +486,88 @@ router.post("/explain", async (req: OrbitRequest, res: Response) => {
   res.json({ reply: result.reply });
 });
 
+
+const SEARCH_ORBIT_HOURLY_LIMIT = 40;
+const SEARCH_ORBIT_MODES = new Set<SearchOrbitMode>(["summary", "metric", "question"]);
+
+router.post("/search", async (req: OrbitRequest, res: Response) => {
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Orbit is not available on this server." });
+  }
+
+  const ws = await requireWorkspaceEitherAuth(req, res);
+  if (!ws) return;
+
+  const plan = await effectiveOrbitPlan(ws.id);
+  if (!plan.dataAccess) {
+    return planLimit(res, "Asking Orbit about search data needs a plan with data access.", {
+      kind: "orbit_data_access",
+    }, "plan_required");
+  }
+
+  if (rateLimited(`${ws.id}:search`, SEARCH_ORBIT_HOURLY_LIMIT)) {
+    return res.status(429).json({ error: "That is a lot of questions in one hour. Try again later." });
+  }
+
+  const siteId = typeof req.body?.siteId === "string" ? req.body.siteId : "";
+  const mode = req.body?.mode as SearchOrbitMode;
+  const metric = req.body?.metric as SearchOrbitMetric | undefined;
+  const question = typeof req.body?.question === "string" ? req.body.question.trim() : "";
+  const pageUrl = typeof req.body?.pageUrl === "string" ? req.body.pageUrl.slice(0, 2048) : undefined;
+
+  if (!siteId) return res.status(400).json({ error: "No site specified." });
+  if (!SEARCH_ORBIT_MODES.has(mode)) return res.status(400).json({ error: "Unknown mode." });
+  if (mode === "metric" && (!metric || !SEARCH_ORBIT_METRICS.has(metric))) {
+    return res.status(400).json({ error: "Unknown metric." });
+  }
+  if (mode === "question" && !question) return res.status(400).json({ error: "Ask a question first." });
+
+  const site = await searchSiteRef(String(ws.id), siteId);
+  if (!site) return res.status(404).json({ error: "No Search Console property is linked to this site." });
+
+  const hungUp = new AbortController();
+  const onClose = () => hungUp.abort();
+  req.on("close", onClose);
+
+  let result;
+  try {
+    result = await askSearchOrbit({
+      site,
+      days: clampRange(req.body?.days),
+      type: clampType(req.body?.type),
+      mode,
+      metric,
+      question,
+      history: readHistory(req.body?.history, 6),
+      pageUrl,
+      host: quantalogOrbitHost,
+      tenantId: ws.id,
+      signal: hungUp.signal,
+    });
+  } catch (err) {
+    if (err instanceof GoogleApiError) {
+      return res.status(err.status).json({ error: explainSearchConsoleError(err) });
+    }
+    return res.status(502).json({ error: "Could not read your search data right now. Try again shortly." });
+  } finally {
+    req.off("close", onClose);
+  }
+
+  if (hungUp.signal.aborted) return;
+
+  if (!result.ok) {
+    if (result.quotaExceeded) {
+      return planLimit(res, result.error, {
+        kind: "orbit_questions",
+        label: "Orbit questions",
+        quota: plan.monthlyQuota,
+      });
+    }
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  res.json({ reply: result.reply });
+});
 
 router.get("/conversations", async (req: OrbitRequest, res: Response) => {
   const ws = await requireWorkspaceEitherAuth(req, res);

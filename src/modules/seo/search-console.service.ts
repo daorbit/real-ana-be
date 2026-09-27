@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { SearchConsoleConnection } from "./models/SearchConsoleConnection.js";
 import { SearchConsoleCache } from "./models/SearchConsoleCache.js";
+import { SearchConsoleProperty } from "./models/SearchConsoleProperty.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
   inspectSearchConsoleUrl,
@@ -127,6 +128,20 @@ export type SiteRef = {
   connectionId: string;
   propertyUrl: string;
 };
+
+export async function searchSiteRef(workspaceId: string, siteId: string): Promise<SiteRef | null> {
+  const [link, connection] = await Promise.all([
+    SearchConsoleProperty.findOne({ workspaceId, siteId }).select("propertyUrl"),
+    SearchConsoleConnection.findOne({ workspaceId }).select("_id status"),
+  ]);
+  if (!link || !connection || connection.get("status") !== "active") return null;
+  return {
+    workspaceId,
+    siteId,
+    connectionId: String(connection._id),
+    propertyUrl: String(link.get("propertyUrl")),
+  };
+}
 
 export const SEARCH_TYPES = ["web", "image", "video", "news"] as const;
 
