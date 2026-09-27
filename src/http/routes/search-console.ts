@@ -149,7 +149,7 @@ router.put(
     if (!propertyUrl) return res.status(400).json({ error: "propertyUrl is required" });
 
     const domain = String(found.site.get("domain") ?? "");
-    if (!propertyMatchesDomain(propertyUrl, domain))
+    if (!propertyMatchesDomain(propertyUrl, domain) && req.body?.allowMismatch !== true)
       return res.status(400).json({ error: `That property does not cover ${domain}` });
 
     const connection = await SearchConsoleConnection.findOne({ workspaceId: found.ws.id });
