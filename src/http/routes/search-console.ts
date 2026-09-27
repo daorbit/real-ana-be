@@ -18,6 +18,7 @@ import {
   getSearchBreakdownPage,
   getSearchDrilldown,
   getSearchInsights,
+  getSearchInspection,
   getSearchPerformance,
   getSearchSitemaps,
   isUsablePermission,
@@ -282,6 +283,15 @@ router.get(
     if (dimension !== "query" && dimension !== "page") throw badRequest("dimension must be query or page");
     if (!value) throw badRequest("value is required");
     return getSearchDrilldown(site, dimension, value, clampRange(req.query.days), clampType(req.query.type));
+  }),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/inspection",
+  withLinkedSite((site, req) => {
+    const url = String(req.query.url ?? "").slice(0, 2048);
+    if (!url) throw badRequest("url is required");
+    return getSearchInspection(site, url);
   }),
 );
 

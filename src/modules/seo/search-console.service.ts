@@ -10,6 +10,7 @@ import {
   type SearchAnalyticsRow,
   type SearchConsoleSitemap,
   type SearchType,
+  type SearchUrlInspection,
 } from "../../infra/http-client/search-console.js";
 import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
 
@@ -212,14 +213,10 @@ export type SearchDrilldown = {
   previous: Metrics | null;
   daily: Array<Metrics & { date: string }>;
   related: Array<Metrics & { key: string }>;
-  indexStatus?: string;
-  coverageState?: string;
-  pageFetchState?: string;
-  robotsTxtState?: string;
-  lastCrawled?: string | null;
-  issues?: Array<{ severity: string; message: string; type?: string }>;
   fetchedAt: string;
 };
+
+export type SearchInspection = SearchUrlInspection & { url: string; fetchedAt: string };
 
 const ROW_LIMITS: Record<BreakdownDimension, number> = {
   query: 25000,
@@ -265,11 +262,26 @@ function hashKey(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
-async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
+const MEMORY_ENTRIES = 60;
+const memory = new Map<string, { data: unknown; expiresAt: number }>();
+const inflight = new Map<string, Promise<unknown>>();
+
+function remember(key: string, data: unknown, expiresAt: number) {
+  memory.delete(key);
+  memory.set(key, { data, expiresAt });
+  while (memory.size > MEMORY_ENTRIES) memory.delete(memory.keys().next().value as string);
+}
+
+async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
   const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).lean();
-  if (hit && hit.expiresAt.getTime() > Date.now()) return hit.data as T;
+  if (hit && hit.expiresAt.getTime() > Date.now()) {
+    remember(`${site.siteId}|${key}`, hit.data, hit.expiresAt.getTime());
+    return hit.data as T;
+  }
 
   const data = await load();
+  const expiresAt = Date.now() + CACHE_TTL_MS;
+  remember(`${site.siteId}|${key}`, data, expiresAt);
   await SearchConsoleCache.findOneAndUpdate(
     { siteId: site.siteId, key },
     {
@@ -277,14 +289,28 @@ async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Pr
       siteId: site.siteId,
       key,
       data,
-      expiresAt: new Date(Date.now() + CACHE_TTL_MS),
+      expiresAt: new Date(expiresAt),
     },
     { upsert: true },
   );
   return data;
 }
 
+async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
+  const memoryKey = `${site.siteId}|${key}`;
+  const hot = memory.get(memoryKey);
+  if (hot && hot.expiresAt > Date.now()) return hot.data as T;
+
+  const running = inflight.get(memoryKey);
+  if (running) return running as Promise<T>;
+
+  const pending = loadCached(site, key, load).finally(() => inflight.delete(memoryKey));
+  inflight.set(memoryKey, pending);
+  return pending;
+}
+
 export async function clearSiteCache(siteId: string): Promise<void> {
+  for (const key of [...memory.keys()]) if (key.startsWith(`${siteId}|`)) memory.delete(key);
   await SearchConsoleCache.deleteMany({ siteId });
 }
 
@@ -500,7 +526,7 @@ export function getSearchDrilldown(
     const filters = [{ dimension, operator: "equals" as const, expression: value }];
     const counterpart = dimension === "query" ? "page" : "query";
 
-    const [totals, previous, daily, related, inspection] = await Promise.all([
+    const [totals, previous, daily, related] = await Promise.all([
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.previous, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters, dimensions: ["date"] }),
@@ -511,7 +537,6 @@ export function getSearchDrilldown(
         dimensions: [counterpart],
         rowLimit: 50,
       }),
-      dimension === "page" ? inspectSearchConsoleUrl(accessToken, site.propertyUrl, value) : Promise.resolve(null),
     ]);
 
     return {
@@ -525,12 +550,6 @@ export function getSearchDrilldown(
         .map((row) => ({ date: row.keys[0] ?? "", ...metricsOf(row) }))
         .sort((a, b) => a.date.localeCompare(b.date)),
       related: related.map((row) => ({ key: row.keys[0] ?? "", ...metricsOf(row) })),
-      indexStatus: inspection?.indexStatus,
-      coverageState: inspection?.coverageState,
-      pageFetchState: inspection?.pageFetchState,
-      robotsTxtState: inspection?.robotsTxtState,
-      lastCrawled: inspection?.lastCrawled ?? null,
-      issues: inspection?.issues ?? [],
       fetchedAt: new Date().toISOString(),
     };
   });
@@ -541,5 +560,12 @@ export function getSearchSitemaps(site: SiteRef): Promise<SearchSitemaps> {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const sitemaps = await listSearchConsoleSitemaps(accessToken, site.propertyUrl);
     return { sitemaps, fetchedAt: new Date().toISOString() };
+  });
+}
+export function getSearchInspection(site: SiteRef, url: string): Promise<SearchInspection> {
+  return cached(site, `inspect:${hashKey(`${site.propertyUrl}|${url}`)}`, async () => {
+    const accessToken = await usableSearchConsoleToken(site.connectionId);
+    const inspection = await inspectSearchConsoleUrl(accessToken, site.propertyUrl, url);
+    return { ...inspection, url, fetchedAt: new Date().toISOString() };
   });
 }
