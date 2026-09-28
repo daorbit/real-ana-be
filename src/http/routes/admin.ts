@@ -4,16 +4,11 @@ import { User } from "../../modules/identity/models/User.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
-import { ApiKey } from "../../modules/identity/models/ApiKey.js";
-import { Goal } from "../../modules/analytics/models/Goal.js";
-import { Project } from "../../modules/workspace/models/Project.js";
+import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../../config/AppSetting.js";
 import { demoUsageSnapshot } from "../../modules/billing/demo-limit.js";
 import { Plan } from "../../modules/billing/models/Plan.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
-import { Membership } from "../../modules/workspace/models/Membership.js";
-import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
-import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { AddonPack, ADDON_TYPES, type AddonType } from "../../modules/billing/models/AddonPack.js";
 import { Coupon } from "../../modules/billing/models/Coupon.js";
 import {
@@ -269,28 +264,7 @@ router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
   if (target.id === req.userId)
     return res.status(400).json({ error: "cannot delete your own account" });
 
-  const workspaces = await Workspace.find({ userId: target.id }).select("_id");
-  const wsIds = workspaces.map((w) => w._id);
-
-  const sites = await Site.find({ workspaceId: { $in: wsIds } }).select("siteId");
-  const siteIds = sites.map((s) => s.siteId);
-
-  await Event.deleteMany({ siteId: { $in: siteIds } });
-  await Site.deleteMany({ workspaceId: { $in: wsIds } });
-
-  await ApiKey.deleteMany({
-    $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }],
-  });
-  await Goal.deleteMany({ workspaceId: { $in: wsIds } });
-  await Project.deleteMany({ workspaceId: { $in: wsIds } });
-
-  await Subscription.deleteMany({ workspaceId: { $in: wsIds } });
-  await Membership.deleteMany({ $or: [{ userId: target.id }, { workspaceId: { $in: wsIds } }] });
-  await WorkspaceInvite.deleteMany({ workspaceId: { $in: wsIds } });
-  await Workspace.deleteMany({ userId: target.id });
-  await target.deleteOne();
-
-  for (const id of siteIds) invalidateSite(id as string);
+  await deleteUserAccount(target.id);
 
   console.log(`[admin] ${req.userId} deleted user ${target.id} (${target.email})`);
 

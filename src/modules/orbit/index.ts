@@ -14,6 +14,8 @@ export {
   structuredModelId,
 } from "./models.js";
 export type { ModelProvider, OrbitModel } from "./models.js";
+export { ORBIT_IMAGE_MODELS, availableImageModels, resolveImageModel } from "./image-models.js";
+export type { OrbitImageModel } from "./image-models.js";
 
 export {
   ORBIT_TIERS,

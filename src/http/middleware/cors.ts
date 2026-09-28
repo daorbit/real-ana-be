@@ -3,6 +3,7 @@ import cors from "cors";
  
 const dashboardOrigins = [
   "http://localhost:5173",
+  "http://localhost:5174",
   "https://real-ana-fe.vercel.app",
   "https://studio-quantalog.daorbit.in",
 ];

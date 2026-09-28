@@ -3,6 +3,7 @@ import { requireWorkspaceEitherAuth, type OrbitRequest } from "../middleware/orb
 import { User } from "../../modules/identity/models/User.js";
 import {
   ORBIT_MODELS,
+  availableImageModels,
   askOrbit,
   orbitConfigured,
   providerReady,
@@ -57,7 +58,7 @@ const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 
 
-const SUPER_ADMIN_ONLY_MODELS = new Set(["claude"]);
+const SUPER_ADMIN_ONLY_MODELS = new Set(["claude", "flux-2-klein"]);
 
 async function isSuperAdmin(req: OrbitRequest): Promise<boolean> {
   if (req.impersonatorId) return false;
@@ -151,6 +152,11 @@ router.get("/status", async (req: OrbitRequest, res: Response) => {
         /** The tier that unlocks it, so the UI can name the upgrade. */
         tier: m.tier,
       })),
+    imageModels: availableImageModels(superAdmin ? [] : [...SUPER_ADMIN_ONLY_MODELS]).map((m) => ({
+      id: m.id,
+      label: m.label,
+      hint: m.hint,
+    })),
   });
 });
 
@@ -260,6 +266,7 @@ router.post("/ask", async (req: OrbitRequest, res: Response) => {
   // back to the default rather than erroring, because the id comes from a
   // browser that may have been open since before a model was retired.
   const modelId = typeof req.body?.model === "string" ? req.body.model : undefined;
+  const imageModelId = typeof req.body?.imageModel === "string" ? req.body.imageModel : undefined;
 
   // `/status` already hides these from anyone who isn't a super admin, but a
   // request can name a model id directly without going through that list —
@@ -292,6 +299,7 @@ router.post("/ask", async (req: OrbitRequest, res: Response) => {
       exclude,
       image: rawImage,
       generateImage,
+      imageModelId,
       documentText,
       documentName,
       host: quantalogOrbitHost,

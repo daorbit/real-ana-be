@@ -59,6 +59,9 @@ export interface CloudflareImageGenRequest {
   model: string;
   prompt: string;
   steps?: number;
+  width?: number;
+  height?: number;
+  multipart?: boolean;
   signal?: AbortSignal;
 }
 
@@ -203,6 +206,22 @@ export async function cloudflareVisionChat(
   return last;
 }
 
+function imageGenPayload(req: CloudflareImageGenRequest): { body: BodyInit; headers: Record<string, string> } {
+  if (!req.multipart) {
+    return {
+      body: JSON.stringify({ prompt: req.prompt, steps: req.steps }),
+      headers: { "Content-Type": "application/json" },
+    };
+  }
+
+  const form = new FormData();
+  form.append("prompt", req.prompt);
+  if (req.steps) form.append("steps", String(req.steps));
+  if (req.width) form.append("width", String(req.width));
+  if (req.height) form.append("height", String(req.height));
+  return { body: form, headers: {} };
+}
+
 /**
  * Cloudflare's text-to-image models — a third request shape again:
  * `{prompt, steps}` in, a base64 image out under `result.image`, not
@@ -221,15 +240,16 @@ export async function cloudflareGenerateImage(
     const timer = req.signal ? null : setTimeout(() => abort.abort(), 30_000);
 
     try {
+      const payload = imageGenPayload(req);
       const res = await fetch(
         `https://api.cloudflare.com/client/v4/accounts/${account}/ai/run/${req.model}`,
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
+            ...payload.headers,
           },
-          body: JSON.stringify({ prompt: req.prompt, steps: req.steps }),
+          body: payload.body,
           signal: req.signal ?? abort.signal,
         },
       );

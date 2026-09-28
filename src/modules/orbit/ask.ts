@@ -10,6 +10,7 @@ import {
   resolveModel,
   type OrbitModel,
 } from "./models.js";
+import { resolveImageModel } from "./image-models.js";
 import type { OrbitEntitlement, OrbitHost } from "./types.js";
 
 
@@ -40,11 +41,7 @@ const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const VISION_MAX_TOKENS = 1024;
 
 
-const IMAGE_MODEL = "@cf/black-forest-labs/flux-1-schnell";
-
-/** The default step count. Higher looks better and costs more of the shared
- * daily neuron budget; four is FLUX Schnell's own recommended default. */
-const IMAGE_STEPS = 4;
+const NATIVE_LONG_SIDE = 1024;
 
 const PORTRAIT_MARKERS = [
   "portrait", "vertical", "tall", "story", "reel", "poster", "book cover",
@@ -63,6 +60,16 @@ function detectImageAspect(question: string): ImageAspect {
   if (PORTRAIT_MARKERS.some((m) => q.includes(m))) return { w: 3, h: 4 };
   if (LANDSCAPE_MARKERS.some((m) => q.includes(m))) return { w: 16, h: 9 };
   return { w: 1, h: 1 };
+}
+
+function roundTo16(n: number): number {
+  return Math.max(16, Math.round(n / 16) * 16);
+}
+
+function nativeSize(aspect: ImageAspect): { width: number; height: number } {
+  return aspect.w >= aspect.h
+    ? { width: NATIVE_LONG_SIDE, height: roundTo16((NATIVE_LONG_SIDE * aspect.h) / aspect.w) }
+    : { width: roundTo16((NATIVE_LONG_SIDE * aspect.w) / aspect.h), height: NATIVE_LONG_SIDE };
 }
 
 /** Crops FLUX's fixed 1024x1024 output down to the detected aspect, centred.
@@ -195,6 +202,7 @@ export type AskOptions = {
   image?: string;
 
   generateImage?: boolean;
+  imageModelId?: string;
   host?: OrbitHost;
   tenantId?: string;
 
@@ -545,14 +553,19 @@ async function askOrbitGenerateImage(
   signal?.addEventListener("abort", relay);
   if (signal?.aborted) abort.abort();
 
+  const imageModel = resolveImageModel(options.imageModelId, options.exclude);
+  const aspect = detectImageAspect(question);
+
   let raw;
   let prompt = question.trim();
   try {
     prompt = await expandImagePrompt(question, options.history ?? [], abort.signal);
     raw = await cloudflareGenerateImage({
-      model: IMAGE_MODEL,
+      model: imageModel.model,
       prompt,
-      steps: IMAGE_STEPS,
+      steps: imageModel.steps,
+      multipart: imageModel.multipart,
+      ...(imageModel.nativeAspect ? nativeSize(aspect) : {}),
       signal: abort.signal,
     });
   } finally {
@@ -584,20 +597,21 @@ async function askOrbitGenerateImage(
 
   const described = await describeGeneratedImage(raw.image, signal);
 
-  const aspect = detectImageAspect(question);
   let imageBase64 = raw.image;
-  try {
-    imageBase64 = await cropToAspect(raw.image, aspect);
-  } catch (e) {
-    console.error("[orbit] image crop failed, using square original:", (e as Error).message);
+  if (!imageModel.nativeAspect) {
+    try {
+      imageBase64 = await cropToAspect(raw.image, aspect);
+    } catch (e) {
+      console.error("[orbit] image crop failed, using square original:", (e as Error).message);
+    }
   }
 
   return {
     ok: true,
     reply: `Here's what I drew: ${described ?? prompt}`,
     suggestions: [],
-    model: "flux-schnell",
-    modelLabel: "FLUX",
+    model: imageModel.id,
+    modelLabel: imageModel.label,
     imageBase64,
   };
 }
