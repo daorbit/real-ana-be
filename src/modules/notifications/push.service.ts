@@ -37,6 +37,20 @@ function webPush(): typeof webPushLib | null {
 
 const DEAD_ENDPOINT_STATUSES = new Set([403, 404, 410]);
 
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+function isLocalOrigin(origin: string): boolean {
+  try {
+    return LOCAL_HOSTNAMES.has(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function deliverable(origin: string): boolean {
+  return process.env.PUSH_INCLUDE_LOCAL === "true" || !isLocalOrigin(origin);
+}
+
 export type PushPayload = {
   type: NotificationType | "test";
   title: string;
@@ -58,7 +72,9 @@ async function sendToAll(userId: string, payload: PushPayload): Promise<PushResu
   const mod = webPush();
   if (!mod) return result;
 
-  const subscriptions = await PushSubscription.find({ userId });
+  const subscriptions = (await PushSubscription.find({ userId })).filter((sub) =>
+    deliverable(String(sub.get("origin") ?? "")),
+  );
   result.subscriptions = subscriptions.length;
   if (!subscriptions.length) return result;
 

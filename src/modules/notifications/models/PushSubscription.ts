@@ -7,6 +7,7 @@ const pushSubscriptionSchema = new Schema(
     p256dh: { type: String, required: true },
     auth: { type: String, required: true },
     userAgent: { type: String, default: "" },
+    origin: { type: String, default: "" },
     lastSuccessAt: { type: Date, default: null },
   },
   { timestamps: true }

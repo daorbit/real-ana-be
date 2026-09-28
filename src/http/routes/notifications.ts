@@ -198,6 +198,7 @@ router.post("/push/subscribe", async (req: AuthedRequest, res: Response) => {
         p256dh,
         auth,
         userAgent: String(req.headers["user-agent"] ?? "").slice(0, 200),
+        origin: String(req.headers.origin ?? "").slice(0, 200),
       },
     },
     { upsert: true },
