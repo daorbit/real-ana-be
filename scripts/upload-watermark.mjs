@@ -22,11 +22,12 @@ function sign(params) {
   return createHash("sha1").update(base + API_SECRET).digest("hex");
 }
 
-const filePath = process.argv[2] ?? "../real-ana-fe/public/da-ai-light-mode.png";
+const filePath = process.argv[2] ?? "../real-ana-fe/public/orbit-ai-light.webp";
 const publicId = "orbit/watermark/orbit-ai-mark";
 
 const bytes = readFileSync(new URL(filePath, `file://${process.cwd()}/`));
-const dataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+const mime = filePath.endsWith(".webp") ? "image/webp" : "image/png";
+const dataUrl = `data:${mime};base64,${bytes.toString("base64")}`;
 
 const signed = {
   public_id: publicId,
