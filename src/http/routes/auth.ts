@@ -505,6 +505,12 @@ router.post("/signup/resend", async (req, res) => {
   }
 });
 
+function socialProvider(user: InstanceType<typeof User>): "Google" | "LinkedIn" | "GitHub" {
+  if (user.linkedinId && !user.googleId) return "LinkedIn";
+  if (user.githubId && !user.googleId) return "GitHub";
+  return "Google";
+}
+
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 12 * 60 * 60 * 1000;
 
@@ -545,7 +551,7 @@ router.post("/login", async (req, res) => {
     // "invalid credentials" would send someone hunting for a password that was
     // never set.
     if (!user.passwordHash) {
-      const provider = user.googleId ? "Google" : user.linkedinId ? "LinkedIn" : user.githubId ? "GitHub" : "Google";
+      const provider = socialProvider(user);
       return res.status(401).json({
         error: `this account uses ${provider} sign-in — continue with ${provider}`,
         google: provider === "Google",
@@ -1143,7 +1149,7 @@ router.post("/forgot-password", async (req, res) => {
           await sendOne(
             { email, name: user.name },
             "About your Quantalog password",
-            `Hi ${user.name},\n\nSomeone asked to reset the password on your Quantalog account, but this account signs in with Google — there is no password to reset.\n\nUse "Continue with Google" on the login page and you're in.\n\nIf this wasn't you, nothing about your account has changed.`,
+            `Hi ${user.name},\n\nSomeone asked to reset the password on your Quantalog account, but this account signs in with ${socialProvider(user)} — there is no password to reset.\n\nUse "Continue with ${socialProvider(user)}" on the login page and you're in.\n\nIf this wasn't you, nothing about your account has changed.`,
           );
         } catch {
           console.warn(`[reset] could not send google-account notice to ${email}`);
