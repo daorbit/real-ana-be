@@ -239,7 +239,8 @@ router.post("/", async (req, res) => {
 
     // 204 keeps the beacon lightweight
     res.status(204).end();
-  } catch {
+  } catch (e) {
+    console.error("[collect] ingest failed:", (e as Error).message);
     res.status(500).json({ error: "collect failed" });
   }
 });
