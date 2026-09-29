@@ -162,6 +162,7 @@ async function publicUser(user: InstanceType<typeof User>) {
     googleLinked: Boolean(user.googleId),
     /** The same, for LinkedIn sign-in. */
     linkedinLinked: Boolean(user.linkedinId),
+    githubLinked: Boolean(user.githubId),
     /** False for social-only accounts, which have never set one. */
     hasPassword: Boolean(user.passwordHash),
     totpEnabled: Boolean(user.totpEnabled),
@@ -175,7 +176,9 @@ async function publicUser(user: InstanceType<typeof User>) {
         ? "google"
         : user.linkedinId
           ? "linkedin"
-          : "email",
+          : user.githubId
+            ? "github"
+            : "email",
 
     ...(await accessSummary(user.id)),
   };
@@ -541,11 +544,14 @@ router.post("/login", async (req, res) => {
     // A Google-only account has no password to compare against. Say so plainly:
     // "invalid credentials" would send someone hunting for a password that was
     // never set.
-    if (!user.passwordHash)
+    if (!user.passwordHash) {
+      const provider = user.googleId ? "Google" : user.linkedinId ? "LinkedIn" : user.githubId ? "GitHub" : "Google";
       return res.status(401).json({
-        error: "this account uses Google sign-in — continue with Google",
-        google: true,
+        error: `this account uses ${provider} sign-in — continue with ${provider}`,
+        google: provider === "Google",
+        provider: provider.toLowerCase(),
       });
+    }
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) {
       user.loginFailCount = (user.loginFailCount ?? 0) + 1;

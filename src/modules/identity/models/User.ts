@@ -17,6 +17,7 @@ const userSchema = new Schema(
     passwordHash: { type: String, default: "" },
     googleId: { type: String, trim: true, default: "" },
     linkedinId: { type: String, trim: true, default: "" },
+    githubId: { type: String, trim: true, default: "" },
     name: { type: String, required: true },
     firstName: { type: String, trim: true, default: "" },
     lastName: { type: String, trim: true, default: "" },
