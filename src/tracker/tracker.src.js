@@ -17,15 +17,16 @@
   var siteId = script.getAttribute("data-site");
   if (!siteId) return;
 
-  var src = script.src || "";
-  var i = src.indexOf("/tracker.js");
-  var origin = i > -1 ? src.slice(0, i) : "";
-  var endpoint = origin + "/api/collect";
-
-
   function opt(name) {
     return script.getAttribute("data-" + name);
   }
+
+  var src = script.src || "";
+  var i = src.indexOf("/tracker.js");
+  var origin = i > -1 ? src.slice(0, i) : "";
+  // A site proxying the tracker through its own domain, out of reach of ad
+  // blockers, points this at its proxied collect path.
+  var endpoint = opt("api") || origin + "/api/collect";
 
   function optList(name) {
     var raw = opt(name);
