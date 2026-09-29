@@ -26,7 +26,8 @@
   var origin = i > -1 ? src.slice(0, i) : "";
   // A site proxying the tracker through its own domain, out of reach of ad
   // blockers, points this at its proxied collect path.
-  var endpoint = opt("api") || origin + "/api/collect";
+  // Not `/api/collect`: EasyPrivacy blocks that path on every domain.
+  var endpoint = opt("api") || origin + "/api/ingest";
 
   function optList(name) {
     var raw = opt(name);
@@ -214,26 +215,26 @@
 
   /* ------------------------------------------------------------------
    * Transport
-   * sendBeacon with an application/json Blob triggers a CORS preflight,
-   * which beacons cannot perform — the request is silently dropped.
-   * text/plain is CORS-safelisted, so no preflight is needed.
+   * fetch with keepalive survives page unload like a beacon, but is not a
+   * `ping` request: EasyPrivacy blocks every third-party ping, so sendBeacon
+   * never leaves a customer's site under uBlock, AdGuard or Brave. text/plain
+   * is CORS-safelisted, so no preflight is needed.
    * ------------------------------------------------------------------ */
   function transmit(body) {
-    if (navigator.sendBeacon) {
-      var ok = navigator.sendBeacon(
-        endpoint,
-        new Blob([body], { type: "text/plain;charset=UTF-8" })
-      );
-      if (ok) return;
+    if (typeof fetch === "function") {
+      fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: body,
+        keepalive: true,
+        mode: "cors",
+        credentials: "omit",
+      }).catch(function () {});
+      return;
     }
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: body,
-      keepalive: true,
-      mode: "cors",
-      credentials: "omit",
-    }).catch(function () {});
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(endpoint, new Blob([body], { type: "text/plain;charset=UTF-8" }));
+    }
   }
 
  
