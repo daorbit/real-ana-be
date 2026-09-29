@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { encryptSecret, decryptSecret } from "../../shared/utils/crypto-box.js";
 import { generateTotpSecret, totpKeyUri, verifyTotpCode } from "../../shared/utils/totp.js";
 import { User, REFERRAL_SOURCES, type ReferralSource } from "../../modules/identity/models/User.js";
+import { Session } from "../../modules/identity/models/Session.js";
 import { PendingSignup } from "../../modules/identity/models/PendingSignup.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
@@ -454,7 +455,7 @@ router.post("/signup/verify", async (req, res) => {
 
     welcomeInBackground(user.email, user.name);
 
-    const token = signToken(user.id);
+    const token = signToken(user.id, req);
     res.status(201).json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "verification failed" });
@@ -604,7 +605,7 @@ router.post("/login", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = signToken(user.id);
+    const token = signToken(user.id, req);
     res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "login failed" });
@@ -640,7 +641,7 @@ router.post("/2fa/verify", async (req, res) => {
 
     if (totpOk) {
       clearAttemptFailures(throttleKey);
-      const token = signToken(user.id);
+      const token = signToken(user.id, req);
       return res.json({ token, user: await publicUser(user) });
     }
 
@@ -663,7 +664,7 @@ router.post("/2fa/verify", async (req, res) => {
     user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
     await user.save();
     clearAttemptFailures(throttleKey);
-    const token = signToken(user.id);
+    const token = signToken(user.id, req);
     res.json({ token, user: await publicUser(user), backupCodeUsed: true });
   } catch {
     res.status(500).json({ error: "verification failed" });
@@ -929,7 +930,7 @@ router.post("/google", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = signToken(user.id);
+    const token = signToken(user.id, req);
     res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
   } catch (e) {
     console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
@@ -957,6 +958,44 @@ function clientIp(req: Request): string {
   const raw = req.ip ?? req.socket.remoteAddress ?? "";
   return raw.replace(/^::ffff:/, "") || "unknown";
 }
+
+router.get("/sessions", requireAuth, async (req: AuthedRequest, res: Response) => {
+  if (req.isDemo) return res.json([]);
+
+  const sessions = await Session.find({ userId: req.userId, revokedAt: null })
+    .sort({ lastSeenAt: -1 })
+    .lean();
+
+  res.json(
+    sessions.map((s) => ({
+      id: String(s._id),
+      current: s.jti === req.sessionJti,
+      browser: s.browser,
+      os: s.os,
+      device: s.device,
+      location: s.location,
+      lastSeenAt: s.lastSeenAt,
+      createdAt: s.createdAt,
+    })),
+  );
+});
+
+router.post("/sessions/:id/revoke", requireAuth, async (req: AuthedRequest, res: Response) => {
+  const session = await Session.findOne({ _id: req.params.id, userId: req.userId });
+  if (!session) return res.status(404).json({ error: "session not found" });
+
+  session.revokedAt = new Date();
+  await session.save();
+  res.json({ ok: true });
+});
+
+router.post("/sessions/revoke-others", requireAuth, async (req: AuthedRequest, res: Response) => {
+  await Session.updateMany(
+    { userId: req.userId, jti: { $ne: req.sessionJti }, revokedAt: null },
+    { revokedAt: new Date() },
+  );
+  res.json({ ok: true });
+});
 
 router.post("/demo", async (req: Request, res: Response) => {
   try {
@@ -1285,7 +1324,7 @@ router.post("/reset-password", async (req, res) => {
     );
 
  
-    const token = signToken(user.id);
+    const token = signToken(user.id, req);
     res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "could not reset the password" });
