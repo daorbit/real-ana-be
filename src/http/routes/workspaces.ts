@@ -407,6 +407,8 @@ router.get(
       installed: eventCount > 0,
       eventCount,
       lastEventAt: last?.ts ?? null,
+      trackerVersion: site.trackerVersion ?? 1,
+      latestTrackerVersion: TRACKER_VERSION,
     });
   },
 );

@@ -5,7 +5,7 @@ import { Event } from "./models/Event.js";
  * serving an older script. Bump this with `VERSION` in the tracker itself —
  * left behind, every site reads as up to date and the prompt never appears.
  */
-export const TRACKER_VERSION = 8;
+export const TRACKER_VERSION = 9;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,

@@ -93,11 +93,10 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 app.use(["/api/collect", "/api/ingest"], openCors, collectRoutes);
 app.use("/api/track", openCors, trackRoutes);
 
-// Serve embeddable tracker.js — gzipped, and cached for as long as this
-// build's TRACKER_VERSION is current. A version bump changes the ETag
-// (Express derives it from the file's own mtime/size, which the build script
-// updates every time it regenerates this file), so a stale cached copy is
-// never served past a real change.
+// Serve embeddable tracker.js — gzipped, and revalidated on every load against
+// its ETag (Express derives it from the file's own mtime/size, which the build
+// script updates every time it regenerates this file). An unchanged file costs
+// a 304; a changed one reaches every customer site on its next page view.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 app.get(
@@ -106,7 +105,7 @@ app.get(
   compression(),
   (_req, res) => {
     res.type("application/javascript");
-    res.set("Cache-Control", "public, max-age=86400, must-revalidate");
+    res.set("Cache-Control", "public, no-cache");
     res.set("X-Tracker-Version", String(TRACKER_VERSION));
     res.sendFile(path.join(publicDir, "tracker.js"));
   },

@@ -2,7 +2,7 @@
   "use strict";
 
 
-  var VERSION = 8;
+  var VERSION = 9;
 
 
   function findScript() {
