@@ -15,6 +15,10 @@ export const dashboardCors = cors({
   },
 });
 
+// sendBeacon always sends credentials, and a credentialed request rejects a
+// wildcard origin, so the collector reflects the caller's origin instead.
+export const beaconCors = cors({ origin: true, credentials: true });
+
 function sameHost(origin: string, host: string | undefined): boolean {
   try {
     return Boolean(host) && new URL(origin).host === host;

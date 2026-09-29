@@ -44,7 +44,7 @@ import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
-import { dashboardCors, orbitCors } from "./http/middleware/cors.js";
+import { beaconCors, dashboardCors, orbitCors } from "./http/middleware/cors.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
 import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
 
@@ -90,7 +90,7 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 });
 
 // Public tracking surface (any origin)
-app.use("/api/collect", openCors, collectRoutes);
+app.use("/api/collect", beaconCors, collectRoutes);
 app.use("/api/track", openCors, trackRoutes);
 
 // Serve embeddable tracker.js — gzipped, and cached for as long as this
