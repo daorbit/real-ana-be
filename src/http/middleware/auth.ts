@@ -30,12 +30,15 @@ export interface AuthedRequest extends Request {
 type Payload = { userId: string; impersonatorId?: string; demo?: boolean; jti?: string };
 type Pending2faPayload = { userId: string; pending2fa: true };
 
-export function signToken(userId: string, req?: Request): string {
+export async function signToken(userId: string, req?: Request): Promise<string> {
   if (!req) return jwt.sign({ userId }, jwtSecret(), { expiresIn: "7d" });
 
   const jti = randomUUID();
   const info = sessionInfoFor(req);
-  void Session.create({ userId, jti, ...info }).catch((e: unknown) => {
+  // Awaited: `requireAuth` looks up this session by `jti` on the very next
+  // request, which can arrive before a fire-and-forget write finishes —
+  // that race made a fresh login look like an already-revoked session.
+  await Session.create({ userId, jti, ...info }).catch((e: unknown) => {
     console.error("[auth] could not record session:", e instanceof Error ? e.message : e);
   });
 

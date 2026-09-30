@@ -455,7 +455,7 @@ router.post("/signup/verify", async (req, res) => {
 
     welcomeInBackground(user.email, user.name);
 
-    const token = signToken(user.id, req);
+    const token = await signToken(user.id, req);
     res.status(201).json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "verification failed" });
@@ -605,7 +605,7 @@ router.post("/login", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = signToken(user.id, req);
+    const token = await signToken(user.id, req);
     res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "login failed" });
@@ -641,7 +641,7 @@ router.post("/2fa/verify", async (req, res) => {
 
     if (totpOk) {
       clearAttemptFailures(throttleKey);
-      const token = signToken(user.id, req);
+      const token = await signToken(user.id, req);
       return res.json({ token, user: await publicUser(user) });
     }
 
@@ -664,7 +664,7 @@ router.post("/2fa/verify", async (req, res) => {
     user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
     await user.save();
     clearAttemptFailures(throttleKey);
-    const token = signToken(user.id, req);
+    const token = await signToken(user.id, req);
     res.json({ token, user: await publicUser(user), backupCodeUsed: true });
   } catch {
     res.status(500).json({ error: "verification failed" });
@@ -930,7 +930,7 @@ router.post("/google", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = signToken(user.id, req);
+    const token = await signToken(user.id, req);
     res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
   } catch (e) {
     console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
@@ -1323,8 +1323,8 @@ router.post("/reset-password", async (req, res) => {
       console.error("[reset] change notice failed:", (e as Error)?.message)
     );
 
- 
-    const token = signToken(user.id, req);
+
+    const token = await signToken(user.id, req);
     res.json({ token, user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "could not reset the password" });

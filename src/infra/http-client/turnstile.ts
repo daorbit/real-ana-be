@@ -79,6 +79,7 @@ export async function verifyTurnstileToken(
       console.error("[turnstile] secret rejected by Cloudflare — check CLOUDFLARE_SECRET_KEY");
       return { ok: false, reason: "unavailable" };
     }
+    console.error("[turnstile] token rejected:", codes);
     return { ok: false, reason: "invalid" };
   } catch (e) {
     console.error("[turnstile] verification failed:", e instanceof Error ? e.message : e);

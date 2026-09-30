@@ -118,7 +118,7 @@ router.get(
       if (user.totpEnabled) {
         return res.redirect(loginUrl("2fa", { pendingToken: signPending2faToken(user.id) }));
       }
-      return res.redirect(loginUrl(created ? "created" : "ok", { token: signToken(user.id, req) }));
+      return res.redirect(loginUrl(created ? "created" : "ok", { token: await signToken(user.id, req) }));
     } catch (e) {
       console.error("[github] login failed:", e instanceof Error ? e.message : e);
       const reason = profile.email ? "login_failed" : "no_email";

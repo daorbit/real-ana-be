@@ -542,7 +542,7 @@ router.get(
         const resolved = await resolveLoginUser(profile);
         userId = resolved.id;
         if (resolved.totpEnabled) pending2faToken = signPending2faToken(resolved.id);
-        else issuedToken = signToken(resolved.id, req);
+        else issuedToken = await signToken(resolved.id, req);
       } catch (e) {
         console.error("[linkedin] login failed:", e instanceof Error ? e.message : e);
         return res.redirect(loginUrl("error", "login_failed"));
