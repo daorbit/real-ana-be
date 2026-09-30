@@ -1,16 +1,5 @@
-import mongoose, { Schema, Types } from "mongoose";
-
-/**
- * A widget placed on the home grid. Array order is the on-screen order, so
- * position needs no field of its own.
- */
-const placedSchema = new Schema(
-  {
-    id: { type: String, required: true },
-    span: { type: Number, required: true, enum: [1, 2, 3, 4] },
-  },
-  { _id: false }
-);
+import mongoose, { Schema } from "mongoose";
+import { placedSchema } from "./placed.js";
 
 const workspaceSchema = new Schema(
   {

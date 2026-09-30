@@ -42,6 +42,8 @@ import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
+import { parseLayout } from "../../modules/workspace/layout.js";
+import { deleteWorkspaceDashboards } from "../../modules/dashboards/cleanup.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -1001,6 +1003,7 @@ router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   await CrawlReport.deleteMany({ workspaceId: ws.id });
   await Site.deleteMany({ workspaceId: ws.id });
   await Goal.deleteMany({ workspaceId: ws.id });
+  await deleteWorkspaceDashboards(ws.id);
   // Keys are scoped to the workspace, so they'd otherwise outlive it and keep
   // authenticating against /v1 for a tenant that no longer exists.
   await ApiKey.deleteMany({ workspaceId: ws.id });
@@ -1046,21 +1049,6 @@ router.delete(
     res.status(204).end();
   },
 );
-
-type Placed = { id: string; span: number };
-
-function parseLayout(body: unknown): Placed[] | null {
-  if (!Array.isArray(body) || body.length > 50) return null;
-  const out: Placed[] = [];
-  for (const item of body) {
-    const id = (item as Placed)?.id;
-    const span = (item as Placed)?.span;
-    if (typeof id !== "string" || !id || id.length > 64) return null;
-    if (![1, 2, 3, 4].includes(span)) return null;
-    out.push({ id, span });
-  }
-  return out;
-}
 
 router.get("/:wid/layout", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req);

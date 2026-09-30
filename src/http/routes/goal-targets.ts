@@ -1,0 +1,104 @@
+import { Router, Response } from "express";
+import { isValidObjectId } from "mongoose";
+import { GoalTarget } from "../../modules/dashboards/models/GoalTarget.js";
+import { Goal } from "../../modules/analytics/models/Goal.js";
+import { Site } from "../../modules/analytics/models/Site.js";
+import {
+  parseTargetDraft,
+  targetProgress,
+  workspaceTargets,
+  type TargetDraft,
+} from "../../modules/dashboards/goal-targets.service.js";
+import { requireWorkspace } from "../../modules/workspace/access.service.js";
+import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
+import { asyncHandler } from "../middleware/async-handler.js";
+
+const router = Router({ mergeParams: true });
+router.use(requireAuth);
+router.use(blockDemoWrites);
+
+const MAX_TARGETS = 30;
+
+async function validateRefs(workspaceId: string, draft: TargetDraft): Promise<string | null> {
+  if (draft.goalId) {
+    if (!isValidObjectId(draft.goalId)) return "conversion goal not found";
+    const goal = await Goal.exists({ _id: draft.goalId, workspaceId });
+    if (!goal) return "conversion goal not found";
+  }
+  if (draft.siteId) {
+    const site = await Site.exists({ siteId: draft.siteId, workspaceId });
+    if (!site) return "site not found";
+  }
+  return null;
+}
+
+async function siteIdsOf(workspaceId: string): Promise<string[]> {
+  const sites = await Site.find({ workspaceId }).select("siteId");
+  return sites.map((s) => String(s.siteId));
+}
+
+router.get(
+  "/",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireWorkspace(req, res);
+    if (!ws) return;
+    res.json(await workspaceTargets(ws.id));
+  }),
+);
+
+router.post(
+  "/",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireWorkspace(req, res, "editor");
+    if (!ws) return;
+
+    const draft = parseTargetDraft(req.body);
+    if (typeof draft === "string") return res.status(400).json({ error: draft });
+    const refError = await validateRefs(ws.id, draft);
+    if (refError) return res.status(400).json({ error: refError });
+
+    if ((await GoalTarget.countDocuments({ workspaceId: ws.id })) >= MAX_TARGETS) {
+      return res.status(409).json({ error: `a workspace can track up to ${MAX_TARGETS} goals` });
+    }
+
+    const target = await GoalTarget.create({ workspaceId: ws.id, ...draft, createdBy: req.userId });
+    res.status(201).json(await targetProgress(target, await siteIdsOf(ws.id)));
+  }),
+);
+
+router.put(
+  "/:id",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireWorkspace(req, res, "editor");
+    if (!ws) return;
+    if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "goal not found" });
+
+    const target = await GoalTarget.findOne({ _id: req.params.id, workspaceId: ws.id });
+    if (!target) return res.status(404).json({ error: "goal not found" });
+
+    const draft = parseTargetDraft(req.body);
+    if (typeof draft === "string") return res.status(400).json({ error: draft });
+    const refError = await validateRefs(ws.id, draft);
+    if (refError) return res.status(400).json({ error: refError });
+
+    target.set(draft);
+    await target.save();
+    res.json(await targetProgress(target, await siteIdsOf(ws.id)));
+  }),
+);
+
+router.delete(
+  "/:id",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireWorkspace(req, res, "editor");
+    if (!ws) return;
+    if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "goal not found" });
+
+    const target = await GoalTarget.findOne({ _id: req.params.id, workspaceId: ws.id });
+    if (!target) return res.status(404).json({ error: "goal not found" });
+    await target.deleteOne();
+    res.status(204).end();
+  }),
+);
+
+export default router;

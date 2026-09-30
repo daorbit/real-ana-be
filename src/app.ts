@@ -41,6 +41,10 @@ import reportsPublicRoutes from "./http/routes/reports-public.js";
 import notificationRoutes from "./http/routes/notifications.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import orbitPublicRoutes from "./http/routes/orbit-public.js";
+import dashboardRoutes from "./http/routes/dashboards.js";
+import goalTargetRoutes from "./http/routes/goal-targets.js";
+import embedRoutes from "./http/routes/embeds.js";
+import embedPublicRoutes from "./http/routes/embed-public.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
@@ -161,6 +165,7 @@ app.use("/api/public/plans", openCors, plansPublicRoutes);
 app.use("/api/public/reports", openCors, reportsPublicRoutes);
 
 app.use("/api/public/orbit", openCors, orbitPublicRoutes);
+app.use("/api/embed", openCors, embedPublicRoutes);
 
 app.use("/api/auth/linkedin", linkedinRoutes);
 
@@ -213,6 +218,9 @@ app.use("/api/workspaces/:wid/segments", dashboardCors, requireUnlocked, segment
 app.use("/api/workspaces/:wid/branding", dashboardCors, requireUnlocked, brandingRoutes);
 app.use("/api/workspaces/:wid/media", dashboardCors, requireUnlocked, mediaRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, requireUnlocked, markerRoutes);
+app.use("/api/workspaces/:wid/dashboards", dashboardCors, requireUnlocked, dashboardRoutes);
+app.use("/api/workspaces/:wid/targets", dashboardCors, requireUnlocked, goalTargetRoutes);
+app.use("/api/workspaces/:wid/embeds", dashboardCors, requireUnlocked, embedRoutes);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, requireUnlocked, memberRoutes);
 // Accepting an invitation. Not under /workspaces: the recipient has no access
