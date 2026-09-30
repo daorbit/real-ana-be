@@ -26,6 +26,7 @@ import {
   isUsablePermission,
   propertyMatchesDomain,
   usableSearchConsoleToken,
+  withGoogleSession,
   type BreakdownDimension,
   type BreakdownSort,
   type SearchSitemaps,
@@ -129,8 +130,10 @@ router.get(
     if (!connection) return res.status(404).json({ error: "Search Console is not connected" });
 
     try {
-      const accessToken = await usableSearchConsoleToken(String(connection._id));
-      const sites = await listSearchConsoleSites(accessToken);
+      const connectionId = String(connection._id);
+      const sites = await withGoogleSession(connectionId, async () =>
+        listSearchConsoleSites(await usableSearchConsoleToken(connectionId)),
+      );
       const domain = String(found.site.get("domain") ?? "");
 
       const properties = sites
@@ -166,8 +169,10 @@ router.put(
     if (!connection) return res.status(404).json({ error: "Search Console is not connected" });
 
     try {
-      const accessToken = await usableSearchConsoleToken(String(connection._id));
-      const sites = await listSearchConsoleSites(accessToken);
+      const connectionId = String(connection._id);
+      const sites = await withGoogleSession(connectionId, async () =>
+        listSearchConsoleSites(await usableSearchConsoleToken(connectionId)),
+      );
       const match = sites.find(
         (site) => site.siteUrl === propertyUrl && isUsablePermission(site.permissionLevel),
       );
@@ -257,7 +262,7 @@ function withLinkedSite(
     const linked = await linkedSite(req, res);
     if (!linked) return;
     try {
-      res.json(await load(linked.site, req, linked.ent));
+      res.json(await withGoogleSession(linked.site.connectionId, () => load(linked.site, req, linked.ent)));
     } catch (err) {
       if (err instanceof SearchPlanDenied) return planLimit(res, err.message, err.limit, err.code);
       googleFailure(res, err);
@@ -363,8 +368,11 @@ function sitemapWrite(
     const linked = await linkedSite(req, res, "admin");
     if (!linked) return;
     try {
-      const sitemaps = await write(linked.site, pick(req));
-      res.json({ ...sitemaps, access: await sitemapAccess(linked.site) });
+      const result = await withGoogleSession(linked.site.connectionId, async () => {
+        const sitemaps = await write(linked.site, pick(req));
+        return { ...sitemaps, access: await sitemapAccess(linked.site) };
+      });
+      res.json(result);
     } catch (err) {
       if (err instanceof SitemapWriteDenied) {
         return res.status(403).json({ error: err.message, kind: `sitemap_${err.blockedBy}` });

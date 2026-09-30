@@ -46,7 +46,7 @@ export async function usableAccessToken(connectionId: string): Promise<string> {
       connectionId,
       "Google did not provide a refresh token. Reconnect Google to continue syncing.",
     );
-    throw new GoogleApiError("revoked", 401, "no refresh token stored");
+    throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
 
   try {

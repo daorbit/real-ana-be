@@ -43,7 +43,7 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
   const storedRefresh = decryptSecret(String(connection.get("refreshToken") ?? ""));
   if (!storedRefresh) {
     await markRevoked(connectionId, "Google did not provide a refresh token. Reconnect Search Console.");
-    throw new GoogleApiError("revoked", 401, "no refresh token stored");
+    throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
 
   try {
@@ -73,6 +73,28 @@ async function markRevoked(connectionId: string, message: string): Promise<void>
     { _id: connectionId },
     { status: "revoked", statusMessage: message },
   );
+}
+
+function isRevoked(err: unknown): boolean {
+  return err instanceof GoogleApiError && err.kind === "revoked";
+}
+
+export async function withGoogleSession<T>(connectionId: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isRevoked(err)) throw err;
+  }
+
+  await SearchConsoleConnection.updateOne({ _id: connectionId }, { expiresAt: new Date(0) });
+  try {
+    return await run();
+  } catch (err) {
+    if (isRevoked(err)) {
+      await markRevoked(connectionId, "Your Google sign-in has expired. Sign in again to keep seeing search data.");
+    }
+    throw err;
+  }
 }
 
 export function explainSearchConsoleError(err: unknown): string {
