@@ -51,11 +51,7 @@ const subscriptionSchema = new Schema(
     /** Free has no real expiry (see the seed script); paid plans expire one cycle after purchase. */
     currentPeriodEnd: { type: Date, default: null },
 
-    /**
-     * Quota usage for the *current* billing cycle only. Reset to 0 whenever a
-     * purchase starts a new period — unused plan quota does not roll over,
-     * only purchased addon credits do.
-     */
+    usageMonth: { type: String, default: null },
     auditsUsed: { type: Number, default: 0 },
     crawlsUsed: { type: Number, default: 0 },
     inspectionsUsed: { type: Number, default: 0 },
@@ -76,7 +72,7 @@ const subscriptionSchema = new Schema(
      *
      * Incremented by the forms service after a response has been stored, not
      * before: a submission that failed to save is not one the workspace should
-     * be charged for. Reset with the rest of the counters when a period starts.
+     * be charged for. Reset with the rest of the counters when the usage month changes.
      */
     formSubmissionsUsed: { type: Number, default: 0 },
     expiryRemindersSent: { type: [Number], default: [] },

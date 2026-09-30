@@ -37,6 +37,7 @@ import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
+import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
@@ -187,6 +188,16 @@ router.get("/:wid/usage", async (req: AuthedRequest, res: Response) => {
   if (!summary) return res.status(404).json({ error: "this workspace has no billing record" });
 
   res.json(summary);
+});
+
+router.get("/:wid/usage/history", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res);
+  if (!ws) return;
+
+  const history = await usageHistory(ws.id);
+  if (!history) return res.status(404).json({ error: "this workspace has no billing record" });
+
+  res.json(history);
 });
 
 // Create site under workspace

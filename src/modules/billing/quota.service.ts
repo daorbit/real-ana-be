@@ -12,6 +12,7 @@ import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { Media } from "../media/models/Media.js";
 import { invalidateSite } from "./event-quota.js";
+import { nextUsageReset, rollUsageMonth, usageMonthKey } from "./usage-month.js";
 import type { PlanLimitInfo } from "../../http/plan-limit.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
@@ -74,6 +75,7 @@ export async function activatePlanPeriod(
   cycle: BillingCycle,
 ) {
   const now = new Date();
+  await rollUsageMonth(workspaceId);
   const existing = await Subscription.findOne({ workspaceId });
   const stacking = isSamePlanRenewal(existing, planSlug, cycle);
 
@@ -90,13 +92,9 @@ export async function activatePlanPeriod(
         status: "active",
         currentPeriodStart: now,
         currentPeriodEnd: periodEnd,
-        auditsUsed: 0,
-        crawlsUsed: 0,
-        inspectionsUsed: 0,
-        eventsUsed: 0,
-        formSubmissionsUsed: 0,
         expiryRemindersSent: [],
       },
+      $setOnInsert: { usageMonth: usageMonthKey(now) },
     },
     { upsert: true }
   );
@@ -149,7 +147,7 @@ export async function paidPlan(workspaceId: string) {
 }
 
 /**
- * Start an Orbit plan period, resetting the question count.
+ * Start an Orbit plan period. The question count belongs to the usage month and carries on.
  *
  * Separate from `activatePlanPeriod` because the two ladders are bought
  * independently — buying Orbit Pro must not restart the analytics period or
@@ -162,10 +160,11 @@ export async function activateOrbitPeriod(
   cycle: BillingCycle,
 ) {
   const now = new Date();
+  await rollUsageMonth(workspaceId);
   const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
   await Subscription.findOneAndUpdate(
     { workspaceId },
-    { $set: { userId, orbitPlanSlug, orbitPeriodEnd: periodEnd, orbitUsed: 0 } },
+    { $set: { userId, orbitPlanSlug, orbitPeriodEnd: periodEnd } },
     { upsert: true },
   );
 }
@@ -383,6 +382,7 @@ export async function canCreateScheduledPost(
  
 export async function formLimits(workspaceId: string) {
 
+  await rollUsageMonth(workspaceId);
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
   const sub = await Subscription.findOne({ workspaceId }).select(
     "formSubmissionsUsed addonFormSubmissionCredits",
@@ -404,6 +404,7 @@ export async function formLimits(workspaceId: string) {
 }
 
 export async function recordFormSubmission(workspaceId: string): Promise<void> {
+  await rollUsageMonth(workspaceId);
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
 
   const withinPlan = await Subscription.findOneAndUpdate(
@@ -463,6 +464,7 @@ async function planAllowance(
 }
 
 export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
+  await rollUsageMonth(workspaceId);
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return false;
 
@@ -478,6 +480,7 @@ export async function hasQuota(workspaceId: string, kind: QuotaKind): Promise<bo
 }
 
 export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<boolean> {
+  await rollUsageMonth(workspaceId);
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return false;
 
@@ -505,6 +508,7 @@ export async function spendQuota(workspaceId: string, kind: QuotaKind): Promise<
 
 /** Remaining quota for one workspace, for the dashboard's usage display. */
 export async function quotaSummary(workspaceId: string) {
+  await rollUsageMonth(workspaceId);
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return null;
 
@@ -551,6 +555,8 @@ export async function quotaSummary(workspaceId: string) {
     cycle: sub.cycle,
     status: expired ? ("expired" as const) : sub.status,
     currentPeriodEnd: sub.currentPeriodEnd,
+    usageMonth: (sub.get("usageMonth") as string | null) ?? usageMonthKey(),
+    usageResetsAt: nextUsageReset().toISOString(),
     audits: {
       planQuota: plan.monthlyAuditQuota,
       used: sub.auditsUsed,

@@ -1,6 +1,7 @@
 import { Subscription } from "./models/Subscription.js";
 import { Site } from "../analytics/models/Site.js";
 import { getPlanCatalogEntry } from "./plans.catalog.js";
+import { rollUsageMonth } from "./usage-month.js";
 
 
 const DECISION_TTL_MS = 60_000;
@@ -26,6 +27,7 @@ function remember(siteId: string, decision: Decision) {
 
 
 async function allowanceFor(workspaceId: string): Promise<number | null> {
+  await rollUsageMonth(workspaceId);
   const sub = await Subscription.findOne({ workspaceId }).select(
     "planSlug currentPeriodEnd eventsUsed",
   );
@@ -98,6 +100,7 @@ function denyWorkspace(workspaceId: string, at: number) {
 export async function countEvents(workspaceId: string, n = 1): Promise<void> {
   if (n <= 0) return;
   try {
+    await rollUsageMonth(workspaceId);
     await Subscription.updateOne({ workspaceId }, { $inc: { eventsUsed: n } });
   } catch (e) {
     // Usage is not worth failing an ingest over: the events are already stored,
