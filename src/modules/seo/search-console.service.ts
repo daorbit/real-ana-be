@@ -20,6 +20,8 @@ import { pageViewSeries, pageViewsByPath, pathOf, type PageViewSeries } from "./
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const TOP_ROWS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SIGNED_OUT_MESSAGE =
+  "The Google sign-in for Search visibility has expired. A workspace admin needs to sign in again.";
 
 export const PERFORMANCE_RANGES = [7, 28, 90, 180, 365, 480] as const;
 
@@ -42,7 +44,7 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
 
   const storedRefresh = decryptSecret(String(connection.get("refreshToken") ?? ""));
   if (!storedRefresh) {
-    await markRevoked(connectionId, "Google did not provide a refresh token. Reconnect Search Console.");
+    await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
 
@@ -62,7 +64,7 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
     return tokens.accessToken;
   } catch (err) {
     if (err instanceof GoogleApiError && err.kind === "revoked") {
-      await markRevoked(connectionId, "Your Google sign-in has expired. Sign in again to keep seeing search data.");
+      await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     }
     throw err;
   }
@@ -91,7 +93,7 @@ export async function withGoogleSession<T>(connectionId: string, run: () => Prom
     return await run();
   } catch (err) {
     if (isRevoked(err)) {
-      await markRevoked(connectionId, "Your Google sign-in has expired. Sign in again to keep seeing search data.");
+      await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     }
     throw err;
   }
