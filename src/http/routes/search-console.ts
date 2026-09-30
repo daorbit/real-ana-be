@@ -27,8 +27,17 @@ import {
   usableSearchConsoleToken,
   type BreakdownDimension,
   type BreakdownSort,
+  type SearchSitemaps,
   type SiteRef,
 } from "../../modules/seo/search-console.service.js";
+import {
+  explainSitemapWriteError,
+  removeSitemap,
+  sitemapAccess,
+  SitemapWriteDenied,
+  submitSitemap,
+} from "../../modules/seo/search-sitemaps.service.js";
+import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { AppError, badRequest } from "../../shared/errors/index.js";
 import { hasQuota, spendQuota } from "../../modules/billing/quota.service.js";
 import {
@@ -202,8 +211,9 @@ router.delete(
 async function linkedSite(
   req: AuthedRequest,
   res: Response,
+  minimum: WorkspaceRole = "viewer",
 ): Promise<{ site: SiteRef; ent: SearchEntitlement } | null> {
-  const found = await resolveSite(req);
+  const found = await resolveSite(req, minimum);
   if (siteRefused(found)) {
     res.status(found.status).json({ error: found.error });
     return null;
@@ -333,7 +343,44 @@ router.get(
 
 router.get(
   "/:wid/sites/:siteId/search-console/sitemaps",
-  withLinkedSite((site) => getSearchSitemaps(site)),
+  withLinkedSite(async (site) => {
+    const [sitemaps, access] = await Promise.all([getSearchSitemaps(site), sitemapAccess(site)]);
+    return { ...sitemaps, access };
+  }),
+);
+
+function sitemapWrite(
+  write: (site: SiteRef, value: unknown) => Promise<SearchSitemaps>,
+  pick: (req: AuthedRequest) => unknown,
+) {
+  return asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const linked = await linkedSite(req, res, "admin");
+    if (!linked) return;
+    try {
+      const sitemaps = await write(linked.site, pick(req));
+      res.json({ ...sitemaps, access: await sitemapAccess(linked.site) });
+    } catch (err) {
+      if (err instanceof SitemapWriteDenied) {
+        return res.status(403).json({ error: err.message, kind: `sitemap_${err.blockedBy}` });
+      }
+      if (err instanceof AppError) return res.status(err.status).json({ error: err.message });
+      const status = err instanceof GoogleApiError ? err.status : 502;
+      res.status(status).json({
+        error: explainSitemapWriteError(err),
+        kind: err instanceof GoogleApiError ? err.kind : "unknown",
+      });
+    }
+  });
+}
+
+router.post(
+  "/:wid/sites/:siteId/search-console/sitemaps",
+  sitemapWrite(submitSitemap, (req) => req.body?.url),
+);
+
+router.delete(
+  "/:wid/sites/:siteId/search-console/sitemaps",
+  sitemapWrite(removeSitemap, (req) => req.query.url),
 );
 
 router.post(

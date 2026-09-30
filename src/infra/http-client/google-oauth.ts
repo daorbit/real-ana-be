@@ -114,6 +114,23 @@ export async function googlePostJson<T>(url: string, accessToken: string, body: 
   }
 }
 
+export async function googleSend(
+  method: "put" | "delete",
+  url: string,
+  accessToken: string,
+): Promise<void> {
+  try {
+    await axios.request({
+      method,
+      url,
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: GOOGLE_TIMEOUT_MS,
+    });
+  } catch (err) {
+    throw classifyGoogleError(err);
+  }
+}
+
 export function buildGoogleAuthorizeUrl(
   config: GoogleClientConfig,
   scope: string,

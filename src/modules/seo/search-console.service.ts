@@ -207,9 +207,19 @@ export type SearchSitemaps = {
 
 type InsightRow = BreakdownRow & { missedClicks?: number };
 
+export type PositionBand = {
+  band: "1-3" | "4-10" | "11-20" | "21+";
+  queries: number;
+  clicks: number;
+  impressions: number;
+  netMoved: number;
+};
+
 export type SearchInsights = {
   days: number;
   type: SearchType;
+  positionBands: PositionBand[];
+  questionQueries: InsightRow[];
   quickWins: InsightRow[];
   lowCtr: InsightRow[];
   risingQueries: InsightRow[];
@@ -218,10 +228,43 @@ export type SearchInsights = {
   fallingPages: InsightRow[];
   newQueries: InsightRow[];
   lostQueries: Array<{ key: string; previousClicks: number; previousImpressions: number }>;
-  counts: { queries: number; pages: number; newQueries: number; lostQueries: number };
+  counts: { queries: number; pages: number; newQueries: number; lostQueries: number; questionQueries: number };
   limited: boolean;
   fetchedAt: string;
 };
+
+const QUESTION_QUERY =
+  /^(how|what|why|when|where|which|who|whose|is|are|can|could|does|do|did|should|will|would)\b|\?$/i;
+
+const POSITION_BANDS: Array<{ band: PositionBand["band"]; max: number }> = [
+  { band: "1-3", max: 3.5 },
+  { band: "4-10", max: 10.5 },
+  { band: "11-20", max: 20.5 },
+  { band: "21+", max: Number.POSITIVE_INFINITY },
+];
+
+function bandOf(position: number): PositionBand["band"] {
+  return POSITION_BANDS.find((b) => position < b.max)!.band;
+}
+
+function positionBands(rows: BreakdownRow[]): PositionBand[] {
+  const bands = new Map(
+    POSITION_BANDS.map(({ band }) => [band, { band, queries: 0, clicks: 0, impressions: 0, netMoved: 0 }]),
+  );
+  for (const row of rows) {
+    const now = bandOf(row.position);
+    const current = bands.get(now)!;
+    current.queries += 1;
+    current.clicks += row.clicks;
+    current.impressions += row.impressions;
+    if (row.previousPosition === null) continue;
+    const before = bandOf(row.previousPosition);
+    if (before === now) continue;
+    current.netMoved += 1;
+    bands.get(before)!.netMoved -= 1;
+  }
+  return [...bands.values()];
+}
 
 export type SearchDrilldown = {
   dimension: "query" | "page";
@@ -558,10 +601,13 @@ export async function getSearchInsights(
 
   const withHistory = (rows: BreakdownRow[]) => rows.filter((row) => row.previousClicks !== null);
   const newQueries = queries.rows.filter((row) => row.previousClicks === null && row.clicks > 0);
+  const questionQueries = queries.rows.filter((row) => QUESTION_QUERY.test(row.key.trim()));
 
   return {
     days,
     type,
+    positionBands: positionBands(queries.rows),
+    questionQueries: top(questionQueries, (row) => row.impressions),
     quickWins,
     lowCtr,
     risingQueries: top(withHistory(queries.rows).filter((r) => clickDelta(r) > 0), clickDelta),
@@ -575,6 +621,7 @@ export async function getSearchInsights(
       pages: pages.rows.length,
       newQueries: newQueries.length,
       lostQueries: queries.lost.length,
+      questionQueries: questionQueries.length,
     },
     limited: limit < INSIGHT_ROWS,
     fetchedAt: queries.fetchedAt,
@@ -627,12 +674,22 @@ export function getSearchDrilldown(
   });
 }
 
+function sitemapsKey(site: SiteRef): string {
+  return `sitemaps:${site.propertyUrl}`;
+}
+
 export function getSearchSitemaps(site: SiteRef): Promise<SearchSitemaps> {
-  return cached(site, `sitemaps:${site.propertyUrl}`, async () => {
+  return cached(site, sitemapsKey(site), async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const sitemaps = await listSearchConsoleSitemaps(accessToken, site.propertyUrl);
     return { sitemaps, fetchedAt: new Date().toISOString() };
   });
+}
+
+export async function forgetSearchSitemaps(site: SiteRef): Promise<void> {
+  const key = sitemapsKey(site);
+  memory.delete(`${site.siteId}|${key}`);
+  await SearchConsoleCache.deleteOne({ siteId: site.siteId, key });
 }
 function inspectionKey(site: SiteRef, url: string) {
   return `inspect:${hashKey(`${site.propertyUrl}|${url}`)}`;

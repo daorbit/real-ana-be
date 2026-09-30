@@ -3,6 +3,7 @@ import {
   exchangeGoogleCode,
   googleGetJson,
   googlePostJson,
+  googleSend,
   refreshGoogleToken,
   revokeGoogleToken,
   type GoogleClientConfig,
@@ -12,7 +13,8 @@ import {
 const WEBMASTERS_API = "https://www.googleapis.com/webmasters/v3";
 const USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
-export const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
+export const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters";
+const SEARCH_CONSOLE_READONLY_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
 
 const REQUESTED_SCOPES = ["openid", "email", SEARCH_CONSOLE_SCOPE].join(" ");
 
@@ -56,6 +58,11 @@ export function revokeSearchConsoleToken(token: string): Promise<void> {
 }
 
 export function hasSearchConsoleScope(scope: string): boolean {
+  const granted = scope.split(/\s+/);
+  return granted.includes(SEARCH_CONSOLE_SCOPE) || granted.includes(SEARCH_CONSOLE_READONLY_SCOPE);
+}
+
+export function canWriteSearchConsole(scope: string): boolean {
   return scope.split(/\s+/).includes(SEARCH_CONSOLE_SCOPE);
 }
 
@@ -138,7 +145,27 @@ export async function listSearchConsoleSitemaps(
     });
 }
 
-export type SearchAnalyticsDimension = "date" | "query" | "page" | "country" | "device";
+function sitemapUrl(siteUrl: string, feedpath: string): string {
+  return `${WEBMASTERS_API}/sites/${encodeURIComponent(siteUrl)}/sitemaps/${encodeURIComponent(feedpath)}`;
+}
+
+export function submitSearchConsoleSitemap(
+  accessToken: string,
+  siteUrl: string,
+  feedpath: string,
+): Promise<void> {
+  return googleSend("put", sitemapUrl(siteUrl, feedpath), accessToken);
+}
+
+export function deleteSearchConsoleSitemap(
+  accessToken: string,
+  siteUrl: string,
+  feedpath: string,
+): Promise<void> {
+  return googleSend("delete", sitemapUrl(siteUrl, feedpath), accessToken);
+}
+
+export type SearchAnalyticsDimension ="date" | "query" | "page" | "country" | "device";
 
 export type SearchAnalyticsRow = {
   keys: string[];
@@ -162,6 +189,12 @@ export type SearchUrlInspectionIssue = {
   type?: string;
 };
 
+export type SearchRichResult = {
+  type: string;
+  items: number;
+  issues: Array<{ severity: string; message: string }>;
+};
+
 export type SearchUrlInspection = {
   indexStatus: string;
   verdict?: string;
@@ -170,7 +203,41 @@ export type SearchUrlInspection = {
   robotsTxtState?: string;
   lastCrawled?: string | null;
   issues: SearchUrlInspectionIssue[];
+  googleCanonical?: string;
+  userCanonical?: string;
+  crawledAs?: string;
+  sitemaps: string[];
+  referringUrls: string[];
+  richResults: SearchRichResult[];
 };
+
+type RawRichResults = {
+  detectedItems?: Array<{
+    richResultType?: string;
+    items?: Array<{ issues?: Array<{ issueMessage?: string; severity?: string }> }>;
+  }>;
+};
+
+function richResultsOf(raw?: RawRichResults): SearchRichResult[] {
+  return (raw?.detectedItems ?? [])
+    .filter((item) => item.richResultType)
+    .map((item) => {
+      const seen = new Set<string>();
+      const issues = (item.items ?? [])
+        .flatMap((entry) => entry.issues ?? [])
+        .filter((issue) => {
+          if (!issue.issueMessage || seen.has(issue.issueMessage)) return false;
+          seen.add(issue.issueMessage);
+          return true;
+        })
+        .map((issue) => ({ severity: String(issue.severity ?? "WARNING"), message: String(issue.issueMessage) }));
+      return { type: String(item.richResultType), items: item.items?.length ?? 0, issues };
+    });
+}
+
+function stringList(value: unknown, limit = 10): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string").slice(0, limit) : [];
+}
 
 function normalizeGoogleValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -203,7 +270,13 @@ export async function inspectSearchConsoleUrl(
         pageFetchState?: unknown;
         robotsTxtState?: unknown;
         lastCrawlTime?: unknown;
+        googleCanonical?: unknown;
+        userCanonical?: unknown;
+        crawledAs?: unknown;
+        sitemap?: unknown;
+        referringUrls?: unknown;
       };
+      richResultsResult?: RawRichResults;
       issues?: Array<{
         severity?: string;
         message?: string;
@@ -266,6 +339,12 @@ export async function inspectSearchConsoleUrl(
     robotsTxtState: normalizeGoogleValue(index.robotsTxtState) || undefined,
     lastCrawled: normalizeGoogleValue(index.lastCrawlTime) || null,
     issues,
+    googleCanonical: normalizeGoogleValue(index.googleCanonical) || undefined,
+    userCanonical: normalizeGoogleValue(index.userCanonical) || undefined,
+    crawledAs: normalizeGoogleValue(index.crawledAs) || undefined,
+    sitemaps: stringList(index.sitemap),
+    referringUrls: stringList(index.referringUrls),
+    richResults: richResultsOf(inspection.richResultsResult),
   };
 }
 
