@@ -3,6 +3,7 @@ import { SearchConsoleConnection } from "./models/SearchConsoleConnection.js";
 import { SearchConsoleCache } from "./models/SearchConsoleCache.js";
 import { SearchConsoleProperty } from "./models/SearchConsoleProperty.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
+import { badRequest } from "../../shared/errors/index.js";
 import {
   inspectSearchConsoleUrl,
   listSearchConsoleSitemaps,
@@ -143,10 +144,16 @@ export async function searchSiteRef(workspaceId: string, siteId: string): Promis
   };
 }
 
-export const SEARCH_TYPES = ["web", "image", "video", "news"] as const;
+export const SEARCH_TYPES = ["web", "image", "video", "news", "discover", "googleNews"] as const;
+
+const TYPES_WITHOUT_QUERIES: readonly SearchType[] = ["discover", "googleNews"];
 
 export function clampType(value: unknown): SearchType {
   return (SEARCH_TYPES as readonly string[]).includes(String(value)) ? (value as SearchType) : "web";
+}
+
+export function typeHasQueries(type: SearchType): boolean {
+  return !TYPES_WITHOUT_QUERIES.includes(type);
 }
 
 export type SearchPerformance = {
@@ -335,7 +342,7 @@ function remember(key: string, data: unknown, expiresAt: number) {
   while (memory.size > MEMORY_ENTRIES) memory.delete(memory.keys().next().value as string);
 }
 
-async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
+async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>, ttlMs: number): Promise<T> {
   const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).lean();
   if (hit && hit.expiresAt.getTime() > Date.now()) {
     remember(`${site.siteId}|${key}`, hit.data, hit.expiresAt.getTime());
@@ -343,7 +350,7 @@ async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>)
   }
 
   const data = await load();
-  const expiresAt = Date.now() + CACHE_TTL_MS;
+  const expiresAt = Date.now() + ttlMs;
   remember(`${site.siteId}|${key}`, data, expiresAt);
   await SearchConsoleCache.findOneAndUpdate(
     { siteId: site.siteId, key },
@@ -359,7 +366,12 @@ async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>)
   return data;
 }
 
-async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Promise<T> {
+async function cached<T>(
+  site: SiteRef,
+  key: string,
+  load: () => Promise<T>,
+  ttlMs: number = CACHE_TTL_MS,
+): Promise<T> {
   const memoryKey = `${site.siteId}|${key}`;
   const hot = memory.get(memoryKey);
   if (hot && hot.expiresAt > Date.now()) return hot.data as T;
@@ -367,7 +379,7 @@ async function cached<T>(site: SiteRef, key: string, load: () => Promise<T>): Pr
   const running = inflight.get(memoryKey);
   if (running) return running as Promise<T>;
 
-  const pending = loadCached(site, key, load).finally(() => inflight.delete(memoryKey));
+  const pending = loadCached(site, key, load, ttlMs).finally(() => inflight.delete(memoryKey));
   inflight.set(memoryKey, pending);
   return pending;
 }
@@ -387,12 +399,14 @@ function loadPerformance(site: SiteRef, days: number, type: SearchType) {
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.current }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.previous }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.current, dimensions: ["date"] }),
-      querySearchAnalytics(accessToken, site.propertyUrl, {
-        ...base,
-        ...range.current,
-        dimensions: ["query"],
-        rowLimit: TOP_ROWS,
-      }),
+      typeHasQueries(type)
+        ? querySearchAnalytics(accessToken, site.propertyUrl, {
+            ...base,
+            ...range.current,
+            dimensions: ["query"],
+            rowLimit: TOP_ROWS,
+          })
+        : Promise.resolve([]),
       querySearchAnalytics(accessToken, site.propertyUrl, {
         ...base,
         ...range.current,
@@ -446,6 +460,11 @@ function loadBreakdown(
   days: number,
   type: SearchType,
 ): Promise<BreakdownData> {
+  if (dimension === "query" && !typeHasQueries(type)) {
+    const range = periods(days).current;
+    return Promise.resolve({ ...range, rows: [], lost: [], fetchedAt: new Date().toISOString() });
+  }
+
   return cached(site, `breakdown:${type}:${dimension}:${site.propertyUrl}:${days}`, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
@@ -635,6 +654,10 @@ export function getSearchDrilldown(
   days: number,
   type: SearchType,
 ): Promise<SearchDrilldown> {
+  if (dimension === "query" && !typeHasQueries(type)) {
+    return Promise.reject(badRequest("Google does not report queries for this search type"));
+  }
+
   return cached(site, `drill:${type}:${dimension}:${days}:${hashKey(`${site.propertyUrl}|${value}`)}`, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
@@ -645,13 +668,15 @@ export function getSearchDrilldown(
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.previous, type, filters }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...range.current, type, filters, dimensions: ["date"] }),
-      querySearchAnalytics(accessToken, site.propertyUrl, {
-        ...range.current,
-        type,
-        filters,
-        dimensions: [counterpart],
-        rowLimit: 50,
-      }),
+      counterpart === "query" && !typeHasQueries(type)
+        ? Promise.resolve([])
+        : querySearchAnalytics(accessToken, site.propertyUrl, {
+            ...range.current,
+            type,
+            filters,
+            dimensions: [counterpart],
+            rowLimit: 50,
+          }),
       dimension === "page"
         ? pageViewSeries(site.siteId, value, range.current, range.previous)
         : Promise.resolve(undefined),
@@ -672,6 +697,75 @@ export function getSearchDrilldown(
       fetchedAt: new Date().toISOString(),
     };
   });
+}
+
+const HOURLY_TTL_MS = 30 * 60 * 1000;
+const HOURLY_WINDOW = 48;
+const HOUR_MS = 60 * 60 * 1000;
+
+export type SearchHourly = {
+  type: SearchType;
+  hours: Array<Metrics & { hour: string }>;
+  last24: Metrics;
+  previous24: Metrics | null;
+  fetchedAt: string;
+};
+
+function sumMetrics(rows: Metrics[]): Metrics {
+  const clicks = rows.reduce((sum, r) => sum + r.clicks, 0);
+  const impressions = rows.reduce((sum, r) => sum + r.impressions, 0);
+  const weighted = rows.reduce((sum, r) => sum + r.position * r.impressions, 0);
+  return {
+    clicks,
+    impressions,
+    ctr: impressions ? clicks / impressions : 0,
+    position: impressions ? weighted / impressions : 0,
+  };
+}
+
+function hourlySeries(rows: SearchAnalyticsRow[]): Array<Metrics & { hour: string }> {
+  const byHour = new Map<number, Metrics>();
+  for (const row of rows) {
+    const at = Date.parse(row.keys[0] ?? "");
+    if (Number.isFinite(at)) byHour.set(at, metricsOf(row));
+  }
+  if (!byHour.size) return [];
+
+  const latest = Math.max(...byHour.keys());
+  return Array.from({ length: HOURLY_WINDOW }, (_, i) => {
+    const at = latest - (HOURLY_WINDOW - 1 - i) * HOUR_MS;
+    return { hour: new Date(at).toISOString(), ...(byHour.get(at) ?? metricsOf()) };
+  });
+}
+
+export function getSearchHourly(site: SiteRef, type: SearchType): Promise<SearchHourly> {
+  return cached(
+    site,
+    `hourly:${type}:${site.propertyUrl}`,
+    async () => {
+      const accessToken = await usableSearchConsoleToken(site.connectionId);
+      const now = new Date();
+      const rows = await querySearchAnalytics(accessToken, site.propertyUrl, {
+        startDate: isoDay(new Date(now.getTime() - 3 * DAY_MS)),
+        endDate: isoDay(now),
+        type,
+        dimensions: ["hour"],
+        dataState: "hourly_all",
+        rowLimit: 500,
+      });
+
+      const hours = hourlySeries(rows);
+      const previous = hours.slice(0, hours.length - 24);
+      return {
+        type,
+        hours,
+        last24: sumMetrics(hours.slice(-24)),
+        previous24: previous.length ? sumMetrics(previous) : null,
+        fetchedAt: now.toISOString(),
+      };
+    },
+    HOURLY_TTL_MS,
+  );
 }
 
 function sitemapsKey(site: SiteRef): string {

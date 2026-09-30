@@ -17,6 +17,7 @@ import {
   explainSearchConsoleError,
   getSearchBreakdownPage,
   getSearchDrilldown,
+  getSearchHourly,
   getSearchInsights,
   getSearchInspection,
   isInspectionCached,
@@ -339,6 +340,11 @@ router.get(
     await spendQuota(site.workspaceId, "inspection");
     return inspection;
   }),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/hourly",
+  withLinkedSite((site, req) => getSearchHourly(site, clampType(req.query.type))),
 );
 
 router.get(

@@ -165,7 +165,7 @@ export function deleteSearchConsoleSitemap(
   return googleSend("delete", sitemapUrl(siteUrl, feedpath), accessToken);
 }
 
-export type SearchAnalyticsDimension ="date" | "query" | "page" | "country" | "device";
+export type SearchAnalyticsDimension = "date" | "hour" | "query" | "page" | "country" | "device";
 
 export type SearchAnalyticsRow = {
   keys: string[];
@@ -175,7 +175,9 @@ export type SearchAnalyticsRow = {
   position: number;
 };
 
-export type SearchType = "web" | "image" | "video" | "news";
+export type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
+
+export type SearchDataState = "all" | "hourly_all";
 
 export type SearchAnalyticsFilter = {
   dimension: "query" | "page" | "country" | "device";
@@ -359,6 +361,7 @@ export async function querySearchAnalytics(
     startRow?: number;
     type?: SearchType;
     filters?: SearchAnalyticsFilter[];
+    dataState?: SearchDataState;
   },
 ): Promise<SearchAnalyticsRow[]> {
   const data = await googlePostJson<{
@@ -379,7 +382,7 @@ export async function querySearchAnalytics(
       rowLimit: request.rowLimit ?? 1000,
       startRow: request.startRow ?? 0,
       type: request.type ?? "web",
-      dataState: "all",
+      dataState: request.dataState ?? "all",
       ...(request.filters?.length
         ? { dimensionFilterGroups: [{ groupType: "and", filters: request.filters }] }
         : {}),
