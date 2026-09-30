@@ -62,7 +62,7 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
     return tokens.accessToken;
   } catch (err) {
     if (err instanceof GoogleApiError && err.kind === "revoked") {
-      await markRevoked(connectionId, "Google access was revoked. Reconnect Search Console.");
+      await markRevoked(connectionId, "Your Google sign-in has expired. Sign in again to keep seeing search data.");
     }
     throw err;
   }
