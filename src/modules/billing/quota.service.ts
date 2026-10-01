@@ -13,7 +13,8 @@ import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { Media } from "../media/models/Media.js";
 import { invalidateSite } from "./event-quota.js";
 import { nextUsageReset, rollUsageMonth, usageMonthKey } from "./usage-month.js";
-import type { PlanLimitInfo } from "../../http/plan-limit.js";
+import type { PlanLimitCode, PlanLimitInfo } from "../../http/plan-limit.js";
+import { COUNTED_FEATURES, featureUsage, type CountedFeature } from "./feature-limits.js";
 import {
   DEFAULT_ORBIT_PLAN_SLUG,
   resolveOrbitPlan,
@@ -171,7 +172,31 @@ export async function activateOrbitPeriod(
 
 export type QuotaCheck =
   | { ok: true }
-  | { ok: false; error: string; limit?: PlanLimitInfo };
+  | { ok: false; error: string; limit?: PlanLimitInfo; code?: PlanLimitCode };
+
+export async function canCreateFeature(workspaceId: string, feature: CountedFeature): Promise<QuotaCheck> {
+  const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
+  const spec = COUNTED_FEATURES[feature];
+  const cap = spec.limit(plan);
+
+  if (cap <= 0)
+    return {
+      ok: false,
+      code: "plan_required",
+      error: `${spec.label} are not included in the ${plan.name} plan — upgrade to use them`,
+      limit: { kind: spec.kind, label: spec.label, plan: plan.name },
+    };
+
+  const used = await spec.count(workspaceId);
+  if (used >= cap)
+    return {
+      ok: false,
+      error: `The ${plan.name} plan includes ${cap} ${cap === 1 ? spec.noun : spec.plural} — upgrade to add more`,
+      limit: { kind: spec.kind, label: spec.label, used, quota: cap, plan: plan.name },
+    };
+
+  return { ok: true };
+}
 
 
 export async function canCreateSite(
@@ -523,9 +548,10 @@ export async function quotaSummary(workspaceId: string) {
 
   // Only what is still queued: a sent post is history and holds no slot, which
   // is the same rule `canCreateScheduledPost` counts by.
-  const [siteCount, scheduledPostCount] = await Promise.all([
+  const [siteCount, scheduledPostCount, features] = await Promise.all([
     Site.countDocuments({ workspaceId }),
     ScheduledPost.countDocuments({ workspaceId, status: { $ne: "sent" } }),
+    featureUsage(plan, workspaceId),
   ]);
   // Lazy for the same cycle reason as `planAllowance` above.
   const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
@@ -608,6 +634,10 @@ export async function quotaSummary(workspaceId: string) {
         addonCredits: (sub.get("addonInspectionCredits") as number) ?? 0,
       },
     },
+    dashboards: features.dashboards,
+    embeds: features.embeds,
+    goalTargets: features.goalTargets,
+    conversionGoals: features.conversionGoals,
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,
     whatsappReports: plan.whatsappReports,

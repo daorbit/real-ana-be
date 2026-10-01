@@ -7,12 +7,12 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { planLimit } from "../plan-limit.js";
+import { canCreateFeature } from "../../modules/billing/quota.service.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
-
-const MAX_EMBEDS = 100;
 
 type EmbedDoc = InstanceType<typeof Embed>;
 type Theme = (typeof EMBED_THEMES)[number];
@@ -72,9 +72,8 @@ router.post(
     const widget = String(req.body?.widget ?? "");
     if (!isEmbeddable(widget)) return res.status(400).json({ error: "this widget cannot be embedded" });
 
-    if ((await Embed.countDocuments({ workspaceId: ws.id })) >= MAX_EMBEDS) {
-      return res.status(409).json({ error: `a workspace can hold up to ${MAX_EMBEDS} embeds` });
-    }
+    const allowed = await canCreateFeature(ws.id, "embeds");
+    if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
 
     const embed = await Embed.create({
       workspaceId: ws.id,

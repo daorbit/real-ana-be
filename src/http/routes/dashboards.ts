@@ -5,12 +5,12 @@ import { parseLayout } from "../../modules/workspace/layout.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { planLimit } from "../plan-limit.js";
+import { canCreateFeature } from "../../modules/billing/quota.service.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
-
-const MAX_DASHBOARDS = 50;
 
 type DashboardDoc = InstanceType<typeof Dashboard>;
 
@@ -69,9 +69,8 @@ router.post(
     const layout = req.body?.layout === undefined ? [] : parseLayout(req.body.layout);
     if (!layout) return res.status(400).json({ error: "layout must be an array of { id, span: 1|2|3|4 }" });
 
-    if ((await Dashboard.countDocuments({ workspaceId: ws.id })) >= MAX_DASHBOARDS) {
-      return res.status(409).json({ error: `a workspace can hold up to ${MAX_DASHBOARDS} dashboards` });
-    }
+    const allowed = await canCreateFeature(ws.id, "dashboards");
+    if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
 
     const dashboard = await Dashboard.create({
       workspaceId: ws.id,
@@ -127,9 +126,8 @@ router.post(
     const source = await findDashboard(ws.id, String(req.params.id));
     if (!source) return res.status(404).json({ error: "dashboard not found" });
 
-    if ((await Dashboard.countDocuments({ workspaceId: ws.id })) >= MAX_DASHBOARDS) {
-      return res.status(409).json({ error: `a workspace can hold up to ${MAX_DASHBOARDS} dashboards` });
-    }
+    const allowed = await canCreateFeature(ws.id, "dashboards");
+    if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
 
     const copy = await Dashboard.create({
       workspaceId: ws.id,

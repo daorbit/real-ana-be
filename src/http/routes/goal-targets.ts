@@ -12,12 +12,12 @@ import {
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { planLimit } from "../plan-limit.js";
+import { canCreateFeature } from "../../modules/billing/quota.service.js";
 
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
-
-const MAX_TARGETS = 30;
 
 async function validateRefs(workspaceId: string, draft: TargetDraft): Promise<string | null> {
   if (draft.goalId) {
@@ -57,9 +57,8 @@ router.post(
     const refError = await validateRefs(ws.id, draft);
     if (refError) return res.status(400).json({ error: refError });
 
-    if ((await GoalTarget.countDocuments({ workspaceId: ws.id })) >= MAX_TARGETS) {
-      return res.status(409).json({ error: `a workspace can track up to ${MAX_TARGETS} goals` });
-    }
+    const allowed = await canCreateFeature(ws.id, "goalTargets");
+    if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
 
     const target = await GoalTarget.create({ workspaceId: ws.id, ...draft, createdBy: req.userId });
     res.status(201).json(await targetProgress(target, await siteIdsOf(ws.id)));

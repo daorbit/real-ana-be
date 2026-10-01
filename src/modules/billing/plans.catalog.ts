@@ -48,6 +48,10 @@ export type PlanCatalogEntry = {
   searchInsights: SearchInsightsAccess;
   searchPageViews: boolean;
   monthlyInspectionQuota: number;
+  maxDashboards: number;
+  maxEmbeds: number;
+  maxGoalTargets: number;
+  maxConversionGoals: number;
 };
 
 export type SearchInsightsAccess = "none" | "limited" | "full";
@@ -75,6 +79,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Monthly report by email",
       "Shareable public dashboard",
       "Google Search visibility: last 7 days, top 10 queries & pages",
+      "1 custom dashboard",
+      "2 goal targets & 3 conversion goals",
     ],
     sortOrder: 0,
 
@@ -97,6 +103,10 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     searchInsights: "none",
     searchPageViews: false,
     monthlyInspectionQuota: 0,
+    maxDashboards: 1,
+    maxEmbeds: 0,
+    maxGoalTargets: 2,
+    maxConversionGoals: 3,
   },
   {
     slug: "starter",
@@ -113,6 +123,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Lead capture forms with email notifications",
       "Google Search visibility: 3 months, every query & page, search insights",
       "100 Google index checks / month",
+      "10 custom dashboards & 5 embedded widgets",
+      "10 goal targets & 20 conversion goals",
     ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -134,6 +146,10 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     searchInsights: "limited",
     searchPageViews: true,
     monthlyInspectionQuota: 100,
+    maxDashboards: 10,
+    maxEmbeds: 5,
+    maxGoalTargets: 10,
+    maxConversionGoals: 20,
   },
   {
     slug: "pro",
@@ -151,6 +167,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Lead capture forms with file uploads",
       "Google Search visibility: 16 months with full insights",
       "1,000 Google index checks / month",
+      "50 custom dashboards & 100 embedded widgets",
+      "30 goal targets & 100 conversion goals",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -172,6 +190,10 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     searchInsights: "full",
     searchPageViews: true,
     monthlyInspectionQuota: 1000,
+    maxDashboards: 50,
+    maxEmbeds: 100,
+    maxGoalTargets: 30,
+    maxConversionGoals: 100,
   },
 ];
 
@@ -201,6 +223,10 @@ const SUPERSEDES: Record<string, string[]> = {
     "Google Search visibility: last 7 days, top 10 queries & pages",
   ],
   "1,000 Google index checks / month": ["100 Google index checks / month"],
+  "10 custom dashboards & 5 embedded widgets": ["1 custom dashboard"],
+  "50 custom dashboards & 100 embedded widgets": ["10 custom dashboards & 5 embedded widgets", "1 custom dashboard"],
+  "10 goal targets & 20 conversion goals": ["2 goal targets & 3 conversion goals"],
+  "30 goal targets & 100 conversion goals": ["10 goal targets & 20 conversion goals", "2 goal targets & 3 conversion goals"],
 };
 
  

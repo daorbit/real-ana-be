@@ -35,7 +35,7 @@ import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
-import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { canCreateFeature, canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
@@ -810,6 +810,9 @@ router.post("/:wid/goals", async (req: AuthedRequest, res: Response) => {
   const kind = req.body?.kind === "event" ? "event" : "page";
   const match = String(req.body?.match ?? "").trim().slice(0, 300);
   if (!name || !match) return res.status(400).json({ error: "name and match required" });
+
+  const allowed = await canCreateFeature(ws.id, "conversionGoals");
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
 
   const goal = await Goal.create({ workspaceId: ws.id, name, kind, match });
   res.status(201).json({ id: goal.id, name, kind, match });
