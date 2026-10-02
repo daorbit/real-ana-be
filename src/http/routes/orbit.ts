@@ -30,6 +30,12 @@ import {
   searchSiteRef,
 } from "../../modules/seo/search-console.service.js";
 import { searchEntitlement } from "../../modules/seo/search-entitlements.js";
+import {
+  designDashboard,
+  parseDashboardDraft,
+  MAX_DASHBOARD_PROMPT_CHARS,
+  type DashboardAiMode,
+} from "../../modules/dashboards/dashboard-ai.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
   recordExchange,
@@ -578,6 +584,66 @@ router.post("/search", async (req: OrbitRequest, res: Response) => {
   }
 
   res.json({ reply: result.reply });
+});
+
+const DASHBOARD_ORBIT_HOURLY_LIMIT = 30;
+
+router.post("/dashboard", async (req: OrbitRequest, res: Response) => {
+  if (!orbitConfigured()) {
+    return res.status(503).json({ error: "Orbit is not available on this server." });
+  }
+
+  const ws = await requireWorkspaceEitherAuth(req, res);
+  if (!ws) return;
+
+  if (rateLimited(`${ws.id}:dashboard`, DASHBOARD_ORBIT_HOURLY_LIMIT)) {
+    return res.status(429).json({ error: "That is a lot of dashboard requests in one hour. Try again later." });
+  }
+
+  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+  if (!prompt) return res.status(400).json({ error: "Describe the dashboard you want first." });
+  if (prompt.length > MAX_DASHBOARD_PROMPT_CHARS) {
+    return res.status(400).json({ error: `Keep it under ${MAX_DASHBOARD_PROMPT_CHARS} characters.` });
+  }
+
+  const mode: DashboardAiMode = req.body?.mode === "edit" ? "edit" : "create";
+  const current = parseDashboardDraft(req.body?.current);
+  if (mode === "edit" && !current) return res.status(400).json({ error: "No dashboard to change." });
+
+  const plan = await effectiveOrbitPlan(ws.id);
+  const hungUp = new AbortController();
+  const onClose = () => hungUp.abort();
+  req.on("close", onClose);
+
+  let result;
+  try {
+    result = await designDashboard({
+      prompt,
+      mode,
+      current,
+      history: readHistory(req.body?.history, 8),
+      host: quantalogOrbitHost,
+      tenantId: ws.id,
+      signal: hungUp.signal,
+    });
+  } finally {
+    req.off("close", onClose);
+  }
+
+  if (hungUp.signal.aborted) return;
+
+  if (!result.ok) {
+    if (result.quotaExceeded) {
+      return planLimit(res, result.error, {
+        kind: "orbit_questions",
+        label: "Orbit questions",
+        quota: plan.monthlyQuota,
+      });
+    }
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  res.json({ reply: result.reply, draft: result.draft, suggestions: result.suggestions });
 });
 
 router.get("/conversations", async (req: OrbitRequest, res: Response) => {
