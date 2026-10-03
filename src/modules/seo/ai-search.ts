@@ -6,18 +6,7 @@ import {
   type RobotsGroup,
 } from "./robots-validate.js";
 
-/**
- * AI search readiness — whether answer engines can reach the page, and whether
- * what they find is shaped like something they can quote.
- *
- * This is deliberately a static audit. Nothing here queries ChatGPT or
- * Perplexity to see if the site gets cited: that costs money per scan, varies
- * run to run, and answers a different question. What it checks is the part the
- * site owner actually controls — crawler access, machine-readable structure,
- * and the attribution signals answer engines look for before quoting a source.
- */
 
-/** How an AI crawler is treated by robots.txt. */
 export type AiCrawlerAccess = {
   /** Product name shown in the UI, e.g. "ChatGPT". */
   label: string;
@@ -66,15 +55,8 @@ export type AiSearchReport = {
   findings: FileFinding[];
 };
 
-/**
- * The crawlers worth reporting on.
- *
- * `purpose` matters more than it looks: blocking a training bot is a valid
- * editorial choice with no effect on whether you get cited, while blocking a
- * live-retrieval bot removes you from answers outright. The UI grades those
- * differently, so the audit must not collapse them into one number.
- */
-const AI_CRAWLERS: Omit<AiCrawlerAccess, "allowed" | "explicit">[] = [
+
+export const AI_CRAWLERS: Omit<AiCrawlerAccess, "allowed" | "explicit">[] = [
   { label: "ChatGPT (browsing)", agent: "OAI-SearchBot", purpose: "answers" },
   { label: "ChatGPT (user fetch)", agent: "ChatGPT-User", purpose: "answers" },
   { label: "OpenAI (training)", agent: "GPTBot", purpose: "training" },
@@ -95,16 +77,7 @@ const QUESTION_PREFIX =
 
 const LLMS_TIMEOUT = 8_000;
 
-/* --------------------------------- llms.txt -------------------------------- */
 
-/**
- * Fetch and lightly parse /llms.txt.
- *
- * The convention is a Markdown file of curated links that tells an LLM which
- * pages on the site are worth reading. It is not a standard anyone is required
- * to honour, so its absence is an opportunity rather than an error — reported
- * as `info`, never as a failure.
- */
 async function checkLlmsTxt(origin: string): Promise<AiSearchReport["llmsTxt"]> {
   const url = `${origin}/llms.txt`;
   const out = { present: false, url, bytes: 0, title: "", linkCount: 0 };
@@ -175,14 +148,7 @@ function readAnswerReadiness(
   };
 }
 
-/* ---------------------------------- score --------------------------------- */
 
-/**
- * Weighted so access dominates.
- *
- * Perfect structure on a page no answer engine may fetch is worth nothing, so
- * retrieval access is 60 of the 100 points and everything else splits the rest.
- */
 function scoreReport(
   crawlers: AiCrawlerAccess[],
   llmsTxt: AiSearchReport["llmsTxt"],

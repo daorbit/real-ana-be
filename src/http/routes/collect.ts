@@ -4,6 +4,11 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { HeatmapClick } from "../../modules/analytics/models/HeatmapClick.js";
 import { visitorHash, clientIp, country, parseUA } from "../../modules/analytics/enrich.js";
 import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
+import {
+  classifyRequest, classifyTraffic, parseClientSignals, type TrafficVerdict,
+} from "../../modules/analytics/bot-detect.js";
+
+const UNBILLED_TYPES = new Set(["interact"]);
 
 const router = Router();
 
@@ -22,13 +27,7 @@ const pct = (v: unknown): number => {
   return Math.min(100, Math.max(0, n));
 };
 
-/**
- * Core Web Vitals from tracker v5+.
- *
- * Each metric is clamped to a plausible ceiling and absent values stay null
- * rather than becoming 0 — a browser that cannot measure INP must not be
- * recorded as having a perfect INP, which would drag every percentile down.
- */
+
 const vitals = (raw: unknown) => {
   if (!raw || typeof raw !== "object") return undefined;
   const v = raw as Record<string, unknown>;
@@ -52,29 +51,18 @@ const vitals = (raw: unknown) => {
   return Object.values(out).some((x) => x !== null) ? out : undefined;
 };
 
-/**
- * How many events one request may carry.
- *
- * Tracker v8+ batches deferrable events, so a normal request holds a handful.
- * The cap is what stops a hostile client turning one beacon into an unbounded
- * write, and events past it are dropped rather than failing the whole batch —
- * a partial record beats none.
- */
+
 const MAX_BATCH = 50;
 
-/**
- * Build the Event document for one item in a request.
- *
- * Split out of the handler so a single event and a batched one go through
- * exactly the same shaping and clamping — the batch path must not become a
- * second, subtly different collector.
- */
+
 function buildEvent(
   body: any,
   siteId: string,
-  shared: { vh: string; device: string; os: string; browser: string; country: string },
+  shared: { vh: string; device: string; os: string; browser: string; country: string; request: TrafficVerdict | null },
 ) {
+  const traffic = classifyTraffic(shared.request, parseClientSignals(body.bot));
   return {
+    traffic: { kind: traffic.kind, name: traffic.name, signals: traffic.signals.length ? traffic.signals : undefined },
     siteId,
     type: body.type ?? "pageview",
     name: str(body.name, 80),
@@ -126,11 +114,6 @@ function buildEvent(
     },
     props: body.props,
 
-    // Each event carries the moment it was queued on the client, so a batch
-    // held for a second does not stamp every event with the flush time and
-    // flatten the timeline. Clamped to now: a client with a skewed clock or a
-    // forged timestamp must not write events into the future, and anything
-    // older than the retention window is nudged forward rather than trusted.
     ts: eventTime(body.t),
   };
 }
@@ -156,13 +139,6 @@ function buildHeatmapPoint(
   };
 }
 
-/**
- * When an event happened, from the client's `t` offset.
- *
- * The tracker sends milliseconds-ago rather than an absolute timestamp, so a
- * device with a wrong clock still lands in the right place: the offset is
- * relative to a request whose arrival time the server knows.
- */
 const MAX_BACKDATE_MS = 6 * 60 * 60 * 1000; // 6h — longer than any held batch
 function eventTime(rawOffset: unknown): Date {
   const now = Date.now();
@@ -216,7 +192,7 @@ router.post("/", async (req, res) => {
 
     // Derived from the request, so every event in a batch shares them — one
     // UA parse and one geo lookup per request rather than per event.
-    const shared = { vh, device, os, browser, country: country(req) };
+    const shared = { vh, device, os, browser, country: country(req), request: classifyRequest(ua, req.headers) };
 
     const validItems = items.slice(0, MAX_BATCH).filter((item) => item && typeof item === "object");
 
@@ -235,7 +211,7 @@ router.post("/", async (req, res) => {
     await Promise.all(writes);
 
 
-    await countEvents(workspaceId, docs.length + heatmapDocs.length);
+    await countEvents(workspaceId, docs.filter((d) => !UNBILLED_TYPES.has(d.type)).length + heatmapDocs.length);
 
     // 204 keeps the beacon lightweight
     res.status(204).end();

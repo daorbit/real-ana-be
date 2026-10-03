@@ -1,11 +1,12 @@
 import { Event } from "./models/Event.js";
+import { computeLiveAudience, EMPTY_AUDIENCE } from "./live-audience.js";
 
 /**
  * The version `public/tracker.js` currently reports, used to flag sites still
  * serving an older script. Bump this with `VERSION` in the tracker itself —
  * left behind, every site reads as up to date and the prompt never appears.
  */
-export const TRACKER_VERSION = 9;
+export const TRACKER_VERSION = 10;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,
@@ -722,20 +723,17 @@ export async function computeLive(siteIds: string[], filters: StatsFilter = {}) 
       live: 0,
       livePages: [] as { key: string; count: number }[],
       liveCountries: [] as { key: string; count: number }[],
+      audience: EMPTY_AUDIENCE,
     };
 
   const since = new Date(Date.now() - LIVE_WINDOW_MS);
-  const [visitors, pages, countries] = await Promise.all([
-    Event.distinct("visitorHash", {
-      siteId: { $in: siteIds },
-      ts: { $gte: since },
-      ...filterMatch(filters),
-    }),
+  const [audience, pages, countries] = await Promise.all([
+    computeLiveAudience(siteIds, since, filterMatch(filters)),
     livePages(siteIds),
     liveCountries(siteIds),
   ]);
 
-  return { live: visitors.length, livePages: pages, liveCountries: countries };
+  return { live: audience.total, livePages: pages, liveCountries: countries, audience };
 }
 
 async function channels(match: Match) {

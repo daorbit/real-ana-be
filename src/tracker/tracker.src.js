@@ -2,7 +2,7 @@
   "use strict";
 
 
-  var VERSION = 9;
+  var VERSION = 10;
 
 
   function findScript() {
@@ -463,6 +463,110 @@
   window.addEventListener("pagehide", exit);
   window.addEventListener("beforeunload", exit);
 
+  var botSignalCache = null;
+
+  function softwareGl() {
+    try {
+      var canvas = document.createElement("canvas");
+      var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+      if (!gl) return false;
+      var info = gl.getExtension("WEBGL_debug_renderer_info");
+      if (!info) return false;
+      var renderer = String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || "");
+      return /SwiftShader|llvmpipe|Software|Mesa OffScreen/i.test(renderer);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function automationGlobals() {
+    var w = window;
+    if (w.callPhantom || w._phantom || w.__nightmare || w.domAutomation || w.domAutomationController) return true;
+    if (w.Cypress || w.__playwright__binding__ || w.__pwInitScripts || w.__selenium_unwrapped || w.__webdriver_evaluate) return true;
+    if (document.documentElement.getAttribute("webdriver") != null) return true;
+    try {
+      for (var key in document) {
+        if (/^\$cdc_|^\$wdc_|^cdc_/.test(key)) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function botSignals() {
+    if (botSignalCache !== null) return botSignalCache;
+    var out = [];
+    var nav = navigator;
+    if (nav.webdriver === true) out.push("webdriver");
+    if (automationGlobals()) out.push("automation");
+    if (/HeadlessChrome|PhantomJS|SlimerJS/.test(nav.userAgent || "")) out.push("headless");
+    if (!nav.languages || nav.languages.length === 0) out.push("nolang");
+    if (window.outerWidth === 0 && window.outerHeight === 0) out.push("nowindow");
+    if (/Chrome/.test(nav.userAgent || "") && !/Mobile|Android/.test(nav.userAgent || "") && nav.plugins && nav.plugins.length === 0) {
+      out.push("noplugins");
+    }
+    if (softwareGl()) out.push("swgl");
+    botSignalCache = out.join(",");
+    return botSignalCache;
+  }
+
+  var HKEY = "_va_human_" + siteId;
+  var pointerMoves = 0;
+  var interactionSent = false;
+  var finePointer = false;
+  try {
+    finePointer = window.matchMedia && window.matchMedia("(pointer: fine)").matches;
+  } catch (e) {}
+
+  function interactionAlreadySent(sid) {
+    try {
+      return sessionStorage.getItem(HKEY) === sid;
+    } catch (e) {
+      return interactionSent;
+    }
+  }
+
+  function reportInteraction(kind) {
+    if (interactionSent) return;
+    var s = session();
+    if (interactionAlreadySent(s.id)) {
+      interactionSent = true;
+      return;
+    }
+    interactionSent = true;
+    try {
+      sessionStorage.setItem(HKEY, s.id);
+    } catch (e) {}
+    var signals = botSignals();
+    if (kind === "click" && finePointer && pointerMoves === 0) signals = signals ? signals + ",teleport" : "teleport";
+    post({
+      siteId: siteId,
+      type: "interact",
+      name: kind,
+      path: currentPath(),
+      sessionId: s.id,
+      bot: signals,
+    });
+  }
+
+  function onTrusted(kind) {
+    return function (e) {
+      if (!e || e.isTrusted === false) return;
+      if (kind === "move") {
+        pointerMoves++;
+        if (pointerMoves >= 3) reportInteraction("move");
+        return;
+      }
+      reportInteraction(kind);
+    };
+  }
+
+  var passiveOpts = { passive: true, capture: true };
+  window.addEventListener("mousemove", onTrusted("move"), passiveOpts);
+  window.addEventListener("pointerdown", onTrusted("click"), passiveOpts);
+  window.addEventListener("keydown", onTrusted("key"), passiveOpts);
+  window.addEventListener("touchstart", onTrusted("touch"), passiveOpts);
+  window.addEventListener("wheel", onTrusted("scroll"), passiveOpts);
+
   /* ------------------------------------------------------------------
    * Pageview
    * ------------------------------------------------------------------ */
@@ -524,6 +628,7 @@
       viewportH: ctx.viewportH,
       language: ctx.language,
       timezone: ctx.timezone,
+      bot: botSignals(),
       utm: utm(),
     });
   }

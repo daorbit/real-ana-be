@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { TRAFFIC_KINDS } from "../bot-detect.js";
 
 const eventSchema = new Schema({
   siteId: { type: String, required: true, index: true },
@@ -6,11 +7,7 @@ const eventSchema = new Schema({
   type: { type: String, default: "pageview" },
   name: { type: String }, // custom event name
   path: { type: String, default: "/" },
-  /**
-   * Reported hostname, set only when the site overrides it via `data-domain`
-   * (staging deploys folding into production's numbers). Empty means "the
-   * host the script was served from", which is the normal case.
-   */
+
   hostname: { type: String, default: "" },
   referrer: { type: String, default: "" },
 
@@ -20,13 +17,7 @@ const eventSchema = new Schema({
   clickId: { type: String, default: "" }, // id or data-va-cta attribute
   clickHref: { type: String, default: "" }, // destination, for links
   visitorHash: { type: String, index: true }, // anonymous, rotates daily
-  /**
-   * The tenant's own end-user id. Set client-side via `rta.identify(userId)`
-   * (web) or the React Native SDK's `identify()` (app) once the host knows
-   * who's logged in; every event after that carries it. Unlike
-   * `visitorHash`, this never rotates — it is how one user's full history
-   * stays queryable across sessions.
-   */
+
   appUserId: { type: String, default: "", index: true },
   /** Persistent per-install id from the React Native SDK, stable across logins. */
   installId: { type: String, default: "" },
@@ -60,15 +51,7 @@ const eventSchema = new Schema({
   // engagement record because it is only final once the page is left.
   scrollDepth: { type: Number, default: 0 },
 
-  /**
-   * Core Web Vitals as the visitor's own browser measured them (tracker v5+).
-   *
-   * Field data, not lab data: Lighthouse simulates a load on synthetic
-   * hardware, while these are what real devices experienced — and Google ranks
-   * on the latter. Reported on the engagement record because several are only
-   * final once the page is left. Null where the browser does not support the
-   * metric; Safari, for instance, has no INP.
-   */
+
   vitals: {
     /** Largest Contentful Paint, ms. Good ≤ 2500. */
     lcp: { type: Number, default: null },
@@ -82,27 +65,25 @@ const eventSchema = new Schema({
     ttfb: { type: Number, default: null },
   },
 
-  /**
-   * First-touch attribution for the session, replayed by the tracker on every
-   * event — not just the landing pageview, which is all `location.search`
-   * could ever supply.
-   */
+
   utm: {
     source: { type: String, default: "" },
     medium: { type: String, default: "" },
     campaign: { type: String, default: "" },
     term: { type: String, default: "" },
     content: { type: String, default: "" },
-    /**
-     * Ad platform click id, stored as "param:value" (e.g. "gclid:abc123").
-     * Ads and mail clients frequently arrive with a click id and no utm_*, so
-     * this is what marks the visit as paid when the campaign tags are missing.
-     */
+
     clickId: { type: String, default: "" },
     /** Referrer of the session's landing page, kept for channel grouping. */
     landingReferrer: { type: String, default: "" },
   },
   props: { type: Schema.Types.Mixed }, // custom event properties
+
+  traffic: {
+    kind: { type: String, enum: TRAFFIC_KINDS, default: "human" },
+    name: { type: String, default: "" },
+    signals: { type: [String], default: undefined },
+  },
 
   ts: { type: Date, default: Date.now, index: true },
 });
