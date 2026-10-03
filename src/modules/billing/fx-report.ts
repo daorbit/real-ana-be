@@ -11,13 +11,21 @@ function money(minor: number): string {
   return (minor / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function inverseRate(rate: number): string {
+  return (1 / rate).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export async function sendFxSuccessReport(result: RepriceResult, source: string): Promise<void> {
   const to = reportRecipient();
   if (!mailConfigured() || !to) return;
 
   const rates = result.derived
-    .map((c) => `1 ${result.base} = ${result.snapshot.rates[c]} ${c}`)
-    .join(", ");
+    .flatMap((c) => {
+      const rate = result.snapshot.rates[c];
+      if (!rate) return [];
+      return [`1 ${result.base} = ${rate} ${c}`, `1 ${c} = ${inverseRate(rate)} ${result.base}`];
+    })
+    .join(" · ");
 
   const rows = result.plans
     .map((plan) => {
