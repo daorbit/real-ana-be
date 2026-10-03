@@ -40,6 +40,7 @@ import memberRoutes from "./http/routes/members.js";
 import inviteRoutes from "./http/routes/invites.js";
 import reportsPublicRoutes from "./http/routes/reports-public.js";
 import notificationRoutes from "./http/routes/notifications.js";
+import noteRoutes from "./http/routes/notes.js";
 import orbitRoutes from "./http/routes/orbit.js";
 import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import dashboardRoutes from "./http/routes/dashboards.js";
@@ -232,6 +233,7 @@ app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
 // prefix: the bell is one merged feed across every workspace they belong to,
 // plus account-level notices that belong to no workspace at all.
 app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes);
+app.use("/api/notes", dashboardCors, requireUnlocked, noteRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
