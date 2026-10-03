@@ -75,7 +75,7 @@ export type SearchTraffic = {
 };
 
 /** Which engine a referrer belongs to, or null when it is not a search engine. */
-function engineOf(referrer: string): string | null {
+export function engineOf(referrer: string): string | null {
   let host: string;
   try {
     host = new URL(referrer).hostname.toLowerCase();

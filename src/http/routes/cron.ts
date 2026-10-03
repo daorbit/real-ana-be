@@ -6,6 +6,7 @@ import { runDuePosts } from "../../modules/social/post-runner.js";
 import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
 import { syncDue } from "../../modules/reviews/sync.service.js";
+import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -175,6 +176,21 @@ router.get("/social-stats", async (req: Request, res: Response) => {
   }
 });
 
+router.get("/backlinks", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    const summary = await recheckDue();
+    if (summary.checked > 0) {
+      console.log(`[cron] backlinks: ${summary.checked} re-checked across ${summary.sites} sites, ${summary.lost} lost`);
+    }
+    res.json({ ok: true, ...summary });
+  } catch (e) {
+    console.error("[cron] backlink re-check failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 router.get("/plan-expiry", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
@@ -261,6 +277,14 @@ router.get("/run", async (req: Request, res: Response) => {
     const message = (e as Error).message;
     console.error("[cron] social stats refresh failed:", message);
     errors.push(`social-stats: ${message}`);
+  }
+
+  try {
+    ran.backlinks = await recheckDue();
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] backlink re-check failed:", message);
+    errors.push(`backlinks: ${message}`);
   }
 
   if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));

@@ -5,6 +5,7 @@ import { normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
 import { Competitor } from "../../modules/seo/models/Competitor.js";
 import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
+import { CompetitorBacklink } from "../../modules/backlinks/models/CompetitorBacklink.js";
 import {
   snapshotPage, snapshotFromReport, type CompareSnapshot,
 } from "../../modules/seo/competitor.js";
@@ -328,6 +329,7 @@ router.delete(
     // The trend rows are meaningless once the competitor is gone, and leaving
     // them would let a re-added URL inherit a stranger's history.
     await CompetitorSnapshot.deleteMany({ competitorId: deleted._id });
+    await CompetitorBacklink.deleteMany({ competitorId: deleted._id });
 
     res.status(204).end();
   }

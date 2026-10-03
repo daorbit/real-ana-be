@@ -26,6 +26,7 @@ import searchConsoleRoutes from "./http/routes/search-console.js";
 import searchConsoleAuthRoutes from "./http/routes/search-console-auth.js";
 import competitorRoutes from "./http/routes/competitors.js";
 import competitorBriefRoutes from "./http/routes/competitor-brief.js";
+import backlinkRoutes from "./http/routes/backlinks.js";
 import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
@@ -211,6 +212,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorRoutes);
 // endpoint that costs a model call, carries its own rate limit, and disappears
 // entirely when the Cloudflare credentials are unset.
 app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorBriefRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, backlinkRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, requireUnlocked, reportRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
