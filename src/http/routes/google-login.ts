@@ -31,6 +31,49 @@ function loginUrl(status: string, extra: { reason?: string; token?: string; pend
   return `${studioBase()}/login?${params.toString()}`;
 }
 
+export function isGoogleLoginState(state: string): boolean {
+  try {
+    const payload = jwt.verify(state, jwtSecret()) as StatePayload;
+    return safeEqual(payload.kind ?? "", STATE_KIND);
+  } catch {
+    return false;
+  }
+}
+
+export async function handleGoogleLoginCallback(req: Request, res: Response): Promise<void> {
+  if (req.query.error) {
+    const cancelled = req.query.error === "access_denied";
+    return res.redirect(loginUrl(cancelled ? "cancelled" : "error", { reason: "denied" }));
+  }
+
+  const code = String(req.query.code ?? "");
+  const state = String(req.query.state ?? "");
+  if (!code) return res.redirect(loginUrl("error", { reason: "missing_code" }));
+  if (!isGoogleLoginState(state)) return res.redirect(loginUrl("error", { reason: "invalid_state" }));
+
+  const config = googleLoginConfig();
+  let profile: GoogleProfile | null;
+  try {
+    const { idToken } = await exchangeGoogleCode(config, code);
+    profile = idToken ? await verifyGoogleCredential(idToken, config.clientId) : null;
+  } catch (e) {
+    console.error("[google] sign-in failed:", e instanceof Error ? e.message : e);
+    return res.redirect(loginUrl("error", { reason: "google_failed" }));
+  }
+  if (!profile) return res.redirect(loginUrl("error", { reason: "no_email" }));
+
+  try {
+    const { user, created } = await resolveGoogleUser(profile);
+    if (user.totpEnabled) {
+      return res.redirect(loginUrl("2fa", { pendingToken: signPending2faToken(user.id) }));
+    }
+    return res.redirect(loginUrl(created ? "created" : "ok", { token: await signToken(user.id, req) }));
+  } catch (e) {
+    console.error("[google] login failed:", e instanceof Error ? e.message : e);
+    return res.redirect(loginUrl("error", { reason: "login_failed" }));
+  }
+}
+
 router.get("/config", (_req: Request, res: Response) => {
   const missing = missingGoogleLoginConfig();
   res.json({ configured: missing.length === 0, missing, redirectUri: googleLoginRedirectUri() });
@@ -54,46 +97,6 @@ router.get("/", (_req: Request, res: Response) => {
   );
 });
 
-router.get(
-  "/callback",
-  asyncHandler(async (req: Request, res: Response) => {
-    if (req.query.error) {
-      const cancelled = req.query.error === "access_denied";
-      return res.redirect(loginUrl(cancelled ? "cancelled" : "error", { reason: "denied" }));
-    }
-
-    const code = String(req.query.code ?? "");
-    const state = String(req.query.state ?? "");
-    if (!code) return res.redirect(loginUrl("error", { reason: "missing_code" }));
-
-    try {
-      const payload = jwt.verify(state, jwtSecret()) as StatePayload;
-      if (!safeEqual(payload.kind ?? "", STATE_KIND)) throw new Error("wrong kind");
-    } catch {
-      return res.redirect(loginUrl("error", { reason: "invalid_state" }));
-    }
-
-    let profile: GoogleProfile | null;
-    try {
-      const { idToken } = await exchangeGoogleCode(googleLoginConfig(), code);
-      profile = idToken ? await verifyGoogleCredential(idToken) : null;
-    } catch (e) {
-      console.error("[google] sign-in failed:", e instanceof Error ? e.message : e);
-      return res.redirect(loginUrl("error", { reason: "google_failed" }));
-    }
-    if (!profile) return res.redirect(loginUrl("error", { reason: "no_email" }));
-
-    try {
-      const { user, created } = await resolveGoogleUser(profile);
-      if (user.totpEnabled) {
-        return res.redirect(loginUrl("2fa", { pendingToken: signPending2faToken(user.id) }));
-      }
-      return res.redirect(loginUrl(created ? "created" : "ok", { token: await signToken(user.id, req) }));
-    } catch (e) {
-      console.error("[google] login failed:", e instanceof Error ? e.message : e);
-      return res.redirect(loginUrl("error", { reason: "login_failed" }));
-    }
-  }),
-);
+router.get("/callback", asyncHandler(handleGoogleLoginCallback));
 
 export default router;

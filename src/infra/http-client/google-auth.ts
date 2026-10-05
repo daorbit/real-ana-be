@@ -40,9 +40,10 @@ export function googleConfigured(): boolean {
  * would only help someone probing the endpoint.
  */
 export async function verifyGoogleCredential(
-  credential: string
+  credential: string,
+  audience: string = expectedAudience()
 ): Promise<GoogleProfile | null> {
-  const aud = expectedAudience();
+  const aud = audience;
   if (!aud || !credential) return null;
 
   try {

@@ -18,6 +18,7 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { AuthedRequest, jwtSecret } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
 import { renderOAuthPopup, studioBase } from "../oauth-popup.js";
+import { handleGoogleLoginCallback, isGoogleLoginState } from "./google-login.js";
 
 const router = Router();
 
@@ -118,6 +119,8 @@ router.get(
     const code = String(req.query.code ?? "");
     const state = String(req.query.state ?? "");
     const error = String(req.query.error ?? "");
+
+    if (isGoogleLoginState(state)) return handleGoogleLoginCallback(req, res);
 
     if (error) return closePopup(res, "error", error === "access_denied" ? "denied" : "google_failed");
 
