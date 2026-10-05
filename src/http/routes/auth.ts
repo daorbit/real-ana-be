@@ -15,6 +15,7 @@ import { mailConfigured, sendOne, sendOtpEmail, sendResetEmail, sendPasswordChan
 import { getDemoDailyLimit } from "../../config/AppSetting.js";
 import { tryStartDemo } from "../../modules/billing/demo-limit.js";
 import { googleConfigured, verifyGoogleCredential } from "../../infra/http-client/google-auth.js";
+import { resolveGoogleUser } from "../../modules/identity/google-login.service.js";
 import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-client/turnstile.js";
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
@@ -905,26 +906,7 @@ router.post("/google", async (req, res) => {
     const profile = await verifyGoogleCredential(credential);
     if (!profile) return res.status(401).json({ error: "could not verify that Google sign-in" });
 
-    let user = await User.findOne({ email: profile.email });
-    let created = false;
-
-    if (!user) {
-      const [firstName, ...rest] = profile.name.split(" ");
-      user = await User.create({
-        email: profile.email,
-        name: profile.name,
-        firstName: firstName ?? "",
-        lastName: rest.join(" "),
-        googleId: profile.sub,
-        avatarUrl: profile.picture,
-      });
-      created = true;
-      welcomeInBackground(user.email, user.name);
-    } else if (!user.googleId) {
-      user.googleId = profile.sub;
-      if (!user.avatarUrl) user.avatarUrl = profile.picture;
-      await user.save();
-    }
+    const { user, created } = await resolveGoogleUser(profile);
 
     if (user.totpEnabled) {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });

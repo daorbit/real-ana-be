@@ -7,6 +7,7 @@ import { TRACKER_VERSION } from "./modules/analytics/stats.service.js";
 import authRoutes from "./http/routes/auth.js";
 import linkedinRoutes from "./http/routes/linkedin.js";
 import githubRoutes from "./http/routes/github.js";
+import googleLoginRoutes from "./http/routes/google-login.js";
 import instagramRoutes from "./http/routes/instagram.js";
 import googleReviewsRoutes from "./http/routes/google-reviews.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
@@ -173,6 +174,8 @@ app.use("/api/auth/linkedin", linkedinRoutes);
 
 app.use("/api/auth/github", githubRoutes);
 app.use("/auth/github", githubRoutes);
+
+app.use("/api/auth/google-oauth", googleLoginRoutes);
 
 app.use("/api/auth/instagram", instagramRoutes);
 app.use("/auth/instagram", instagramRoutes);

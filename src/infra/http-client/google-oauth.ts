@@ -135,6 +135,7 @@ export function buildGoogleAuthorizeUrl(
   config: GoogleClientConfig,
   scope: string,
   state: string,
+  overrides: Record<string, string> = {},
 ): string {
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -145,6 +146,7 @@ export function buildGoogleAuthorizeUrl(
     prompt: "consent",
     include_granted_scopes: "true",
     state,
+    ...overrides,
   });
   return `${AUTHORIZE_URL}?${params.toString()}`;
 }
