@@ -175,7 +175,7 @@ app.use("/api/auth/linkedin", linkedinRoutes);
 app.use("/api/auth/github", githubRoutes);
 app.use("/auth/github", githubRoutes);
 
-app.use("/api/auth/google-oauth", googleLoginRoutes);
+app.use("/api/auth/google-oauth", dashboardCors, googleLoginRoutes);
 
 app.use("/api/auth/instagram", instagramRoutes);
 app.use("/auth/instagram", instagramRoutes);
