@@ -6,6 +6,7 @@ import { SeoReport } from "../seo/models/SeoReport.js";
 import { Competitor } from "../seo/models/Competitor.js";
 import { snapshotFromReport, type CompareSnapshot } from "../seo/competitor.js";
 import { compareSnapshots } from "../seo/competitor-analysis.js";
+import { reviewsSummaryFor } from "./orbit-data-reviews.js";
 
 /** Rows per breakdown. Enough to spot a pattern, short enough to stay in budget. */
 const TOP_N = 5;
@@ -120,8 +121,11 @@ async function seoSummary(siteId: string): Promise<string> {
 
 
 export async function workspaceDataSummary(workspaceId: string, question?: string): Promise<string> {
-  const sites = await Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES);
-  if (!sites.length) return "";
+  const [sites, business] = await Promise.all([
+    Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES),
+    reviewsSummaryFor(workspaceId).catch(() => ""),
+  ]);
+  if (!sites.length) return business;
 
   const { rangeKey, from, to, label } = parseQuestionRange(question ?? "");
 
@@ -149,6 +153,8 @@ export async function workspaceDataSummary(workspaceId: string, question?: strin
 
     blocks.push(lines.join("\n"));
   }
+
+  if (business) blocks.push(business);
 
   return blocks.join("\n\n");
 }

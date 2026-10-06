@@ -114,6 +114,7 @@ const TOPIC_MARKERS = [
   "top pages", "top referrers", "top countries",
   "competitor", "beat them", "beat our competitor",
   "performing", "performance",
+  "reviews", "rating", "ratings", "unanswered reviews",
 ];
 
 const COMPARISON_MARKERS = [
