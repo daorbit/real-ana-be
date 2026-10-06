@@ -60,6 +60,8 @@ const app = express();
 
 app.set("trust proxy", true);
 
+app.use(["/api", "/v1"], compression());
+
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
 
 app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));

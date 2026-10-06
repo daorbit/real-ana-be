@@ -44,6 +44,10 @@ import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
 import { deleteWorkspaceDashboards } from "../../modules/dashboards/cleanup.js";
+import { createTtlCache } from "../../shared/utils/ttl-cache.js";
+
+const STATS_CACHE_MS = 10_000;
+const statsCache = createTtlCache<Record<string, unknown>>(STATS_CACHE_MS, 500);
 
 const router = Router();
 router.use(requireAuth);
@@ -431,9 +435,15 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req);
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const sites = await Site.find({ workspaceId: ws.id }).select(
-    "siteId name trackerVersion",
-  );
+  const rangeKey = String(req.query.range ?? "24h");
+  const askedCompare = parseCompareMode(req.query.compare);
+
+  const [sites, allowed, compareAllowed, goalDocs] = await Promise.all([
+    Site.find({ workspaceId: ws.id }).select("siteId name trackerVersion"),
+    canUseRange(ws.id, rangeKey),
+    canUseCompare(ws.id, askedCompare),
+    Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 }),
+  ]);
 
   const ids = selectSiteIds(sites, req.query.sites);
   if (ids.length === 0) {
@@ -462,59 +472,65 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     )
     .map((s) => ({ siteId: s.siteId as string, name: s.name as string }));
 
-  const rangeKey = String(req.query.range ?? "24h");
-  const allowed = await canUseRange(ws.id, rangeKey);
   if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
   // A baseline the plan doesn't include degrades to "previous" rather than
   // refusing the request — see `canUseCompare`.
-  const askedCompare = parseCompareMode(req.query.compare);
-  const compare = (await canUseCompare(ws.id, askedCompare)) ? askedCompare : "previous";
+  const compare = compareAllowed ? askedCompare : "previous";
 
-  const win = resolveWindow(
-    rangeKey,
-    req.query.from,
-    req.query.to,
-    compare,
-    req.query.compareFrom,
-    req.query.compareTo,
-  );
-  const filters = parseFilters(req.query.filter);
-  // The overlay series is only worth its extra aggregation when the client is
-  // actually drawing a comparison.
-  const stats = await computeStats(ids, rangeKey, filters, win, compare !== "previous");
+  const goalDefs = goalDocs.map<GoalDef>((g) => ({
+    id: g.id,
+    name: g.get("name"),
+    kind: g.get("kind"),
+    match: g.get("match"),
+  }));
 
-  // Score the workspace's goals over the same window/scope. Goals live on the
-  // workspace, so they're resolved here rather than inside computeStats (which
-  // only knows about siteIds).
-  const goalDefs = await Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
-  const goals = await computeGoals(
+  const cacheKey = JSON.stringify([
+    ws.id,
     ids,
-    goalDefs.map<GoalDef>((g) => ({
-      id: g.id,
-      name: g.get("name"),
-      kind: g.get("kind"),
-      match: g.get("match"),
-    })),
     rangeKey,
-    stats.visitors,
-    {},
-    win,
-  );
+    compare,
+    req.query.filter ?? null,
+    req.query.from ?? null,
+    req.query.to ?? null,
+    req.query.compareFrom ?? null,
+    req.query.compareTo ?? null,
+    goalDefs,
+  ]);
 
-  res.json({
-    ...stats,
-    goals,
-    siteCount: ids.length,
-    outdatedSites,
-    filters,
-    // Echo the resolved window so a custom range round-trips to the client.
-    window: { since: win.since, until: win.until },
-    // Echo the baseline actually used, which may not be the one asked for if
-    // the plan does not include it — the picker reads this back to stay honest
-    // about what is on screen.
-    compare: win.compare,
+  const payload = await statsCache(cacheKey, async () => {
+    const win = resolveWindow(
+      rangeKey,
+      req.query.from,
+      req.query.to,
+      compare,
+      req.query.compareFrom,
+      req.query.compareTo,
+    );
+    const filters = parseFilters(req.query.filter);
+    // The overlay series is only worth its extra aggregation when the client is
+    // actually drawing a comparison.
+    const stats = await computeStats(ids, rangeKey, filters, win, compare !== "previous");
+
+    // Score the workspace's goals over the same window/scope. Goals live on the
+    // workspace, so they're resolved here rather than inside computeStats (which
+    // only knows about siteIds).
+    const goals = await computeGoals(ids, goalDefs, rangeKey, stats.visitors, {}, win);
+
+    return {
+      ...stats,
+      goals,
+      filters,
+      // Echo the resolved window so a custom range round-trips to the client.
+      window: { since: win.since, until: win.until },
+      // Echo the baseline actually used, which may not be the one asked for if
+      // the plan does not include it — the picker reads this back to stay honest
+      // about what is on screen.
+      compare: win.compare,
+    };
   });
+
+  res.json({ ...payload, siteCount: ids.length, outdatedSites });
 });
 
 /**

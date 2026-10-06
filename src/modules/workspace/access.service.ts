@@ -41,10 +41,12 @@ export async function resolveAccess(
   const wid = workspaceId ?? req.params.wid;
   if (!wid) return { error: "workspace not found", status: 404 };
 
-  const membership = await Membership.findOne({ workspaceId: wid, userId: req.userId });
+  const [membership, workspace] = await Promise.all([
+    Membership.findOne({ workspaceId: wid, userId: req.userId }),
+    Workspace.findById(wid),
+  ]);
   if (!membership) return { error: "workspace not found", status: 404 };
 
-  const workspace = await Workspace.findById(wid);
   // Membership outliving its workspace shouldn't happen — deleting a workspace
   // removes them — but a dangling row must read as "gone", not crash the route.
   if (!workspace) return { error: "workspace not found", status: 404 };
