@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { isAppError } from "../../shared/errors/index.js";
+import { captureServerError } from "../../infra/monitoring/sentry.js";
+import type { AuthedRequest } from "./auth.js";
 
 
 export function notFoundHandler(req: Request, res: Response) {
@@ -7,14 +9,17 @@ export function notFoundHandler(req: Request, res: Response) {
 }
 
 
-export function errorHandler(
+export async function errorHandler(
   err: unknown,
   req: Request,
   res: Response,
   _next: NextFunction,
 ) {
 
-  if (res.headersSent) return req.socket.destroy();
+  if (res.headersSent) {
+    await captureServerError(err, { method: req.method, path: req.path, userId: (req as AuthedRequest).userId });
+    return req.socket.destroy();
+  }
 
   if (isAppError(err)) {
     return res.status(err.status).json({ error: err.message, ...(err.details ?? {}) });
@@ -46,5 +51,6 @@ export function errorHandler(
   }
 
   console.error(`unhandled error on ${req.method} ${req.originalUrl}:`, err);
+  await captureServerError(err, { method: req.method, path: req.path, userId: (req as AuthedRequest).userId });
   res.status(500).json({ error: "internal server error" });
 }

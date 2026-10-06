@@ -1,6 +1,8 @@
+import "express-async-errors";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import compression from "compression";
+import helmet from "helmet";
 import path from "path";
 import { fileURLToPath } from "url";
 import { TRACKER_VERSION } from "./modules/analytics/stats.service.js";
@@ -59,6 +61,17 @@ import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
 const app = express();
 
 app.set("trust proxy", true);
+app.disable("x-powered-by");
+
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginOpenerPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
 
 app.use(["/api", "/v1"], compression());
 

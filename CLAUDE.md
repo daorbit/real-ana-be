@@ -54,6 +54,9 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 - Return only what the client renders. No whole documents with large or private fields. No secrets, tokens or credentials in responses.
 - Keep response shapes stable. The frontend's RTK Query cache and `bootPrefetch.ts` depend on them. Coordinate any shape change with `real-ana-fe`.
 - Errors return JSON `{ error }` with an accurate status code. Plan limits go through `planLimit(...)`. Demo sessions are read-only (`blockDemoWrites`).
+- `express-async-errors` (first import in `app.ts`) sends errors thrown in async routes to `errorHandler`. So `throw`, or let failures bubble up; never swallow them silently. `errorHandler` reports 5xx errors through `src/infra/monitoring/sentry.ts`, which does nothing without `SENTRY_DSN`. Use `captureServerError` to report any other unexpected failure.
+- Security headers come from `helmet` in `app.ts`, with cross-origin resource sharing allowed because `tracker.js`, embeds and OAuth popups are used from other origins. Don't tighten `crossOriginResourcePolicy` or `crossOriginOpenerPolicy` without checking those flows.
+- Never put a real secret in `.env.example`. Use placeholders only.
 
 ## Coding rules
 

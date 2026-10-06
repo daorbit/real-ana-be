@@ -46,8 +46,8 @@ function authHeaders(): Record<string, string> {
 /**
  * Normalises a number to the digits-only form the gateway expects.
  *
- * WhatsApp addresses by country code without a `+`, so `+91 70820 72347`,
- * `+917082072347` and `917082072347` are all the same destination — and a user
+ * WhatsApp addresses by country code without a `+`, so `+91 98765 43210`,
+ * `+919876543210` and `919876543210` are all the same destination — and a user
  * typing any of them should not silently get no message.
  */
 export function normalizePhone(raw: string): string | null {
