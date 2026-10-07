@@ -13,6 +13,9 @@ const couponSchema = new Schema(
     active: { type: Boolean, default: true },
     /** No expiry when unset — the coupon is valid until deactivated. */
     expiresAt: { type: Date, default: null },
+    ownerId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
+    maxUses: { type: Number, default: 0, min: 0 },
+    uses: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

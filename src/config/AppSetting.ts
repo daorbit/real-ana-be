@@ -13,6 +13,7 @@ export const AppSetting = mongoose.model("AppSetting", appSettingSchema);
 
 /** Settings keys, named once so a typo can't silently create a second row. */
 export const SETTING_DEMO_DAILY_LIMIT = "demo.dailyLimitPerIp";
+export const SETTING_REFERRAL_PROGRAM = "referrals.program";
 
 /** How many demo sessions one address may start per day before being refused. */
 export const DEFAULT_DEMO_DAILY_LIMIT = 3;

@@ -150,5 +150,15 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
       const form = str(data, "formTitle", "a form");
       return { title: "New submission", body: `A new response came in on ${form}.` };
     }
+
+    case "referral.rewarded": {
+      const percent = str(data, "percentOff", "");
+      return {
+        title: "You earned a referral reward",
+        body: percent
+          ? `Someone you invited joined. Here is ${percent}% off your next purchase.`
+          : "Someone you invited joined. A discount coupon is waiting for you.",
+      };
+    }
   }
 }

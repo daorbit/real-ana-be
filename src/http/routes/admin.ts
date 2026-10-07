@@ -808,7 +808,7 @@ function readAddonBody(body: Record<string, unknown>) {
 
 
 router.get("/billing/coupons", async (_req: AuthedRequest, res: Response) => {
-  const coupons = await Coupon.find().sort({ createdAt: -1 });
+  const coupons = await Coupon.find({ ownerId: null }).sort({ createdAt: -1 });
   res.json(coupons);
 });
 

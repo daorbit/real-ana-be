@@ -30,7 +30,8 @@ import {
 } from "../../modules/billing/plan-pricing.js";
 import { DEFAULT_ORBIT_PLAN_SLUG } from "../../modules/orbit/orbit-plans.catalog.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
-import { applyCoupon } from "../../modules/billing/coupons.js";
+import { applyCoupon, redeemCoupon } from "../../modules/billing/coupons.js";
+import { qualifyReferralOnPayment } from "../../modules/referrals/referral.service.js";
 import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency } from "../../modules/billing/currency.js";
 import { User } from "../../modules/identity/models/User.js";
@@ -193,7 +194,7 @@ router.post("/coupons/check", async (req: AuthedRequest, res: Response) => {
   if (!Number.isFinite(amount) || amount < 0)
     return res.status(400).json({ error: "amount must be a non-negative number" });
 
-  const result = await applyCoupon(amount, req.body?.code);
+  const result = await applyCoupon(amount, req.body?.code, req.userId);
   if (result.error) return res.status(400).json({ error: result.error });
   res.json(result);
 });
@@ -233,13 +234,14 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   if ("error" in resolvedAddons) return res.status(400).json({ error: resolvedAddons.error });
 
   const listPrice = planAmount + resolvedAddons.total;
-  const discounted = await applyCoupon(listPrice, req.body?.couponCode);
+  const discounted = await applyCoupon(listPrice, req.body?.couponCode, req.userId);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
   const amount = discounted.amount;
 
- 
+
   if (amount === 0 && !resolvedAddons.items.length) {
     await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
+    await redeemCoupon(discounted.coupon?.code);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
   }
 
@@ -479,7 +481,7 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
 
  
   const price = ((pack.price as unknown as Record<string, number>)[currency] ?? 0) * packs;
-  const discounted = await applyCoupon(price, req.body?.couponCode);
+  const discounted = await applyCoupon(price, req.body?.couponCode, req.userId);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
 
  
@@ -566,6 +568,10 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
     { $inc: { [field]: (pack.quantity as number) * packs } }
   );
 
+  await Promise.all([
+    redeemCoupon(purchase.couponCode),
+    qualifyReferralOnPayment(String(purchase.userId)),
+  ]);
   await issueReceipt("addon", purchase.id, String(purchase.userId));
 }
 
@@ -615,6 +621,10 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
     await Subscription.updateOne({ workspaceId }, { $inc: increments });
   }
 
+  await Promise.all([
+    redeemCoupon(purchase.couponCode),
+    qualifyReferralOnPayment(String(purchase.userId)),
+  ]);
   await issueReceipt("plan", purchase.id, String(purchase.userId));
 }
 

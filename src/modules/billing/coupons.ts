@@ -8,19 +8,30 @@ import { Coupon } from "./models/Coupon.js";
  */
 export async function applyCoupon(
   amount: number,
-  code: string | undefined
+  code: string | undefined,
+  userId?: string
 ): Promise<{ amount: number; error?: string; coupon?: { code: string; percentOff: number } }> {
   const raw = String(code ?? "").trim().toUpperCase();
   if (!raw) return { amount };
 
   const coupon = await Coupon.findOne({ code: raw });
   if (!coupon || !coupon.active) return { amount, error: "coupon not found" };
+  if (coupon.ownerId && String(coupon.ownerId) !== String(userId ?? ""))
+    return { amount, error: "coupon not found" };
   if (coupon.expiresAt && (coupon.expiresAt as Date).getTime() < Date.now())
     return { amount, error: "coupon has expired" };
+  if (coupon.maxUses && (coupon.uses ?? 0) >= coupon.maxUses)
+    return { amount, error: "coupon has already been used" };
 
   const percentOff = coupon.percentOff as number;
   // Razorpay orders round to whole paise; floor rather than round so a
   // discount never charges a customer more than the stated percentage off.
   const discounted = Math.floor((amount * (100 - percentOff)) / 100);
   return { amount: discounted, coupon: { code: raw, percentOff } };
+}
+
+export async function redeemCoupon(code: unknown): Promise<void> {
+  const raw = String(code ?? "").trim().toUpperCase();
+  if (!raw) return;
+  await Coupon.updateOne({ code: raw }, { $inc: { uses: 1 } });
 }

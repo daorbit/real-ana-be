@@ -21,6 +21,8 @@ import trackRoutes from "./http/routes/track.js";
 import statsRoutes from "./http/routes/stats.js";
 import v1Routes from "./http/routes/v1.js";
 import adminRoutes from "./http/routes/admin.js";
+import adminReferralRoutes from "./http/routes/admin-referrals.js";
+import referralRoutes from "./http/routes/referrals.js";
 import shareRoutes from "./http/routes/share.js";
 import seoPublicRoutes from "./http/routes/seo-public.js";
 import plansPublicRoutes from "./http/routes/plans-public.js";
@@ -253,8 +255,10 @@ app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
 app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes);
 app.use("/api/notes", dashboardCors, requireUnlocked, noteRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
+app.use("/api/admin/referrals", dashboardCors, requireUnlocked, adminReferralRoutes);
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
+app.use("/api/referrals", dashboardCors, requireUnlocked, referralRoutes);
 // Third-party webhooks: no CORS (never called from a browser) and no JWT —
 // the signature check in the route itself is the credential.
 app.use("/api/webhooks", webhookRoutes);

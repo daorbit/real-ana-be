@@ -9,6 +9,9 @@ import { Membership } from "../workspace/models/Membership.js";
 import { WorkspaceInvite } from "../workspace/models/WorkspaceInvite.js";
 import { invalidateSite } from "../billing/event-quota.js";
 import { User } from "./models/User.js";
+import { ReferralCode } from "../referrals/models/ReferralCode.js";
+import { Referral } from "../referrals/models/Referral.js";
+import { Coupon } from "../billing/models/Coupon.js";
 
 export async function deleteUserAccount(userId: string): Promise<void> {
   const workspaces = await Workspace.find({ userId }).select("_id");
@@ -30,6 +33,11 @@ export async function deleteUserAccount(userId: string): Promise<void> {
   await Membership.deleteMany({ $or: [{ userId }, { workspaceId: { $in: wsIds } }] });
   await WorkspaceInvite.deleteMany({ workspaceId: { $in: wsIds } });
   await Workspace.deleteMany({ userId });
+  await Promise.all([
+    ReferralCode.deleteMany({ userId }),
+    Referral.deleteMany({ $or: [{ referrerId: userId }, { refereeId: userId }] }),
+    Coupon.deleteMany({ ownerId: userId }),
+  ]);
   await User.deleteOne({ _id: userId });
 
   for (const id of siteIds) invalidateSite(id as string);
