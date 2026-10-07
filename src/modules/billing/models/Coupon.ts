@@ -16,6 +16,8 @@ const couponSchema = new Schema(
     ownerId: { type: Schema.Types.ObjectId, ref: "User", default: null, index: true },
     maxUses: { type: Number, default: 0, min: 0 },
     uses: { type: Number, default: 0, min: 0 },
+    usedAt: { type: Date, default: null },
+    usedFor: { type: String, default: "" },
   },
   { timestamps: true }
 );

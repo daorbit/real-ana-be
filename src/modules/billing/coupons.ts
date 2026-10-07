@@ -1,4 +1,6 @@
 import { Coupon } from "./models/Coupon.js";
+import { getPlanCatalogEntry } from "./plans.catalog.js";
+import { resolveOrbitPlan } from "../orbit/orbit-plans.catalog.js";
 
 /**
  * Look up a coupon by code and apply its discount to `amount` (paise).
@@ -30,8 +32,16 @@ export async function applyCoupon(
   return { amount: discounted, coupon: { code: raw, percentOff } };
 }
 
-export async function redeemCoupon(code: unknown): Promise<void> {
+export async function redeemCoupon(code: unknown, usedFor = ""): Promise<void> {
   const raw = String(code ?? "").trim().toUpperCase();
   if (!raw) return;
-  await Coupon.updateOne({ code: raw }, { $inc: { uses: 1 } });
+  await Coupon.updateOne(
+    { code: raw },
+    { $inc: { uses: 1 }, $set: { usedAt: new Date(), ...(usedFor ? { usedFor } : {}) } },
+  );
+}
+
+export function planPurchaseLabel(ladder: unknown, slug: string): string {
+  const name = ladder === "orbit" ? resolveOrbitPlan(slug).name : (getPlanCatalogEntry(slug)?.name ?? slug);
+  return `${name} plan`;
 }

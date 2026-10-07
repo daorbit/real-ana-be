@@ -3,6 +3,7 @@ import { Referral, REFERRAL_STATUSES, type ReferralStatus } from "./models/Refer
 import { ReferralCode } from "./models/ReferralCode.js";
 import { Coupon } from "../billing/models/Coupon.js";
 import { User } from "../identity/models/User.js";
+import { rewardCouponsById } from "./coupon-state.js";
 
 const PAGE_SIZE = 20;
 const TOP_LIMIT = 20;
@@ -17,15 +18,6 @@ async function usersById(ids: unknown[]): Promise<Map<string, UserRef>> {
   const unique = [...new Set(ids.map(String))];
   const users = await User.find({ _id: { $in: unique } }).select("name email");
   return new Map(users.map((u) => [u.id, { id: u.id, name: u.name, email: u.email }]));
-}
-
-async function couponsById(ids: unknown[]) {
-  const present = ids.filter(Boolean);
-  if (!present.length) return new Map<string, { uses: number; expiresAt: Date | null; active: boolean }>();
-  const coupons = await Coupon.find({ _id: { $in: present } }).select("uses expiresAt active");
-  return new Map(
-    coupons.map((c) => [c.id, { uses: c.uses ?? 0, expiresAt: (c.expiresAt as Date) ?? null, active: Boolean(c.active) }]),
-  );
 }
 
 export async function listReferrals(query: { q?: string; status?: string; page?: number }) {
@@ -52,23 +44,24 @@ export async function listReferrals(query: { q?: string; status?: string; page?:
 
   const [users, coupons] = await Promise.all([
     usersById(rows.flatMap((r) => [r.referrerId, r.refereeId])),
-    couponsById(rows.map((r) => r.couponId)),
+    rewardCouponsById(rows.map((r) => r.couponId)),
   ]);
 
   return {
-    referrals: rows.map((r) => ({
-      id: r.id,
-      code: r.code,
-      status: r.status,
-      flagged: Boolean(r.flagged),
-      createdAt: r.get("createdAt"),
-      rewardedAt: r.rewardedAt,
-      referrer: users.get(String(r.referrerId)) ?? null,
-      referee: users.get(String(r.refereeId)) ?? null,
-      coupon: r.couponCode
-        ? { code: r.couponCode, ...(coupons.get(String(r.couponId)) ?? { uses: 0, expiresAt: null, active: false }) }
-        : null,
-    })),
+    referrals: rows.map((r) => {
+      const coupon = coupons.get(String(r.couponId));
+      return {
+        id: r.id,
+        code: r.code,
+        status: r.status,
+        flagged: Boolean(r.flagged),
+        createdAt: r.get("createdAt"),
+        rewardedAt: r.rewardedAt,
+        referrer: users.get(String(r.referrerId)) ?? null,
+        referee: users.get(String(r.refereeId)) ?? null,
+        coupon: r.couponCode && coupon ? { code: r.couponCode, ...coupon } : null,
+      };
+    }),
     total,
     page,
     pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
@@ -76,16 +69,23 @@ export async function listReferrals(query: { q?: string; status?: string; page?:
 }
 
 export async function referralOverview() {
-  const [byStatus, flagged, redeemed, codes] = await Promise.all([
+  const now = new Date();
+  const [byStatus, flagged, redeemed, ready, codes] = await Promise.all([
     Referral.aggregate<{ _id: ReferralStatus; n: number }>([{ $group: { _id: "$status", n: { $sum: 1 } } }]),
     Referral.countDocuments({ flagged: true, status: "pending" }),
     Coupon.countDocuments({ ownerId: { $ne: null }, uses: { $gt: 0 } }),
+    Coupon.countDocuments({
+      ownerId: { $ne: null },
+      uses: 0,
+      active: true,
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+    }),
     ReferralCode.countDocuments(),
   ]);
   const counts = Object.fromEntries(REFERRAL_STATUSES.map((s) => [s, 0])) as Record<ReferralStatus, number>;
   for (const row of byStatus) counts[row._id] = row.n;
   const total = REFERRAL_STATUSES.reduce((sum, s) => sum + counts[s], 0);
-  return { total, ...counts, flagged, couponsRedeemed: redeemed, codes };
+  return { total, ...counts, flagged, couponsRedeemed: redeemed, couponsReady: ready, codes };
 }
 
 export async function topReferrers() {
@@ -137,7 +137,7 @@ export async function myReferralSummary(userId: string) {
   const rows = await Referral.find({ referrerId: userId }).sort({ createdAt: -1 }).limit(100);
   const [users, coupons] = await Promise.all([
     usersById(rows.map((r) => r.refereeId)),
-    couponsById(rows.map((r) => r.couponId)),
+    rewardCouponsById(rows.map((r) => r.couponId)),
   ]);
 
   return rows.map((r) => {
@@ -149,7 +149,14 @@ export async function myReferralSummary(userId: string) {
       createdAt: r.get("createdAt"),
       coupon:
         r.status === "rewarded" && coupon
-          ? { code: r.couponCode, used: coupon.uses > 0, expiresAt: coupon.expiresAt }
+          ? {
+              code: r.couponCode,
+              state: coupon.state,
+              percentOff: coupon.percentOff,
+              expiresAt: coupon.expiresAt,
+              usedAt: coupon.usedAt,
+              usedFor: coupon.usedFor,
+            }
           : null,
     };
   });

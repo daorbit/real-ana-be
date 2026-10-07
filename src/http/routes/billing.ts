@@ -30,7 +30,7 @@ import {
 } from "../../modules/billing/plan-pricing.js";
 import { DEFAULT_ORBIT_PLAN_SLUG } from "../../modules/orbit/orbit-plans.catalog.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
-import { applyCoupon, redeemCoupon } from "../../modules/billing/coupons.js";
+import { applyCoupon, planPurchaseLabel, redeemCoupon } from "../../modules/billing/coupons.js";
 import { qualifyReferralOnPayment } from "../../modules/referrals/referral.service.js";
 import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency } from "../../modules/billing/currency.js";
@@ -241,7 +241,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
 
   if (amount === 0 && !resolvedAddons.items.length) {
     await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
-    await redeemCoupon(discounted.coupon?.code);
+    await redeemCoupon(discounted.coupon?.code, `${plan.name} plan`);
     return res.json({ free: true, plan: { name: plan.name, cycle } });
   }
 
@@ -569,7 +569,7 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   );
 
   await Promise.all([
-    redeemCoupon(purchase.couponCode),
+    redeemCoupon(purchase.couponCode, `${pack.name} addon`),
     qualifyReferralOnPayment(String(purchase.userId)),
   ]);
   await issueReceipt("addon", purchase.id, String(purchase.userId));
@@ -622,7 +622,7 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   }
 
   await Promise.all([
-    redeemCoupon(purchase.couponCode),
+    redeemCoupon(purchase.couponCode, planPurchaseLabel(purchase.ladder, purchase.planSlug as string)),
     qualifyReferralOnPayment(String(purchase.userId)),
   ]);
   await issueReceipt("plan", purchase.id, String(purchase.userId));
