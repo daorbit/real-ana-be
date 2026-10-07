@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { pooled } from "../../infra/http-client/safe-fetch.js";
 import { Site } from "../analytics/models/Site.js";
 import { Competitor } from "../seo/models/Competitor.js";
@@ -115,7 +116,7 @@ export async function syncReferrals(site: SiteRef) {
         update: {
           $set: { sourceDomain: s.sourceDomain, referralVisits: s.visits, lastReferralAt: s.lastAt },
           $setOnInsert: {
-            workspaceId: site.workspaceId,
+            workspaceId: new Types.ObjectId(site.workspaceId),
             origin: "referral",
             status: "pending",
             targetUrl: `https://${site.domain}${s.landingPath}`,

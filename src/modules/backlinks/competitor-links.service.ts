@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { fetchIndexedBacklinks, type IndexedLink } from "../../infra/http-client/backlink-index.js";
 import { Backlink } from "./models/Backlink.js";
 import { CompetitorBacklink } from "./models/CompetitorBacklink.js";
@@ -66,7 +67,7 @@ export async function syncFromIndex(site: SiteRef) {
           update: {
             $set: { authority: l.authority },
             $setOnInsert: {
-              workspaceId: site.workspaceId,
+              workspaceId: new Types.ObjectId(site.workspaceId),
               sourceDomain: l.sourceDomain,
               targetUrl: l.targetUrl,
               anchorText: l.anchorText,
@@ -95,7 +96,7 @@ export async function syncFromIndex(site: SiteRef) {
               filter: { competitorId: c.competitorId, sourceUrl: l.sourceUrl },
               update: {
                 $set: { ...l, status: "live", lastSeenAt: now },
-                $setOnInsert: { workspaceId: site.workspaceId, siteId: site.siteId, origin: "index" },
+                $setOnInsert: { workspaceId: new Types.ObjectId(site.workspaceId), siteId: site.siteId, origin: "index" },
               },
               upsert: true,
             },
