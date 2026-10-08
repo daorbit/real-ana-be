@@ -3,10 +3,6 @@ import { nanoid } from "nanoid";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
-import { SeoReport } from "../../modules/seo/models/SeoReport.js";
-import { Competitor } from "../../modules/seo/models/Competitor.js";
-import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
-import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
@@ -32,18 +28,14 @@ import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
-import { Project } from "../../modules/workspace/models/Project.js";
 import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
 import { canCreateFeature, canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
-import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
-import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
-import { WorkspaceInvite } from "../../modules/workspace/models/WorkspaceInvite.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
-import { deleteWorkspaceDashboards } from "../../modules/dashboards/cleanup.js";
+import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -1010,37 +1002,7 @@ router.patch("/:wid", async (req: AuthedRequest, res: Response) => {
 router.delete("/:wid", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "owner");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
-  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
-  const ids = sites.map((s) => s.siteId as string);
-  await Event.deleteMany({ siteId: { $in: ids } });
-  await SeoReport.deleteMany({ workspaceId: ws.id });
-  await Competitor.deleteMany({ workspaceId: ws.id });
-  // Trend rows carry no workspace id, so they are cleared by the site ids the
-  // workspace owned — otherwise they outlive both and are unreachable.
-  await CompetitorSnapshot.deleteMany({ siteId: { $in: ids } });
-  await CrawlReport.deleteMany({ workspaceId: ws.id });
-  await Site.deleteMany({ workspaceId: ws.id });
-  await Goal.deleteMany({ workspaceId: ws.id });
-  await deleteWorkspaceDashboards(ws.id);
-  // Keys are scoped to the workspace, so they'd otherwise outlive it and keep
-  // authenticating against /v1 for a tenant that no longer exists.
-  await ApiKey.deleteMany({ workspaceId: ws.id });
-  await Project.deleteMany({ workspaceId: ws.id });
-  // The plan was bought for this workspace, so it goes with it. Left behind it
-  // would hold the unique index on `workspaceId` against a dead id, and count
-  // as an active plan in the account's billing summary.
-  await Subscription.deleteOne({ workspaceId: ws.id });
-  // Everyone's access to it, and any invitations still outstanding — an
-  // unaccepted link must not resurrect a membership for a workspace that no
-  // longer exists.
-  await Membership.deleteMany({ workspaceId: ws.id });
-  await WorkspaceInvite.deleteMany({ workspaceId: ws.id });
-  await ws.deleteOne();
-  // Ingest caches "this site may collect" for a minute. Without this a deleted
-  // site keeps accepting beacons until that expires, writing events keyed to a
-  // site that no longer exists — rows nothing can read or clean up.
-  for (const id of ids) invalidateSite(id);
+  await purgeWorkspaces([access.workspace.id]);
   res.status(204).end();
 });
 
@@ -1056,15 +1018,7 @@ router.delete(
       workspaceId: ws.id,
     });
     if (!site) return res.status(404).json({ error: "site not found" });
-    await Event.deleteMany({ siteId: site.siteId });
-    await SeoReport.deleteMany({ siteId: site.siteId });
-    await Competitor.deleteMany({ siteId: site.siteId });
-    await CompetitorSnapshot.deleteMany({ siteId: site.siteId });
-    await CrawlReport.deleteMany({ siteId: site.siteId });
-    await site.deleteOne();
-    // See the workspace delete above: a cached allow decision would otherwise
-    // let this site keep ingesting for up to a minute after it is gone.
-    invalidateSite(site.siteId as string);
+    await purgeSite(site.siteId as string);
     res.status(204).end();
   },
 );

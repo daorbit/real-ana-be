@@ -12,20 +12,10 @@
  * the window.
  */
 
-import crypto from "crypto";
 import { DemoStart } from "./models/DemoStart.js";
+import { hashIp } from "../../shared/utils/ip-hash.js";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Key the hash with the server secret so a leaked database can't be walked
- * back to addresses by hashing candidate IPs — an unkeyed digest of a value
- * from a space this small is trivially reversible.
- */
-function hashIp(ip: string): string {
-  const secret = process.env.JWT_SECRET ?? "";
-  return crypto.createHmac("sha256", secret).update(ip).digest("hex").slice(0, 32);
-}
 
 export type DemoAttempt =
   | { allowed: true }

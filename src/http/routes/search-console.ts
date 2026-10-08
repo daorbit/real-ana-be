@@ -5,8 +5,8 @@ import { SearchConsoleCache } from "../../modules/seo/models/SearchConsoleCache.
 import {
   listSearchConsoleSites,
   missingSearchConsoleConfig,
-  revokeSearchConsoleToken,
 } from "../../infra/http-client/search-console.js";
+import { disconnectSearchConsole } from "../../modules/seo/search-console-connection.service.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import {
   BREAKDOWN_DIMENSIONS,
@@ -49,7 +49,6 @@ import {
   SearchPlanDenied,
   type SearchEntitlement,
 } from "../../modules/seo/search-entitlements.js";
-import { decryptSecret } from "../../shared/utils/crypto-box.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { planLimit } from "../plan-limit.js";
@@ -104,17 +103,7 @@ router.delete(
   asyncHandler(async (req: AuthedRequest, res: Response) => {
     const access = await resolveAccess(req, "admin");
     if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-    const workspaceId = access.workspace.id;
-
-    const connection = await SearchConsoleConnection.findOne({ workspaceId }).select("+refreshToken");
-    if (connection) {
-      const refreshToken = decryptSecret(String(connection.get("refreshToken") ?? ""));
-      if (refreshToken) await revokeSearchConsoleToken(refreshToken);
-    }
-
-    await SearchConsoleCache.deleteMany({ workspaceId });
-    await SearchConsoleProperty.deleteMany({ workspaceId });
-    await SearchConsoleConnection.deleteOne({ workspaceId });
+    await disconnectSearchConsole(access.workspace.id);
 
     res.json({ disconnected: true });
   }),

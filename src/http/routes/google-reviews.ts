@@ -21,7 +21,8 @@ import {
   usableAccessToken,
 } from "../../modules/reviews/sync.service.js";
 import { verifyGoogleCredential } from "../../infra/http-client/google-auth.js";
-import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
+import { encryptSecret } from "../../shared/utils/crypto-box.js";
+import { disconnectGoogleReviews } from "../../modules/reviews/connection.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
 import {
@@ -593,15 +594,7 @@ router.delete(
     if (denied) return res.status(denied.status).json({ error: denied.error });
     if (!connection) return res.json({ disconnected: true });
 
-    const stored = await GoogleConnection.findById(connection._id).select("+refreshToken");
-    const refreshToken = decryptSecret(String(stored?.get("refreshToken") ?? ""));
-    // Revoking the refresh token invalidates the whole grant, access token
-    // included, so it is the only one worth sending.
-    if (refreshToken) await revokeToken(refreshToken);
-
-    await GoogleReview.deleteMany({ workspaceId });
-    await GoogleLocation.deleteMany({ workspaceId });
-    await GoogleConnection.deleteOne({ _id: connection._id });
+    await disconnectGoogleReviews(workspaceId);
 
     res.json({ disconnected: true });
   }),

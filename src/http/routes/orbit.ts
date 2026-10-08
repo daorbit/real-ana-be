@@ -48,6 +48,7 @@ import {
 import { planLimit } from "../plan-limit.js";
 import { checkImageDataUrl, cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
+import { overRateLimit } from "../../modules/security/rate-limit.service.js";
 
 const router = Router({ mergeParams: true });
 
@@ -82,23 +83,8 @@ export function watermarkTransformation(): string | undefined {
 }
 
 
-const hits = new Map<string, number[]>();
-
-function rateLimited(key: string, limit: number): boolean {
-  const now = Date.now();
-  const recent = (hits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  recent.push(now);
-  hits.set(key, recent);
-
-  // Without this the map grows one entry per user forever. Cheap to do here,
-  // and only when someone is actually talking.
-  if (hits.size > 500) {
-    for (const [id, times] of hits) {
-      if (!times.some((t) => now - t < WINDOW_MS)) hits.delete(id);
-    }
-  }
-
-  return recent.length > limit;
+function rateLimited(key: string, limit: number): Promise<boolean> {
+  return overRateLimit(`orbit:${key}`, limit, WINDOW_MS);
 }
 
 
@@ -176,7 +162,7 @@ router.post("/ask", async (req: OrbitRequest, res: Response) => {
 
   const plan = await effectiveOrbitPlan(ws.id);
 
-  if (rateLimited(ws.id, plan.hourlyBurst)) {
+  if (await rateLimited(ws.id, plan.hourlyBurst)) {
     return res.status(429).json({
       error: "That is a lot of questions in one hour. Try again later, or use Email support.",
     });
@@ -445,7 +431,7 @@ router.post("/explain", async (req: OrbitRequest, res: Response) => {
     }, "plan_required");
   }
 
-  if (rateLimited(`${ws.id}:explain`, EXPLAIN_HOURLY_LIMIT)) {
+  if (await rateLimited(`${ws.id}:explain`, EXPLAIN_HOURLY_LIMIT)) {
     return res.status(429).json({ error: "That is a lot of explanations in one hour. Try again later." });
   }
 
@@ -520,7 +506,7 @@ router.post("/search", async (req: OrbitRequest, res: Response) => {
     }, "plan_required");
   }
 
-  if (rateLimited(`${ws.id}:search`, SEARCH_ORBIT_HOURLY_LIMIT)) {
+  if (await rateLimited(`${ws.id}:search`, SEARCH_ORBIT_HOURLY_LIMIT)) {
     return res.status(429).json({ error: "That is a lot of questions in one hour. Try again later." });
   }
 
@@ -596,7 +582,7 @@ router.post("/dashboard", async (req: OrbitRequest, res: Response) => {
   const ws = await requireWorkspaceEitherAuth(req, res);
   if (!ws) return;
 
-  if (rateLimited(`${ws.id}:dashboard`, DASHBOARD_ORBIT_HOURLY_LIMIT)) {
+  if (await rateLimited(`${ws.id}:dashboard`, DASHBOARD_ORBIT_HOURLY_LIMIT)) {
     return res.status(429).json({ error: "That is a lot of dashboard requests in one hour. Try again later." });
   }
 

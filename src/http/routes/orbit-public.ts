@@ -10,6 +10,8 @@ import {
   type PageContext,
 } from "../../modules/orbit/index.js";
 import { relevantKnowledge } from "../../modules/orbit/retrieval.js";
+import { overRateLimit } from "../../modules/security/rate-limit.service.js";
+import { hashIp } from "../../shared/utils/ip-hash.js";
 
 const router = Router();
 
@@ -40,21 +42,8 @@ const MAX_PAGE_URL_CHARS = 300;
 const PUBLIC_BUDGET_MS = 20_000;
 const PUBLIC_ATTEMPT_MS = 12_000;
 
-const hits = new Map<string, number[]>();
-
-function rateLimited(ip: string): boolean {
-  const now = Date.now();
-  const recent = (hits.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
-  recent.push(now);
-  hits.set(ip, recent);
-
-  if (hits.size > 2000) {
-    for (const [key, times] of hits) {
-      if (!times.some((t) => now - t < WINDOW_MS)) hits.delete(key);
-    }
-  }
-
-  return recent.length > MAX_PER_IP;
+function rateLimited(ip: string): Promise<boolean> {
+  return overRateLimit(`orbit-public:${hashIp(ip)}`, MAX_PER_IP, WINDOW_MS);
 }
 
 function clientIp(req: Request): string {
@@ -125,7 +114,7 @@ router.post("/ask", async (req: Request, res: Response) => {
   }
 
   const ip = clientIp(req);
-  if (rateLimited(ip)) {
+  if (await rateLimited(ip)) {
     return res.status(429).json({
       error:
         "That is a lot of questions. For anything more, email daorbit2k25@gmail.com — a person will answer.",

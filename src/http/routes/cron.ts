@@ -7,6 +7,7 @@ import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
 import { syncDue } from "../../modules/reviews/sync.service.js";
 import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
+import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -191,8 +192,24 @@ router.get("/backlinks", async (req: Request, res: Response) => {
   }
 });
 
+async function runEventRetention() {
+  const summary = await sweepExpiredEvents();
+  if (summary.events > 0 || summary.heatmapClicks > 0) {
+    console.log(`[cron] retention: ${summary.events} events and ${summary.heatmapClicks} heatmap clicks before ${summary.cutoff} deleted`);
+  }
+  return summary;
+}
+
 router.get("/plan-expiry", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
+
+  let retention: Awaited<ReturnType<typeof runEventRetention>> | { error: string };
+  try {
+    retention = await runEventRetention();
+  } catch (e) {
+    console.error("[cron] event retention failed:", (e as Error).message);
+    retention = { error: (e as Error).message };
+  }
 
   try {
     const summary = await sendExpiryReminders();
@@ -200,9 +217,20 @@ router.get("/plan-expiry", async (req: Request, res: Response) => {
       console.log(`[cron] plan expiry: ${summary.checked} checked, ${summary.sent} sent, ${summary.failed} failed`);
     }
     if (summary.errors.length) console.error("[cron] plan expiry errors:", summary.errors.join(" | "));
-    res.json({ ok: true, ...summary });
+    res.json({ ok: true, ...summary, retention });
   } catch (e) {
     console.error("[cron] plan expiry run failed:", (e as Error).message);
+    res.status(500).json({ ok: false, error: (e as Error).message, retention });
+  }
+});
+
+router.get("/event-retention", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
+  try {
+    res.json({ ok: true, ...(await runEventRetention()) });
+  } catch (e) {
+    console.error("[cron] event retention failed:", (e as Error).message);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -285,6 +313,14 @@ router.get("/run", async (req: Request, res: Response) => {
     const message = (e as Error).message;
     console.error("[cron] backlink re-check failed:", message);
     errors.push(`backlinks: ${message}`);
+  }
+
+  try {
+    ran["event-retention"] = await runEventRetention();
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] event retention failed:", message);
+    errors.push(`event-retention: ${message}`);
   }
 
   if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));

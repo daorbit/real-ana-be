@@ -22,6 +22,9 @@ import {
 } from "../../infra/storage/cloudinary.js";
 import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail } from "../../infra/mail/mailer.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
+import { claimAttempt, clearAttempts } from "../../modules/security/attempt-lock.service.js";
+import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
+import { captureServerError } from "../../infra/monitoring/sentry.js";
 import {
   signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
   signPending2faToken, verifyPending2faToken,
@@ -37,37 +40,11 @@ function randomBackupCode(): string {
   return `${part()}-${part()}`;
 }
 
-/**
- * A generic per-key attempt counter, in memory only. Covers both 2FA-at-login
- * verification and the screen-lock unlock — anything where a bcrypt/TOTP
- * compare is the only gate and there is no captcha in front of it, unlike
- * `/login` which has Turnstile. Losing counts on a restart, or having them
- * miss across instances in a multi-process deploy, just gives an attacker a
- * fresh window rather than a free pass, so this doesn't need to be durable or
- * shared like the account data it's protecting.
- */
-const attemptCounters = new Map<string, { count: number; lockedUntil: number }>();
-const MAX_ATTEMPTS = 5;
-const ATTEMPT_COOLDOWN_MS = 15 * 60 * 1000;
-
-function checkAttemptThrottle(key: string): number | null {
-  const entry = attemptCounters.get(key);
-  if (entry && entry.lockedUntil > Date.now()) return entry.lockedUntil;
-  return null;
-}
-
-function recordAttemptFailure(key: string): void {
-  const entry = attemptCounters.get(key) ?? { count: 0, lockedUntil: 0 };
-  entry.count += 1;
-  if (entry.count >= MAX_ATTEMPTS) {
-    entry.lockedUntil = Date.now() + ATTEMPT_COOLDOWN_MS;
-    entry.count = 0;
-  }
-  attemptCounters.set(key, entry);
-}
-
-function clearAttemptFailures(key: string): void {
-  attemptCounters.delete(key);
+function sendThrottled(res: Response, lockedUntil: Date): void {
+  res.status(429).json({
+    error: "too many attempts — try again later",
+    retryAt: lockedUntil.toISOString(),
+  });
 }
 
 async function confirmOwnership(
@@ -91,21 +68,17 @@ async function rejectUnconfirmed(
   res: Response,
 ): Promise<boolean> {
   const throttleKey = `confirm:${user.id}`;
-  const throttledUntil = checkAttemptThrottle(throttleKey);
-  if (throttledUntil) {
-    res.status(429).json({
-      error: "too many attempts — try again later",
-      retryAt: new Date(throttledUntil).toISOString(),
-    });
+  const lockedUntil = await claimAttempt(throttleKey);
+  if (lockedUntil) {
+    sendThrottled(res, lockedUntil);
     return true;
   }
 
   if (await confirmOwnership(user, body)) {
-    clearAttemptFailures(throttleKey);
+    await clearAttempts(throttleKey);
     return false;
   }
 
-  recordAttemptFailure(throttleKey);
   res.status(401).json({ error: user.passwordHash ? "incorrect password" : "incorrect PIN or code" });
   return true;
 }
@@ -624,12 +597,8 @@ router.post("/2fa/verify", async (req, res) => {
     if (!userId) return res.status(401).json({ error: "invalid or expired login attempt" });
 
     const throttleKey = `2fa:${userId}`;
-    const throttledUntil = checkAttemptThrottle(throttleKey);
-    if (throttledUntil)
-      return res.status(429).json({
-        error: "too many attempts — try again later",
-        retryAt: new Date(throttledUntil).toISOString(),
-      });
+    const lockedUntil = await claimAttempt(throttleKey);
+    if (lockedUntil) return sendThrottled(res, lockedUntil);
 
     const user = await User.findById(userId);
     if (!user || !user.totpEnabled || !user.totpSecretEnc)
@@ -641,7 +610,7 @@ router.post("/2fa/verify", async (req, res) => {
     const totpOk = secret && /^\d{6}$/.test(cleanCode) ? await verifyTotpCode(cleanCode, secret) : false;
 
     if (totpOk) {
-      clearAttemptFailures(throttleKey);
+      await clearAttempts(throttleKey);
       const token = await signToken(user.id, req);
       return res.json({ token, user: await publicUser(user) });
     }
@@ -657,14 +626,10 @@ router.post("/2fa/verify", async (req, res) => {
         break;
       }
     }
-    if (matchedIndex === -1) {
-      recordAttemptFailure(throttleKey);
-      return res.status(401).json({ error: "invalid code" });
-    }
+    if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
 
     user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
-    await user.save();
-    clearAttemptFailures(throttleKey);
+    await Promise.all([user.save(), clearAttempts(throttleKey)]);
     const token = await signToken(user.id, req);
     res.json({ token, user: await publicUser(user), backupCodeUsed: true });
   } catch {
@@ -857,16 +822,12 @@ router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) =>
   try {
     const userId = req.userId!;
     const throttleKey = `unlock:${userId}`;
-    const throttledUntil = checkAttemptThrottle(throttleKey);
-    if (throttledUntil)
-      return res.status(429).json({
-        error: "too many attempts — try again later",
-        retryAt: new Date(throttledUntil).toISOString(),
-      });
-
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ error: "not found" });
     if (!user.lockedAt) return res.json({ ok: true });
+
+    const lockedUntil = await claimAttempt(throttleKey);
+    if (lockedUntil) return sendThrottled(res, lockedUntil);
 
     const { pin, totpCode } = req.body ?? {};
     let ok = false;
@@ -880,14 +841,10 @@ router.post("/unlock", requireAuth, async (req: AuthedRequest, res: Response) =>
       ok = await bcrypt.compare(String(pin), user.pinHash);
     }
 
-    if (!ok) {
-      recordAttemptFailure(throttleKey);
-      return res.status(401).json({ error: "incorrect PIN or code" });
-    }
+    if (!ok) return res.status(401).json({ error: "incorrect PIN or code" });
 
-    clearAttemptFailures(throttleKey);
     user.lockedAt = null;
-    await user.save();
+    await Promise.all([user.save(), clearAttempts(throttleKey)]);
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "could not unlock" });
@@ -1142,6 +1099,32 @@ router.delete("/me/avatar", requireAuth, blockDemoWrites, async (req: AuthedRequ
   }
 });
 
+
+router.post("/me/delete", requireAuth, blockDemoWrites, async (req: AuthedRequest, res: Response) => {
+  if (req.impersonatorId) return res.status(403).json({ error: "not available while impersonating" });
+
+  const user = await User.findById(req.userId);
+  if (!user) return res.status(404).json({ error: "not found" });
+  if (user.role === "admin" || user.role === "super_admin")
+    return res.status(400).json({ error: "admin accounts cannot be deleted here" });
+
+  const confirmEmail = String(req.body?.confirmEmail ?? "").trim().toLowerCase();
+  if (confirmEmail !== user.email.toLowerCase())
+    return res.status(400).json({ error: "type your email address to confirm" });
+
+  const hasOwnershipFactor = Boolean(user.passwordHash || user.totpEnabled || user.pinHash);
+  if (hasOwnershipFactor && (await rejectUnconfirmed(user, req.body ?? {}, res))) return;
+
+  try {
+    await deleteUserAccount(user.id);
+  } catch (e) {
+    void captureServerError(e, { method: req.method, path: req.originalUrl, userId: user.id });
+    return res.status(502).json({ error: "could not finish deleting your account — try again in a minute" });
+  }
+
+  console.log(`[auth] user ${user.id} deleted their own account`);
+  res.status(204).end();
+});
 
 function passwordError(password: string): string | null {
   if (password.length < 8) return "password must be at least 8 characters";
