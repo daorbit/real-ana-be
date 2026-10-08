@@ -5,6 +5,8 @@ const navLinkSchema = new Schema(
     id: { type: String, required: true },
     label: { type: String, trim: true, maxlength: 40, required: true },
     url: { type: String, trim: true, maxlength: 2048, required: true },
+    mode: { type: String, enum: ["external", "internal"], default: "external" },
+    slug: { type: String, trim: true, maxlength: 40, default: "" },
     logoUrl: { type: String, trim: true, default: "" },
     logoPublicId: { type: String, trim: true, default: "" },
   },

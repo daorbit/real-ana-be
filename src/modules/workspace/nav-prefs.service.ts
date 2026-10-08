@@ -6,14 +6,43 @@ const MAX_NAV_PATHS = 60;
 const MAX_LOGO_BYTES = 1024 * 1024;
 const LOCKED_PATHS = new Set(["/app", "/app/settings"]);
 
-type StoredLink = { id: string; label: string; url: string; logoUrl?: string; logoPublicId?: string };
+type LinkMode = "external" | "internal";
+type StoredLink = {
+  id: string;
+  label: string;
+  url: string;
+  mode?: LinkMode;
+  slug?: string;
+  logoUrl?: string;
+  logoPublicId?: string;
+};
 type StoredPrefs = { hidden?: string[]; pinned?: string[]; links?: StoredLink[] } | null | undefined;
 type WorkspaceDocument = InstanceType<typeof Workspace>;
 
 export interface PublicNavPrefs {
   hidden: string[];
   pinned: string[];
-  links: { id: string; label: string; url: string; logoUrl: string }[];
+  links: { id: string; label: string; url: string; mode: LinkMode; slug: string; logoUrl: string }[];
+}
+
+const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+}
+
+function uniqueSlug(base: string, taken: Set<string>): string {
+  const root = base || "link";
+  let candidate = root;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${root.slice(0, 36)}-${n}`;
+  taken.add(candidate);
+  return candidate;
 }
 
 export class NavPrefsError extends Error {
@@ -27,7 +56,14 @@ export function toPublicNavPrefs(prefs: StoredPrefs): PublicNavPrefs | null {
   return {
     hidden: [...(prefs.hidden ?? [])],
     pinned: [...(prefs.pinned ?? [])],
-    links: (prefs.links ?? []).map((l) => ({ id: l.id, label: l.label, url: l.url, logoUrl: l.logoUrl ?? "" })),
+    links: (prefs.links ?? []).map((l) => ({
+      id: l.id,
+      label: l.label,
+      url: l.url,
+      mode: (l.mode === "internal" ? "internal" : "external") as LinkMode,
+      slug: l.slug ?? "",
+      logoUrl: l.logoUrl ?? "",
+    })),
   };
 }
 
@@ -55,6 +91,8 @@ function storedLinks(ws: WorkspaceDocument): StoredLink[] {
     id: l.id,
     label: l.label,
     url: l.url,
+    mode: (l.mode === "internal" ? "internal" : "external") as LinkMode,
+    slug: l.slug ?? "",
     logoUrl: l.logoUrl ?? "",
     logoPublicId: l.logoPublicId ?? "",
   }));
@@ -64,19 +102,30 @@ function parseLinks(v: unknown, previous: StoredLink[]): StoredLink[] {
   if (!Array.isArray(v)) return [];
   const before = new Map(previous.map((l) => [l.id, l]));
   const seen = new Set<string>();
+  const slugs = new Set<string>();
   const out: StoredLink[] = [];
 
   for (const raw of v) {
     if (out.length >= MAX_NAV_LINKS) break;
     if (!raw || typeof raw !== "object") continue;
-    const { id, label, url } = raw as Record<string, unknown>;
+    const { id, label, url, mode, slug } = raw as Record<string, unknown>;
     if (typeof id !== "string" || !/^[\w-]{4,40}$/.test(id) || seen.has(id)) continue;
     const cleanUrl = httpUrl(url);
     const cleanLabel = typeof label === "string" ? label.trim().slice(0, 40) : "";
     if (!cleanUrl || !cleanLabel) continue;
     seen.add(id);
     const prior = before.get(id);
-    out.push({ id, label: cleanLabel, url: cleanUrl, logoUrl: prior?.logoUrl ?? "", logoPublicId: prior?.logoPublicId ?? "" });
+    const internal = mode === "internal";
+    const requested = typeof slug === "string" ? slugify(slug) : "";
+    out.push({
+      id,
+      label: cleanLabel,
+      url: cleanUrl,
+      mode: internal ? "internal" : "external",
+      slug: internal ? uniqueSlug(SLUG.test(requested) ? requested : slugify(cleanLabel), slugs) : "",
+      logoUrl: prior?.logoUrl ?? "",
+      logoPublicId: prior?.logoPublicId ?? "",
+    });
   }
   return out;
 }
