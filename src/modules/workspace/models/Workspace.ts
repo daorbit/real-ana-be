@@ -1,5 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 import { placedSchema } from "./placed.js";
+import { navPrefsSchema } from "./navPrefs.js";
 
 const workspaceSchema = new Schema(
   {
@@ -28,6 +29,8 @@ const workspaceSchema = new Schema(
      * should see the same theme, not their own.
      */
     themePrefs: { type: Schema.Types.Mixed, default: undefined },
+
+    navPrefs: { type: navPrefsSchema, default: undefined },
 
     /**
      * Public share link.

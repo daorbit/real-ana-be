@@ -35,6 +35,7 @@ import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
+import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 
@@ -155,6 +156,7 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
     await Promise.all(
       accessible.map(async ({ workspace, role }) => ({
         ...workspace.toObject(),
+        navPrefs: toPublicNavPrefs(workspace.get("navPrefs")),
         role,
         billing: await quotaSummary(workspace.id),
       })),

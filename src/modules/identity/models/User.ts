@@ -33,8 +33,7 @@ const userSchema = new Schema(
     pinHash: { type: String, default: "" },
     screenLockEnabled: { type: Boolean, default: false },
     lockedAt: { type: Date, default: null },
-    referralSources: { type: [String], enum: REFERRAL_SOURCES, default: [] },
-    /** Consecutive wrong-password attempts at /login. Reset on a correct one. */
+    referralSources: { type: [String], enum: REFERRAL_SOURCES, default: [] },    /** Consecutive wrong-password attempts at /login. Reset on a correct one. */
     loginFailCount: { type: Number, default: 0 },
     loginLockedUntil: { type: Date, default: null },
   },

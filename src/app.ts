@@ -39,6 +39,7 @@ import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import segmentRoutes from "./http/routes/segments.js";
 import brandingRoutes from "./http/routes/branding.js";
+import navPrefsRoutes from "./http/routes/nav-prefs.js";
 import mediaRoutes from "./http/routes/media.js";
 import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
@@ -78,6 +79,7 @@ app.use(
 app.use(["/api", "/v1"], compression());
 
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
+app.use("/api/workspaces/:wid/nav/links", express.json({ limit: "2mb" }));
 
 app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
 // And for a scheduled post, whose image arrives the same way before being
@@ -239,6 +241,7 @@ app.use("/api/workspaces/:wid/reports", dashboardCors, requireUnlocked, reportRo
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, requireUnlocked, segmentRoutes);
 app.use("/api/workspaces/:wid/branding", dashboardCors, requireUnlocked, brandingRoutes);
+app.use("/api/workspaces/:wid/nav", dashboardCors, requireUnlocked, navPrefsRoutes);
 app.use("/api/workspaces/:wid/media", dashboardCors, requireUnlocked, mediaRoutes);
 app.use("/api/workspaces/:wid/markers", dashboardCors, requireUnlocked, markerRoutes);
 app.use("/api/workspaces/:wid/dashboards", dashboardCors, requireUnlocked, dashboardRoutes);
