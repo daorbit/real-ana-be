@@ -31,6 +31,7 @@ import { OrbitMessage } from "../orbit-history/models/OrbitMessage.js";
 import { invalidateSite } from "../billing/event-quota.js";
 import { deleteWorkspaceDashboards } from "../dashboards/cleanup.js";
 import { deleteWorkspaceMedia } from "../media/cleanup.js";
+import { deleteWorkspaceNavLogos } from "./nav-prefs.service.js";
 import { disconnectGoogleReviews } from "../reviews/connection.service.js";
 import { disconnectSearchConsole } from "../seo/search-console-connection.service.js";
 import { purgeFormsWorkspace } from "../../infra/http-client/forms-service.js";
@@ -71,6 +72,7 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
   await Promise.all([
     purgeSiteData(siteIds),
     deleteWorkspaceMedia(workspaceIds),
+    deleteWorkspaceNavLogos(workspaceIds),
     ...workspaceIds.flatMap((id) => [
       disconnectGoogleReviews(id),
       disconnectSearchConsole(id),

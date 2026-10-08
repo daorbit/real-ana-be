@@ -129,6 +129,14 @@ export async function setNavLinkLogo(ws: WorkspaceDocument, linkId: string, data
   return publicOf(ws);
 }
 
+export async function deleteWorkspaceNavLogos(workspaceIds: string[]): Promise<void> {
+  const rows = await Workspace.find({ _id: { $in: workspaceIds } })
+    .select("navPrefs.links.logoPublicId")
+    .lean<{ navPrefs?: StoredPrefs }[]>();
+  const ids = rows.flatMap((r) => (r.navPrefs?.links ?? []).map((l) => l.logoPublicId).filter(Boolean)) as string[];
+  await Promise.all(ids.map((id) => deleteImage(id)));
+}
+
 export async function clearNavLinkLogo(ws: WorkspaceDocument, linkId: string): Promise<PublicNavPrefs | null> {
   const links = storedLinks(ws);
   const link = links.find((l) => l.id === linkId);
