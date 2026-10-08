@@ -4,6 +4,7 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { embedPayload, isEmbedTokenShape } from "../../modules/dashboards/embed.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { publicBrand } from "../../modules/branding/public-brand.js";
 
 const router = Router();
 
@@ -17,9 +18,10 @@ router.get(
     if (!embed) return res.status(404).json({ error: "not found" });
 
     const workspaceId = embed.get("workspaceId");
-    const [ws, sites] = await Promise.all([
+    const [ws, sites, brand] = await Promise.all([
       Workspace.findById(workspaceId).select("name"),
       Site.find({ workspaceId }).select("siteId"),
+      publicBrand(String(workspaceId)),
     ]);
     if (!ws) return res.status(404).json({ error: "not found" });
 
@@ -44,6 +46,7 @@ router.get(
       range,
       theme: embed.get("theme"),
       workspace: ws.get("name"),
+      brand,
       data,
     });
   }),
