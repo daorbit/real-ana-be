@@ -3,19 +3,9 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
 import { renderShareCardPng } from "../../modules/analytics/share-card.js";
+import { publicBrand } from "../../modules/branding/public-brand.js";
 
-/**
- * Public, unauthenticated read-only dashboards.
- *
- * The share token is the entire credential, so this router is deliberately
- * narrow: one route, no parameters beyond a range, and a response that is
- * built field by field rather than spread from the stats object. Anything not
- * listed here cannot leak, even if `computeStats` grows new fields later.
- *
- * Never exposed: site ids (they are the public tracking keys — leaking one
- * lets anyone post events into the customer's analytics), workspace id, owner
- * identity, raw events, or per-site breakdowns.
- */
+
 const router = Router();
 
 /** Ranges a public viewer may request. Anything else falls back to 30 days. */
@@ -250,7 +240,10 @@ router.get("/:token", async (req: Request, res: Response) => {
     ).catch(() => {});
   }
 
-  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const [sites, brand] = await Promise.all([
+    Site.find({ workspaceId: ws.id }).select("siteId"),
+    publicBrand(String(ws.id)),
+  ]);
   const siteIds = sites.map((s) => s.siteId as string);
 
   const rangeKey = PUBLIC_RANGES.has(String(req.query.range))
@@ -288,6 +281,7 @@ router.get("/:token", async (req: Request, res: Response) => {
   if (siteIds.length === 0) {
     return res.json({
       workspace: ws.get("name"),
+      brand,
       range: rangeKey,
       panels,
       pageviews: 0,
@@ -318,6 +312,7 @@ router.get("/:token", async (req: Request, res: Response) => {
   // must never silently publish it here.
   res.json({
     workspace: ws.get("name"),
+    brand,
     range: rangeKey,
     panels,
     pageviews: panels.totals ? stats.pageviews : 0,
