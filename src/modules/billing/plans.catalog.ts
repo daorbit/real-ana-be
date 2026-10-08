@@ -74,7 +74,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
 
     features: [
       "7 days of history with period-over-period comparison",
-      "1 lead capture form, up to 10 submissions / month",
+      "1 lead capture form, up to 100 submissions / month",
       "3 scheduled social posts",
       "Monthly report by email",
       "Shareable public dashboard",
@@ -93,7 +93,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxScheduledPosts: 3,
     repeatingPosts: false,
     maxForms: 1,
-    monthlySubmissionQuota: 10,
+    monthlySubmissionQuota: 100,
     formNotificationEmails: false,
     formFileUploads: false,
     formBranding: false,
@@ -213,7 +213,7 @@ const SUPERSEDES: Record<string, string[]> = {
   "Custom comparison periods": ["7 days of history with period-over-period comparison"],
   "Unlimited scheduled social posts": ["Scheduled LinkedIn posts, including repeating", "3 scheduled social posts"],
   "Scheduled LinkedIn posts, including repeating": ["3 scheduled social posts"],
-  "Lead capture forms with email notifications": ["1 lead capture form, up to 10 submissions / month"],
+  "Lead capture forms with email notifications": ["1 lead capture form, up to 100 submissions / month"],
   "Lead capture forms with file uploads": ["Lead capture forms with email notifications"],
   "Google Search visibility: 3 months, every query & page, search insights": [
     "Google Search visibility: last 7 days, top 10 queries & pages",
