@@ -8,6 +8,7 @@ import { bannerAttachment, type BannerName } from "./templates/shared.js";
 import { verificationCodeHtml, verificationCodeText } from "./templates/verification-code.js";
 import { passwordResetHtml, passwordResetText } from "./templates/password-reset.js";
 import { passwordChangeHtml, passwordChangeText } from "./templates/password-change.js";
+import { accountDeletedHtml, accountDeletedText } from "./templates/account-deleted.js";
 import { bannerShell, greetingLine, line as bannerLine, signOff, warningPanel, actionButton, escapeHtml as escapeHtmlShared } from "./templates/shared.js";
 import { twoFactorBackupCodesHtml, twoFactorBackupCodesText } from "./templates/two-factor-backup-codes.js";
 import { inviteHtml as workspaceInviteBody, inviteText as workspaceInviteTextBody } from "./templates/invite.js";
@@ -341,6 +342,18 @@ Locked until ${until}. If this wasn't you, your password may be known to someone
 If it was you, there's nothing to do — sign-in opens again on its own once the lock passes.
 
 The Quantalog Team`;
+}
+
+export async function sendAccountDeletedEmail(to: Recipient, workspaces: number): Promise<void> {
+  const banner = bannerAttachment("password-change");
+
+  await sendOne(
+    to,
+    "Your Quantalog account was deleted",
+    accountDeletedText(workspaces, to.name),
+    accountDeletedHtml(workspaces, to.name),
+    banner ? [banner] : [],
+  );
 }
 
 export async function sendPasswordChangedEmail(to: Recipient): Promise<void> {

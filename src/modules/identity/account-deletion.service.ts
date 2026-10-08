@@ -55,7 +55,7 @@ async function revokePersonalGrants(userId: string): Promise<void> {
   ]);
 }
 
-export async function deleteUserAccount(userId: string): Promise<void> {
+export async function deleteUserAccount(userId: string): Promise<{ workspacesDeleted: number }> {
   const [user, workspaceIds, conversations] = await Promise.all([
     User.findById(userId).select("avatarPublicId").lean(),
     ownedWorkspaceIds(userId),
@@ -86,4 +86,5 @@ export async function deleteUserAccount(userId: string): Promise<void> {
 
   if (user?.avatarPublicId) await deleteImage(String(user.avatarPublicId));
   await User.deleteOne({ _id: userId });
+  return { workspacesDeleted: workspaceIds.length };
 }

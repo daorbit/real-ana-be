@@ -20,7 +20,7 @@ import { turnstileConfigured, verifyTurnstileToken } from "../../infra/http-clie
 import {
   checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage,
 } from "../../infra/storage/cloudinary.js";
-import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail } from "../../infra/mail/mailer.js";
+import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail, sendAccountDeletedEmail } from "../../infra/mail/mailer.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
 import { claimAttempt, clearAttempts } from "../../modules/security/attempt-lock.service.js";
 import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
@@ -1115,14 +1115,21 @@ router.post("/me/delete", requireAuth, blockDemoWrites, async (req: AuthedReques
   const hasOwnershipFactor = Boolean(user.passwordHash || user.totpEnabled || user.pinHash);
   if (hasOwnershipFactor && (await rejectUnconfirmed(user, req.body ?? {}, res))) return;
 
+  const recipient = { email: user.email, name: user.name };
+  let workspacesDeleted: number;
   try {
-    await deleteUserAccount(user.id);
+    ({ workspacesDeleted } = await deleteUserAccount(user.id));
   } catch (e) {
     void captureServerError(e, { method: req.method, path: req.originalUrl, userId: user.id });
     return res.status(502).json({ error: "could not finish deleting your account — try again in a minute" });
   }
 
   console.log(`[auth] user ${user.id} deleted their own account`);
+  if (mailConfigured()) {
+    await sendAccountDeletedEmail(recipient, workspacesDeleted).catch((e) =>
+      console.error("[auth] account-deleted notice failed:", e instanceof Error ? e.message : e),
+    );
+  }
   res.status(204).end();
 });
 
