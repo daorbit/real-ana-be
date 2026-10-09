@@ -12,6 +12,7 @@ import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { Media } from "../media/models/Media.js";
 import { invalidateSite } from "./event-quota.js";
+import { getResolvedPlan } from "./plan-pricing.js";
 import { nextUsageReset, rollUsageMonth, usageMonthKey } from "./usage-month.js";
 import type { PlanLimitCode, PlanLimitInfo } from "../../http/plan-limit.js";
 import { COUNTED_FEATURES, featureUsage, type CountedFeature } from "./feature-limits.js";
@@ -41,15 +42,41 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 export const MAX_PREPAID_CYCLES = 2;
 
-/** A renewal stacks only when the plan *and* the cycle are unchanged. */
-function isSamePlanRenewal(
-  sub: { planSlug?: unknown; cycle?: unknown; currentPeriodEnd?: Date | null } | null,
+type PeriodSub = { planSlug?: unknown; cycle?: unknown; currentPeriodEnd?: Date | null };
+
+function isSamePlanRenewal(sub: PeriodSub | null, planSlug: string): boolean {
+  if (!sub || isExpired(sub)) return false;
+  if (planSlug === "free") return false;
+  return sub.planSlug === planSlug;
+}
+
+async function carriedOverMs(sub: PeriodSub | null, planSlug: string): Promise<number> {
+  if (!sub || isExpired(sub) || planSlug === "free" || sub.planSlug === "free") return 0;
+  const remaining = sub.currentPeriodEnd!.getTime() - Date.now();
+  if (remaining <= 0) return 0;
+  if (sub.planSlug === planSlug) return remaining;
+
+  const [from, to] = await Promise.all([
+    getResolvedPlan(String(sub.planSlug)),
+    getResolvedPlan(planSlug),
+  ]);
+  const fromPrice = from?.priceMonthly.INR ?? 0;
+  const toPrice = to?.priceMonthly.INR ?? 0;
+  if (!fromPrice || !toPrice) return 0;
+  return Math.floor(remaining * Math.min(1, fromPrice / toPrice));
+}
+
+export async function previewPeriodEnd(
+  workspaceId: string,
   planSlug: string,
   cycle: BillingCycle,
-): boolean {
-  if (!sub || isExpired(sub)) return false;
-  if (planSlug === "free") return false; // Free has no period to extend.
-  return sub.planSlug === planSlug && sub.cycle === cycle;
+): Promise<{ periodEnd: Date; carriedDays: number }> {
+  const existing = await Subscription.findOne({ workspaceId }).select("planSlug cycle currentPeriodEnd");
+  const carried = await carriedOverMs(existing, planSlug);
+  return {
+    periodEnd: new Date(Date.now() + carried + CYCLE_DAYS[cycle] * DAY_MS),
+    carriedDays: Math.floor(carried / DAY_MS),
+  };
 }
 
 /**
@@ -63,7 +90,7 @@ export async function renewalWouldExceedCap(
   cycle: BillingCycle,
 ): Promise<boolean> {
   const sub = await Subscription.findOne({ workspaceId });
-  if (!isSamePlanRenewal(sub, planSlug, cycle)) return false;
+  if (!isSamePlanRenewal(sub, planSlug)) return false;
   const remainingMs = sub!.currentPeriodEnd!.getTime() - Date.now();
   return remainingMs >= MAX_PREPAID_CYCLES * CYCLE_DAYS[cycle] * DAY_MS;
 }
@@ -74,14 +101,12 @@ export async function activatePlanPeriod(
   userId: string,
   planSlug: string,
   cycle: BillingCycle,
-) {
+): Promise<Date> {
   const now = new Date();
   await rollUsageMonth(workspaceId);
   const existing = await Subscription.findOne({ workspaceId });
-  const stacking = isSamePlanRenewal(existing, planSlug, cycle);
-
-  const base = stacking ? existing!.currentPeriodEnd! : now;
-  const periodEnd = new Date(base.getTime() + CYCLE_DAYS[cycle] * DAY_MS);
+  const carried = await carriedOverMs(existing, planSlug);
+  const periodEnd = new Date(now.getTime() + carried + CYCLE_DAYS[cycle] * DAY_MS);
 
   await Subscription.findOneAndUpdate(
     { workspaceId },
@@ -106,6 +131,7 @@ export async function activatePlanPeriod(
   // so no future purchase path can forget it.
   const sites = await Site.find({ workspaceId }).select("siteId");
   for (const s of sites) invalidateSite(s.get("siteId") as string);
+  return periodEnd;
 }
 
 /**

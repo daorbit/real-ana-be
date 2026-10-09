@@ -75,7 +75,8 @@ const planPurchaseSchema = new Schema(
      * Which gateway this order was opened with. Existing rows predate the
      * choice and were all Razorpay, so that is the default.
      */
-    gateway: { type: String, enum: ["razorpay", "cashfree"], default: "razorpay", index: true },
+    gateway: { type: String, enum: ["razorpay", "cashfree", "coupon"], default: "razorpay", index: true },
+    periodEnd: { type: Date, default: null },
     /**
      * Gateway order ids. Exactly one is set per row. `sparse` so the unique
      * index ignores the rows where the other gateway's field is empty.

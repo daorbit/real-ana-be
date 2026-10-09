@@ -21,6 +21,7 @@ async function paidBeforeCutoff(workspaceId: string, planSlug: string): Promise<
   const found = await PlanPurchase.exists({
     planSlug,
     status: "paid",
+    gateway: { $ne: "coupon" },
     ladder: { $ne: "orbit" },
     createdAt: { $lt: PRICE_CHANGE_CUTOFF },
     $or: [{ workspaceId }, ...(ownsLegacyPurchases ? [{ workspaceId: null, userId: owner }] : [])],

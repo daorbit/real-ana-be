@@ -17,6 +17,7 @@ import {
   activateOrbitPeriod,
   activatePlanPeriod,
   paidPlan,
+  previewPeriodEnd,
   renewalWouldExceedCap,
   MAX_PREPAID_CYCLES,
 } from "../../modules/billing/quota.service.js";
@@ -30,7 +31,7 @@ import {
 } from "../../modules/billing/plan-pricing.js";
 import { DEFAULT_ORBIT_PLAN_SLUG } from "../../modules/orbit/orbit-plans.catalog.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
-import { applyCoupon, planPurchaseLabel, redeemCoupon } from "../../modules/billing/coupons.js";
+import { applyCoupon, claimCoupon, planPurchaseLabel, redeemCoupon } from "../../modules/billing/coupons.js";
 import { qualifyReferralOnPayment } from "../../modules/referrals/referral.service.js";
 import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency } from "../../modules/billing/currency.js";
@@ -183,6 +184,18 @@ router.get("/plans", async (req: AuthedRequest, res: Response) => {
   res.json(await Promise.all(plans.map((plan) => applyPriceLock(workspace.id, plan))));
 });
 
+router.get("/preview", async (req: AuthedRequest, res: Response) => {
+  const workspace = await resolveAccessibleWorkspace(req, req.query.workspaceId);
+  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
+
+  const planSlug = String(req.query.planSlug ?? "");
+  if (!getPlanCatalogEntry(planSlug)) return res.status(404).json({ error: "plan not found" });
+  const cycle: BillingCycle = req.query.cycle === "yearly" ? "yearly" : "monthly";
+
+  const preview = await previewPeriodEnd(workspace.id, planSlug, cycle);
+  res.json({ periodEnd: preview.periodEnd.toISOString(), carriedDays: preview.carriedDays });
+});
+
 router.get("/addons", async (_req: AuthedRequest, res: Response) => {
   const addons = await AddonPack.find({ active: true }).sort({ sortOrder: 1 });
   res.json(addons);
@@ -239,10 +252,38 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   const amount = discounted.amount;
 
 
+  if (planAmount === 0 && !resolvedAddons.items.length) {
+    const periodEnd = await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
+    return res.json({ free: true, plan: { name: plan.name, cycle }, periodEnd });
+  }
+
   if (amount === 0 && !resolvedAddons.items.length) {
-    await activatePlanPeriod(workspace.id, req.userId as string, plan.slug, cycle);
-    await redeemCoupon(discounted.coupon?.code, `${plan.name} plan`);
-    return res.json({ free: true, plan: { name: plan.name, cycle } });
+    const couponCode = discounted.coupon?.code ?? "";
+    if (!(await claimCoupon(couponCode, `${plan.name} plan`))) {
+      return res.status(400).json({ error: "coupon has already been used" });
+    }
+
+    const purchase = await PlanPurchase.create({
+      userId: req.userId,
+      workspaceId: workspace.id,
+      planSlug: plan.slug,
+      cycle,
+      addons: [],
+      planAmount,
+      gateway: "coupon",
+      amount: 0,
+      currency,
+      couponCode,
+      status: "created",
+    });
+    await creditPlanPurchase(String(purchase._id), couponCode ? `coupon:${couponCode}` : "free");
+
+    const credited = await PlanPurchase.findById(purchase._id).select("periodEnd").lean();
+    return res.json({
+      free: true,
+      plan: { name: plan.name, cycle },
+      periodEnd: credited?.periodEnd ?? null,
+    });
   }
 
   const gateway = resolveGateway(req.body?.gateway);
@@ -596,12 +637,13 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
       purchase.cycle as BillingCycle,
     );
   } else {
-    await activatePlanPeriod(
+    const periodEnd = await activatePlanPeriod(
       workspaceId,
       String(purchase.userId),
       purchase.planSlug as string,
       purchase.cycle as BillingCycle
     );
+    await PlanPurchase.updateOne({ _id: purchase._id }, { $set: { periodEnd } });
   }
  
   const addons = (purchase.addons ?? []) as unknown as {
@@ -621,9 +663,10 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
     await Subscription.updateOne({ workspaceId }, { $inc: increments });
   }
 
+  const viaCoupon = purchase.gateway === "coupon";
   await Promise.all([
-    redeemCoupon(purchase.couponCode, planPurchaseLabel(purchase.ladder, purchase.planSlug as string)),
-    qualifyReferralOnPayment(String(purchase.userId)),
+    viaCoupon ? null : redeemCoupon(purchase.couponCode, planPurchaseLabel(purchase.ladder, purchase.planSlug as string)),
+    (purchase.amount as number) > 0 ? qualifyReferralOnPayment(String(purchase.userId)) : null,
   ]);
   await issueReceipt("plan", purchase.id, String(purchase.userId));
 }

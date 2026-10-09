@@ -32,6 +32,23 @@ export async function applyCoupon(
   return { amount: discounted, coupon: { code: raw, percentOff } };
 }
 
+export async function claimCoupon(code: unknown, usedFor = ""): Promise<boolean> {
+  const raw = String(code ?? "").trim().toUpperCase();
+  if (!raw) return true;
+  const claimed = await Coupon.findOneAndUpdate(
+    {
+      code: raw,
+      active: true,
+      $or: [
+        { maxUses: { $in: [0, null] } },
+        { $expr: { $lt: [{ $ifNull: ["$uses", 0] }, "$maxUses"] } },
+      ],
+    },
+    { $inc: { uses: 1 }, $set: { usedAt: new Date(), ...(usedFor ? { usedFor } : {}) } },
+  );
+  return Boolean(claimed);
+}
+
 export async function redeemCoupon(code: unknown, usedFor = ""): Promise<void> {
   const raw = String(code ?? "").trim().toUpperCase();
   if (!raw) return;

@@ -49,6 +49,7 @@ export type InvoiceData = {
   amount: number;
   currency: Currency;
   couponCode: string;
+  gateway: string;
   paymentId: string;
   orderId: string;
   /** One line summarising the purchase, for lists and the email subject. */
@@ -223,8 +224,9 @@ export async function buildInvoice(
       amount: p.amount as number,
       currency: p.currency as Currency,
       couponCode: (p.couponCode as string) ?? "",
+      gateway: (p.gateway as string) ?? "razorpay",
       paymentId: (p.razorpayPaymentId as string) ?? "",
-      orderId: p.razorpayOrderId as string,
+      orderId: (p.razorpayOrderId as string) || (p.cashfreeOrderId as string) || "",
       description: addons.length ? `${planLine}, plus ${addons.length} add-on pack${addons.length === 1 ? "" : "s"}` : planLine,
       lines,
       buyer,
@@ -248,8 +250,9 @@ export async function buildInvoice(
     amount: p.amount as number,
     currency: p.currency as Currency,
     couponCode: (p.couponCode as string) ?? "",
+    gateway: (p.get("gateway") as string) ?? "razorpay",
     paymentId: (p.razorpayPaymentId as string) ?? "",
-    orderId: p.razorpayOrderId as string,
+    orderId: (p.razorpayOrderId as string) || (p.get("cashfreeOrderId") as string) || "",
     description,
     lines: [{ description, amount: p.amount as number }],
     buyer,
@@ -478,7 +481,9 @@ export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
     // from the heading.
     doc.fontSize(9).font("Helvetica").fillColor(MUTED)
       .text(
-        `Paid in full on ${formatDate(inv.issuedAt)} via Razorpay. No amount is outstanding.`,
+        inv.gateway === "coupon"
+          ? `Covered in full by coupon ${inv.couponCode} on ${formatDate(inv.issuedAt)}. No amount was charged and none is outstanding.`
+          : `Paid in full on ${formatDate(inv.issuedAt)} via ${inv.gateway === "cashfree" ? "Cashfree" : "Razorpay"}. No amount is outstanding.`,
         left,
         y,
         { width },
