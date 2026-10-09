@@ -170,10 +170,20 @@ function row(
   };
 }
 
+const scriptBuilt = (): Outcome => ({
+  verdict: "tie",
+  separation: 0,
+  tieReason: "One of these pages builds its content with JavaScript after loading. We read the HTML the server sends, so this count would understate it — not compared.",
+});
+
 export function compareSnapshots(
   mine: CompareSnapshot,
   theirs: CompareSnapshot
 ): CompetitorGap {
+  const contentHidden = Boolean(mine.quality?.clientRendered || theirs.quality?.clientRendered);
+  const contentRow = (outcome: Outcome) => (contentHidden ? scriptBuilt() : outcome);
+  const weightMeasured = mine.pageBytes > 0 && theirs.pageBytes > 0;
+
   const metrics: MetricComparison[] = [
     row(
       "score",
@@ -204,8 +214,14 @@ export function compareSnapshots(
       "Word count",
       String(mine.wordCount),
       String(theirs.wordCount),
-      // 15% either way is the same page depth in practice, not a real gap.
-      moreIsBetter(mine.wordCount, theirs.wordCount, theirs.wordCount * 0.15, "words"),
+      contentRow(
+        moreIsBetter(
+          mine.wordCount,
+          theirs.wordCount,
+          Math.round(Math.max(mine.wordCount, theirs.wordCount) * 0.15),
+          "words"
+        )
+      ),
       "Depth is not word count for its own sake, but a much thinner page rarely outranks a fuller one."
     ),
     row(
@@ -213,7 +229,7 @@ export function compareSnapshots(
       "Section headings",
       String(mine.h2Count),
       String(theirs.h2Count),
-      moreIsBetter(mine.h2Count, theirs.h2Count, 2, "headings"),
+      contentRow(moreIsBetter(mine.h2Count, theirs.h2Count, 2, "headings")),
       "Headings are the page's outline — more sections usually means more questions answered."
     ),
     row(
@@ -243,16 +259,18 @@ export function compareSnapshots(
     row(
       "page-weight",
       "Page weight",
-      `${Math.round(mine.pageBytes / 1024)} KB`,
-      `${Math.round(theirs.pageBytes / 1024)} KB`,
+      mine.pageBytes > 0 ? `${Math.round(mine.pageBytes / 1024)} KB` : "Not captured",
+      theirs.pageBytes > 0 ? `${Math.round(theirs.pageBytes / 1024)} KB` : "Not captured",
       // Compared in KB rather than raw bytes so the explained tolerance reads
       // as "within the 50 KB we treat as noise" and not as 51200 of something.
-      lessIsBetter(
-        Math.round(mine.pageBytes / 1024),
-        Math.round(theirs.pageBytes / 1024),
-        50,
-        "KB"
-      ),
+      weightMeasured
+        ? lessIsBetter(
+            Math.round(mine.pageBytes / 1024),
+            Math.round(theirs.pageBytes / 1024),
+            50,
+            "KB"
+          )
+        : unmeasured(),
       "Lighter HTML reaches the visitor sooner, especially on mobile networks."
     ),
     row(
@@ -314,7 +332,7 @@ export function compareSnapshots(
       String((mine.headings ?? []).length),
       String((theirs.headings ?? []).length),
       (mine.headings && theirs.headings)
-        ? moreIsBetter(mine.headings.length, theirs.headings.length, 3, "headings")
+        ? contentRow(moreIsBetter(mine.headings.length, theirs.headings.length, 3, "headings"))
         : unmeasured(),
       "The full H1–H3 outline, not just top-level sections — how thoroughly the page is structured."
     ),
@@ -322,7 +340,7 @@ export function compareSnapshots(
 
   const theirHost = safeHost(theirs.finalUrl);
   const mineWords = new Set((mine.keywords ?? []).map((k) => k.word));
-  const missingKeywords = (theirs.keywords ?? [])
+  const missingKeywords = (contentHidden ? [] : theirs.keywords ?? [])
     .filter((k) => !mineWords.has(k.word))
     .filter((k) => !theirHost.includes(k.word))
     .slice(0, 10)
@@ -334,7 +352,7 @@ export function compareSnapshots(
   );
 
   const mineTopics = new Set((mine.headings ?? []).map((h) => topicKey(h.text)));
-  const contentGaps = (theirs.headings ?? [])
+  const contentGaps = (contentHidden ? [] : theirs.headings ?? [])
     .filter((h) => h.level === 2 || h.level === 3)
     .filter((h) => {
       const key = topicKey(h.text);

@@ -11,6 +11,7 @@ import { Marker } from "../analytics/models/Marker.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
 import { Competitor } from "../seo/models/Competitor.js";
 import { CompetitorSnapshot } from "../seo/models/CompetitorSnapshot.js";
+import { CompareBaseline } from "../seo/models/CompareBaseline.js";
 import { CrawlReport } from "../seo/models/CrawlReport.js";
 import { SearchConsoleProperty } from "../seo/models/SearchConsoleProperty.js";
 import { SearchConsoleCache } from "../seo/models/SearchConsoleCache.js";
@@ -45,6 +46,7 @@ async function purgeSiteData(siteIds: string[]): Promise<void> {
     SeoReport.deleteMany(bySite),
     Competitor.deleteMany(bySite),
     CompetitorSnapshot.deleteMany(bySite),
+    CompareBaseline.deleteMany(bySite),
     CompetitorBacklink.deleteMany(bySite),
     CrawlReport.deleteMany(bySite),
     Backlink.deleteMany(bySite),

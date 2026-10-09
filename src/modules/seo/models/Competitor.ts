@@ -20,6 +20,7 @@ const competitorSchema = new Schema(
     lastCheckedAt: { type: Date, default: null },
     /** Why the last attempt failed, when it did. Cleared on success. */
     lastError: { type: String, default: "" },
+    lastErrorAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -6,11 +6,12 @@ import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.j
 import { Competitor } from "../../modules/seo/models/Competitor.js";
 import { CompetitorSnapshot } from "../../modules/seo/models/CompetitorSnapshot.js";
 import { CompetitorBacklink } from "../../modules/backlinks/models/CompetitorBacklink.js";
-import {
-  snapshotPage, snapshotFromReport, type CompareSnapshot,
-} from "../../modules/seo/competitor.js";
-import { compareSnapshots, computePosition } from "../../modules/seo/competitor-analysis.js";
-import { SeoReport } from "../../modules/seo/models/SeoReport.js";
+import { snapshotPage } from "../../modules/seo/competitor.js";
+import { competitorAnalysis } from "../../modules/seo/compare-analysis.service.js";
+import { baselineHistory, refreshBaseline } from "../../modules/seo/compare-baseline.service.js";
+import { recordSnapshot, refetchCompetitor } from "../../modules/seo/competitor-refresh.service.js";
+
+const BASELINE_ID = "__you__";
 
 /**
  * Competitor tracking.
@@ -40,9 +41,6 @@ router.use(blockDemoWrites);
  */
 const MAX_COMPETITORS = 10;
 
-/** Snapshots kept per competitor. Roughly a year of weekly refreshes. */
-const MAX_HISTORY = 60;
-
 /**
  * The comparison budget for one workspace.
  *
@@ -51,49 +49,6 @@ const MAX_HISTORY = 60;
  */
 function compareBudget(workspaceId: string) {
   return rateLimit(`compare:${workspaceId}`, { capacity: 25, refillPerMinute: 10 });
-}
-
-/**
- * Record a snapshot in the trend history.
- *
- * Only the numbers a trend line is drawn from — the full snapshot already
- * lives on the parent document, and storing every past copy of someone else's
- * page would be storage spent on a question nobody asks.
- *
- * Failures are swallowed: a comparison that worked must not 500 because its
- * history row did not write.
- */
-async function recordSnapshot(
-  competitorId: string,
-  siteId: string,
-  snapshot: CompareSnapshot
-): Promise<void> {
-  try {
-    await CompetitorSnapshot.create({
-      competitorId,
-      siteId,
-      score: snapshot.score,
-      wordCount: snapshot.wordCount,
-      responseTimeMs: snapshot.responseTimeMs,
-      pageBytes: snapshot.pageBytes,
-      internalLinks: snapshot.internalLinks,
-      schemaErrors: snapshot.schemaErrors,
-      statusCode: snapshot.statusCode,
-    });
-
-    // Trimmed here rather than by a TTL index: the useful window is "the last
-    // N runs", which is a count, and a site refreshed daily and one refreshed
-    // yearly should both keep a readable trend.
-    const stale = await CompetitorSnapshot.find({ competitorId })
-      .sort({ takenAt: -1 })
-      .skip(MAX_HISTORY)
-      .select("_id");
-    if (stale.length) {
-      await CompetitorSnapshot.deleteMany({ _id: { $in: stale.map((s) => s._id) } });
-    }
-  } catch {
-    /* history is best-effort; the comparison itself already succeeded */
-  }
 }
 
 router.get(
@@ -114,12 +69,15 @@ router.get(
     const found = await resolveSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
-    const rows = await CompetitorSnapshot.find({ siteId: found.site.siteId })
-      .sort({ takenAt: 1 })
-      .select("competitorId score wordCount responseTimeMs statusCode takenAt")
-      .lean();
+    const [rows, mine] = await Promise.all([
+      CompetitorSnapshot.find({ siteId: found.site.siteId })
+        .sort({ takenAt: 1 })
+        .select("competitorId score wordCount responseTimeMs statusCode takenAt")
+        .lean(),
+      baselineHistory(found.site.siteId),
+    ]);
 
-    res.json(rows);
+    res.json([...rows, ...mine.map((p) => ({ ...p, competitorId: BASELINE_ID }))]);
   }
 );
 
@@ -136,42 +94,9 @@ router.get(
     const found = await resolveSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
-    const report = await SeoReport.findOne({ siteId: found.site.siteId }).sort({
-      createdAt: -1,
-    });
-    // Without an audit of your own there is no baseline, and a comparison of
-    // competitors against each other is not what this answers.
-    if (!report?.get("data"))
-      return res.status(404).json({ error: "run an audit on your own site first" });
-
-    const mine = snapshotFromReport(report.get("data") as Parameters<typeof snapshotFromReport>[0]);
-    const competitors = await Competitor.find({ siteId: found.site.siteId }).sort({
-      createdAt: 1,
-    });
-
-    const comparisons = competitors
-      .filter((c) => c.get("snapshot"))
-      .map((c) => ({
-        competitorId: String(c._id),
-        label: c.get("label") as string,
-        url: c.get("url") as string,
-        lastCheckedAt: c.get("lastCheckedAt") as Date | null,
-        snapshot: c.get("snapshot") as CompareSnapshot,
-        gap: compareSnapshots(mine, c.get("snapshot") as CompareSnapshot),
-      }));
-
-    res.json({
-      mine,
-      auditedAt: report.get("createdAt"),
-      competitors: comparisons,
-      // Ranked so the page can lead with whoever is furthest ahead — that is
-      // the one worth reading first.
-      toughest: [...comparisons].sort((a, b) => b.gap.scoreGap - a.gap.scoreGap)[0]?.competitorId ?? null,
-      // Where you sit in the field as a whole. A per-competitor delta cannot
-      // answer "am I winning overall", which is the first thing anyone tracking
-      // more than one rival wants to know.
-      position: computePosition(mine.score, comparisons),
-    });
+    const analysis = await competitorAnalysis(found.site.siteId);
+    if (!analysis) return res.status(404).json({ error: "no baseline for your page yet" });
+    res.json(analysis);
   }
 );
 
@@ -209,7 +134,7 @@ router.post(
     }
 
     try {
-      const snapshot = await snapshotPage(url);
+      const [snapshot] = await Promise.all([snapshotPage(url), refreshBaseline(site)]);
       const doc = await Competitor.findOneAndUpdate(
         { siteId: site.siteId, url },
         {
@@ -220,6 +145,7 @@ router.post(
           snapshot,
           lastCheckedAt: new Date(),
           lastError: "",
+          lastErrorAt: null,
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -255,23 +181,19 @@ router.post(
       });
 
     const list = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
+    const baseline = refreshBaseline(found.site);
 
     let refreshed = 0;
     let failed = 0;
     for (const competitor of list) {
       try {
-        const snapshot = await snapshotPage(competitor.url as string);
-        competitor.set({ snapshot, lastCheckedAt: new Date(), lastError: "" });
-        await competitor.save();
-        await recordSnapshot(String(competitor._id), found.site.siteId, snapshot);
+        await refetchCompetitor(competitor, found.site.siteId);
         refreshed++;
-      } catch (e) {
-        const message = (e as Error)?.message ?? "could not fetch that URL";
-        competitor.set({ lastCheckedAt: new Date(), lastError: message });
-        await competitor.save();
+      } catch {
         failed++;
       }
     }
+    await baseline;
 
     const fresh = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
     res.json({ competitors: fresh, refreshed, failed });
@@ -298,18 +220,10 @@ router.post(
       });
 
     try {
-      const snapshot = await snapshotPage(competitor.url as string);
-      competitor.set({ snapshot, lastCheckedAt: new Date(), lastError: "" });
-      await competitor.save();
-      await recordSnapshot(String(competitor._id), found.site.siteId, snapshot);
+      await Promise.all([refetchCompetitor(competitor, found.site.siteId), refreshBaseline(found.site)]);
       res.json(competitor);
     } catch (e) {
-      // A failure is recorded rather than thrown away: "we tried and their site
-      // was down" is more useful than a snapshot that silently went stale.
-      const message = (e as Error)?.message ?? "could not fetch that URL";
-      competitor.set({ lastCheckedAt: new Date(), lastError: message });
-      await competitor.save();
-      res.status(502).json({ error: message });
+      res.status(502).json({ error: (e as Error)?.message ?? "could not fetch that URL" });
     }
   }
 );

@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import type { CheerioAPI } from "cheerio";
 import { safeFetch } from "../../infra/http-client/safe-fetch.js";
 import { validateStructuredData } from "./schema-validate.js";
+import { assessSnapshot, type SnapshotQuality } from "./snapshot-quality.js";
 
 /**
  * Lightweight audit of a competitor's page.
@@ -78,6 +79,7 @@ export type CompareSnapshot = {
   hasMobileViewport?: boolean;
   /** Rendered text bytes over total HTML bytes, as a percentage. */
   textRatio?: number;
+  quality?: SnapshotQuality;
 
   /** Same 0-100 on-page score used for your own pages, so the two compare. */
   score: number;
@@ -123,7 +125,9 @@ export function scoreSnapshot(s: Omit<CompareSnapshot, "score">): number {
   if (!s.description) score -= 15;
   else if (s.descriptionLength < 70 || s.descriptionLength > 160) score -= 5;
 
-  if (s.h1Count === 0) score -= 12;
+  const scriptBuilt = Boolean(s.quality?.clientRendered);
+
+  if (s.h1Count === 0 && !scriptBuilt) score -= 12;
   else if (s.h1Count > 1) score -= 4;
 
   if (!s.canonical) score -= 5;
@@ -134,8 +138,10 @@ export function scoreSnapshot(s: Omit<CompareSnapshot, "score">): number {
   if (!s.hasStructuredData) score -= 8;
   else if (s.schemaErrors > 0) score -= 4;
 
-  if (s.wordCount < 300) score -= 10;
-  else if (s.wordCount < 150) score -= 15;
+  if (!scriptBuilt) {
+    if (s.wordCount < 150) score -= 15;
+    else if (s.wordCount < 300) score -= 10;
+  }
 
   if (s.imageCount > 0 && s.imagesMissingAlt / s.imageCount > 0.5) score -= 5;
   if (s.internalLinks < 3) score -= 3;
@@ -306,7 +312,18 @@ export async function snapshotPage(rawUrl: string): Promise<CompareSnapshot> {
       : 0,
   };
 
-  return { ...partial, score: scoreSnapshot(partial) };
+  const quality = assessSnapshot({
+    $,
+    html: res.body,
+    status: res.status,
+    title,
+    wordCount: partial.wordCount,
+    requestedUrl: rawUrl,
+    finalUrl: base,
+  });
+
+  const measured = { ...partial, quality };
+  return { ...measured, score: scoreSnapshot(measured) };
 }
 
 /**

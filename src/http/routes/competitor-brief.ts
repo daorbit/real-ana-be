@@ -2,10 +2,7 @@ import { Router, Response } from "express";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { resolveSite, siteRefused } from "./resolve-site.js";
 import { rateLimit } from "../../infra/http-client/safe-fetch.js";
-import { Competitor } from "../../modules/seo/models/Competitor.js";
-import { SeoReport } from "../../modules/seo/models/SeoReport.js";
-import { snapshotFromReport, type CompareSnapshot } from "../../modules/seo/competitor.js";
-import { compareSnapshots, computePosition } from "../../modules/seo/competitor-analysis.js";
+import { competitorAnalysis } from "../../modules/seo/compare-analysis.service.js";
 import { briefingAvailable, generateBrief } from "../../modules/seo/competitor-brief.js";
 
 /**
@@ -69,49 +66,23 @@ router.post(
       return res.status(429).json({ error: "Too many briefings. Try again shortly." });
     }
 
-    const report = await SeoReport.findOne({ siteId: found.site.siteId }).sort({ createdAt: -1 });
-    if (!report?.get("data"))
-      return res.status(404).json({ error: "run an audit on your own site first" });
+    const analysis = await competitorAnalysis(found.site.siteId);
+    if (!analysis) return res.status(404).json({ error: "no baseline for your page yet" });
 
-    const competitor = await Competitor.findOne({
-      _id: req.params.competitorId,
-      siteId: found.site.siteId,
-    });
-    if (!competitor) return res.status(404).json({ error: "competitor not found" });
-
-    const theirSnapshot = competitor.get("snapshot") as CompareSnapshot | null;
-    if (!theirSnapshot)
-      return res.status(409).json({ error: "this competitor has not been fetched yet" });
-
-    const mine = snapshotFromReport(
-      report.get("data") as Parameters<typeof snapshotFromReport>[0]
-    );
-    const gap = compareSnapshots(mine, theirSnapshot);
-
-    // The standings are recomputed here rather than passed in from the client,
-    // so the brief cannot be steered by a caller claiming a rank it does not
-    // hold. Costs one extra query and removes the whole class of problem.
-    const siblings = await Competitor.find({ siteId: found.site.siteId });
-    const position = computePosition(
-      mine.score,
-      siblings
-        .filter((c) => c.get("snapshot"))
-        .map((c) => ({
-          competitorId: String(c._id),
-          label: c.get("label") as string,
-          snapshot: c.get("snapshot") as CompareSnapshot,
-        }))
-    );
+    const entry = analysis.competitors.find((c) => c.competitorId === req.params.competitorId);
+    if (!entry) return res.status(404).json({ error: "competitor not found or not fetched yet" });
+    if (entry.readIssue)
+      return res.status(409).json({ error: "we could not read this competitor's page, so there is nothing reliable to brief on" });
 
     const result = await generateBrief(
       {
-        label: competitor.get("label") as string,
-        theirScore: theirSnapshot.score,
-        gap,
-        snapshot: theirSnapshot,
+        label: entry.label,
+        theirScore: entry.snapshot.score,
+        gap: entry.gap,
+        snapshot: entry.snapshot,
       },
-      mine.score,
-      position
+      analysis.mine.score,
+      analysis.position
     );
 
     // 502 rather than 500: the failure is upstream at the model provider, and

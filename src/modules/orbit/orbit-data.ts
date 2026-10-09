@@ -3,9 +3,8 @@ import { Site } from "../analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../analytics/stats.service.js";
 import { parseQuestionRange } from "./date-range.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
-import { Competitor } from "../seo/models/Competitor.js";
-import { snapshotFromReport, type CompareSnapshot } from "../seo/competitor.js";
-import { compareSnapshots } from "../seo/competitor-analysis.js";
+import type { snapshotFromReport } from "../seo/competitor.js";
+import { competitorAnalysis } from "../seo/compare-analysis.service.js";
 import { reviewsSummaryFor } from "./orbit-data-reviews.js";
 
 /** Rows per breakdown. Enough to spot a pattern, short enough to stay in budget. */
@@ -77,18 +76,17 @@ async function seoSummary(siteId: string): Promise<string> {
     );
   }
 
-  const competitors = await Competitor.find({ siteId })
-    .sort({ createdAt: 1 })
-    .limit(MAX_COMPETITORS_SUMMARISED);
+  const analysis = await competitorAnalysis(siteId, MAX_COMPETITORS_SUMMARISED);
+  if (analysis) {
+    const mine = analysis.mine;
 
-  const tracked = competitors.filter((c) => c.get("snapshot"));
-  if (tracked.length) {
-    const mine = snapshotFromReport(data);
-
-    for (const competitor of tracked) {
-      const snapshot = competitor.get("snapshot") as CompareSnapshot;
-      const gap = compareSnapshots(mine, snapshot);
-      const label = competitor.get("label") || competitor.get("url");
+    for (const entry of analysis.competitors) {
+      const label = entry.label || entry.url;
+      if (entry.readIssue) {
+        lines.push(`Competitor ${label} — page could not be read (blocked or error), so it is not compared.`);
+        continue;
+      }
+      const { snapshot, gap } = entry;
 
       // The sign is stated in words as well as arithmetic: "gap: -8" reads
       // ambiguously to a model, and a wrong reading inverts the advice.
