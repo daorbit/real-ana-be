@@ -82,8 +82,8 @@ router.get(
 );
 
 /**
- * The full comparison: your latest audit against every tracked competitor,
- * with the gaps and what to do about them already worked out.
+ * The full comparison: your page, fetched the same way, against every tracked
+ * competitor, with the gaps and what to do about them already worked out.
  *
  * Computed here rather than in the page so the comparison the UI draws and the
  * one Orbit reasons from are the same computation.

@@ -22,7 +22,9 @@ async function baselineUrl(siteId: string, domain: string): Promise<string | nul
   return (report?.url as string | undefined) || normalizeUrl(domain);
 }
 
-export async function refreshBaseline(site: { siteId: string; domain: string }): Promise<void> {
+export async function refreshBaseline(target: { siteId?: string | null; domain?: string | null }): Promise<void> {
+  const site = { siteId: String(target.siteId ?? ""), domain: String(target.domain ?? "") };
+  if (!site.siteId) return;
   const url = await baselineUrl(site.siteId, site.domain);
   if (!url) return;
 
