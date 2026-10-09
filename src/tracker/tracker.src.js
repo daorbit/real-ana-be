@@ -858,19 +858,28 @@
 
 
     track: function (action, opts) {
-      if (!appUserId) return;
+      if (!action) return;
       opts = opts || {};
+      var props = opts.props;
+      if (!props) {
+        props = {};
+        for (var key in opts) {
+          if (key !== "source" && key !== "destination" && Object.prototype.hasOwnProperty.call(opts, key)) {
+            props[key] = opts[key];
+          }
+        }
+      }
       var s = session();
       post({
         siteId: siteId,
         type: "custom",
-        name: action,
-        appUserId: appUserId,
+        name: String(action),
+        appUserId: appUserId || undefined,
         source: opts.source || "",
         destination: opts.destination || "",
-        path: location.pathname,
+        path: currentPath(),
         sessionId: s.id,
-        props: opts.props || undefined,
+        props: Object.keys(props).length ? props : undefined,
         utm: utm(),
       });
     },
