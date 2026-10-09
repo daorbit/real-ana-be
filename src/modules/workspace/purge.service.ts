@@ -5,7 +5,6 @@ import { Project } from "./models/Project.js";
 import { Site } from "../analytics/models/Site.js";
 import { Event } from "../analytics/models/Event.js";
 import { HeatmapClick } from "../analytics/models/HeatmapClick.js";
-import { Goal } from "../analytics/models/Goal.js";
 import { Funnel } from "../analytics/models/Funnel.js";
 import { Segment } from "../analytics/models/Segment.js";
 import { Marker } from "../analytics/models/Marker.js";
@@ -78,7 +77,6 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
       disconnectSearchConsole(id),
       deleteWorkspaceDashboards(id),
     ]),
-    Goal.deleteMany(byWorkspace),
     Funnel.deleteMany(byWorkspace),
     Segment.deleteMany(byWorkspace),
     Marker.deleteMany(byWorkspace),

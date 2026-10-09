@@ -41,7 +41,6 @@ export const DASHBOARD_WIDGETS: CatalogWidget[] = [
   { id: "scrollDepth", label: "Scroll depth", group: "Breakdowns", description: "How far down each page people read", span: 2 },
   { id: "landingPages", label: "Landing pages", group: "Breakdowns", description: "Which entry points hold people", span: 2 },
   { id: "channels", label: "Channels", group: "Breakdowns", description: "Direct, organic, paid, social and others", span: 1 },
-  { id: "goals", label: "Conversions", group: "Breakdowns", description: "Goal conversion rates", span: 2 },
   { id: "outbound", label: "Outbound & downloads", group: "Breakdowns", description: "Where visitors leave to", span: 1 },
   { id: "errors", label: "JS errors", group: "Breakdowns", description: "Broken pages and failed scripts", span: 1 },
 

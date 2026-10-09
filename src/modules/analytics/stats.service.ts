@@ -890,49 +890,6 @@ async function topErrors(match: Match, limit = 10) {
   ]) as Promise<{ key: string; path: string; count: number; lastSeen: Date }[]>;
 }
 
-export type GoalDef = { id: string; name: string; kind: "page" | "event"; match: string };
-
-/**
- * Conversion rate for each goal over the window.
- *
- * A goal converts once per visitor: the count is distinct visitors who matched
- * it (a pageview of the path, or a custom event of the name), and the rate is
- * that over all visitors in the window. Distinct-visitor keeps a page someone
- * refreshed ten times from inflating the number.
- */
-export async function computeGoals(
-  siteIds: string[],
-  goals: GoalDef[],
-  rangeKey: string,
-  totalVisitors: number,
-  fMatch: Match = {},
-  win?: Window
-) {
-  if (goals.length === 0) return [];
-  const { since, until } = win ?? resolveWindow(rangeKey);
-  const base = { siteId: { $in: siteIds }, ts: { $gte: since, $lt: until }, ...fMatch };
-
-  return Promise.all(
-    goals.map(async (g) => {
-      const cond =
-        g.kind === "event"
-          ? { ...base, type: "custom", name: g.match }
-          : { ...base, type: "pageview", path: g.match };
-      const visitors = await Event.distinct("visitorHash", cond);
-      const conversions = visitors.length;
-      return {
-        id: g.id,
-        name: g.name,
-        kind: g.kind,
-        match: g.match,
-        conversions,
-        conversionRate:
-          totalVisitors > 0 ? Math.round((conversions / totalVisitors) * 1000) / 10 : 0,
-      };
-    })
-  );
-}
-
 /** A raw event row for CSV/XLSX export, flattened and privacy-trimmed. */
 export type ExportRow = {
   timestamp: string;

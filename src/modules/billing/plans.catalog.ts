@@ -51,7 +51,6 @@ export type PlanCatalogEntry = {
   maxDashboards: number;
   maxEmbeds: number;
   maxGoalTargets: number;
-  maxConversionGoals: number;
 };
 
 export type SearchInsightsAccess = "none" | "limited" | "full";
@@ -80,7 +79,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Shareable public dashboard",
       "Google Search visibility: last 7 days, top 10 queries & pages",
       "1 custom dashboard",
-      "2 goal targets & 3 conversion goals",
+      "2 goal targets",
     ],
     sortOrder: 0,
 
@@ -106,7 +105,6 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 1,
     maxEmbeds: 0,
     maxGoalTargets: 2,
-    maxConversionGoals: 3,
   },
   {
     slug: "starter",
@@ -124,7 +122,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Google Search visibility: 3 months, every query & page, search insights",
       "100 Google index checks / month",
       "10 custom dashboards & 5 embedded widgets",
-      "10 goal targets & 20 conversion goals",
+      "10 goal targets",
     ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -149,7 +147,6 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 10,
     maxEmbeds: 5,
     maxGoalTargets: 10,
-    maxConversionGoals: 20,
   },
   {
     slug: "pro",
@@ -168,7 +165,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "Google Search visibility: 16 months with full insights",
       "1,000 Google index checks / month",
       "50 custom dashboards & 100 embedded widgets",
-      "30 goal targets & 100 conversion goals",
+      "30 goal targets",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -193,7 +190,6 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 50,
     maxEmbeds: 100,
     maxGoalTargets: 30,
-    maxConversionGoals: 100,
   },
 ];
 
@@ -225,8 +221,8 @@ const SUPERSEDES: Record<string, string[]> = {
   "1,000 Google index checks / month": ["100 Google index checks / month"],
   "10 custom dashboards & 5 embedded widgets": ["1 custom dashboard"],
   "50 custom dashboards & 100 embedded widgets": ["10 custom dashboards & 5 embedded widgets", "1 custom dashboard"],
-  "10 goal targets & 20 conversion goals": ["2 goal targets & 3 conversion goals"],
-  "30 goal targets & 100 conversion goals": ["10 goal targets & 20 conversion goals", "2 goal targets & 3 conversion goals"],
+  "10 goal targets": ["2 goal targets"],
+  "30 goal targets": ["10 goal targets", "2 goal targets"],
 };
 
  

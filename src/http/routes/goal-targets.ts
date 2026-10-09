@@ -1,7 +1,6 @@
 import { Router, Response } from "express";
 import { isValidObjectId } from "mongoose";
 import { GoalTarget } from "../../modules/dashboards/models/GoalTarget.js";
-import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import {
   parseTargetDraft,
@@ -20,11 +19,6 @@ router.use(requireAuth);
 router.use(blockDemoWrites);
 
 async function validateRefs(workspaceId: string, draft: TargetDraft): Promise<string | null> {
-  if (draft.goalId) {
-    if (!isValidObjectId(draft.goalId)) return "conversion goal not found";
-    const goal = await Goal.exists({ _id: draft.goalId, workspaceId });
-    if (!goal) return "conversion goal not found";
-  }
   if (draft.siteId) {
     const site = await Site.exists({ siteId: draft.siteId, workspaceId });
     if (!site) return "site not found";

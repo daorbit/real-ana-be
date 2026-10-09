@@ -12,7 +12,6 @@ export type TargetDraft = {
   target: number;
   period: TargetPeriod;
   siteId: string;
-  goalId: string | null;
 };
 
 const LOWER_IS_BETTER: TargetMetric[] = ["searchPosition"];
@@ -31,16 +30,12 @@ export function parseTargetDraft(body: unknown): TargetDraft | string {
   if (!TARGET_PERIODS.includes(period)) return "period must be month or quarter";
   if (!Number.isFinite(target) || target <= 0 || target > 1e12) return "target must be a positive number";
 
-  const goalId = metric === "conversions" ? String(b.goalId ?? "").trim() || null : null;
-  if (metric === "conversions" && !goalId) return "pick the conversion goal to count";
-
   return {
     name,
     metric,
     period,
     target: metric === "searchPosition" ? Math.round(target * 10) / 10 : Math.round(target),
     siteId: String(b.siteId ?? "").trim().slice(0, 64),
-    goalId,
   };
 }
 
@@ -55,13 +50,12 @@ export async function targetProgress(target: TargetDoc, siteIds: string[]) {
   const period = periodWindow(target.get("period") as TargetPeriod);
   const siteId = (target.get("siteId") as string) ?? "";
   const scoped = siteId ? siteIds.filter((id) => id === siteId) : siteIds;
-  const goalId = target.get("goalId") ? String(target.get("goalId")) : null;
 
   const reading = await cache(
-    `${target.id}:${metric}:${siteId}:${goalId}:${period.key}`,
+    `${target.id}:${metric}:${siteId}:${period.key}`,
     () =>
       readMetric(
-        { workspaceId: String(target.get("workspaceId")), metric, siteIds: scoped, siteId, goalId },
+        { workspaceId: String(target.get("workspaceId")), metric, siteIds: scoped, siteId },
         period,
       ),
   );
@@ -74,7 +68,6 @@ export async function targetProgress(target: TargetDoc, siteIds: string[]) {
     target: goal,
     period: target.get("period") as TargetPeriod,
     siteId,
-    goalId,
     direction: lowerIsBetter ? ("below" as const) : ("above" as const),
     periodKey: period.key,
     periodLabel: period.label,
@@ -106,7 +99,7 @@ export async function targetProgress(target: TargetDoc, siteIds: string[]) {
 
 export async function workspaceTargets(workspaceId: string) {
   const [targets, sites] = await Promise.all([
-    GoalTarget.find({ workspaceId }).sort({ createdAt: 1 }),
+    GoalTarget.find({ workspaceId, metric: { $in: TARGET_METRICS } }).sort({ createdAt: 1 }),
     Site.find({ workspaceId }).select("siteId"),
   ]);
   const siteIds = sites.map((s) => String(s.siteId));

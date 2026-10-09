@@ -1,10 +1,9 @@
 import { Dashboard } from "../dashboards/models/Dashboard.js";
 import { Embed } from "../dashboards/models/Embed.js";
-import { GoalTarget } from "../dashboards/models/GoalTarget.js";
-import { Goal } from "../analytics/models/Goal.js";
+import { GoalTarget, TARGET_METRICS } from "../dashboards/models/GoalTarget.js";
 import type { PlanCatalogEntry } from "./plans.catalog.js";
 
-export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "conversionGoals";
+export type CountedFeature = "dashboards" | "embeds" | "goalTargets";
 
 type FeatureSpec = {
   kind: string;
@@ -38,15 +37,7 @@ export const COUNTED_FEATURES: Record<CountedFeature, FeatureSpec> = {
     noun: "goal target",
     plural: "goal targets",
     limit: (p) => p.maxGoalTargets,
-    count: (workspaceId) => GoalTarget.countDocuments({ workspaceId }),
-  },
-  conversionGoals: {
-    kind: "conversion_goals",
-    label: "Conversion goals",
-    noun: "conversion goal",
-    plural: "conversion goals",
-    limit: (p) => p.maxConversionGoals,
-    count: (workspaceId) => Goal.countDocuments({ workspaceId }),
+    count: (workspaceId) => GoalTarget.countDocuments({ workspaceId, metric: { $in: TARGET_METRICS } }),
   },
 };
 

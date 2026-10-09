@@ -11,7 +11,6 @@ import {
   computeFunnel,
   computeUserFlow,
   computeRetention,
-  computeGoals,
   exportEvents,
   resolveWindow,
   parseFilters,
@@ -22,15 +21,13 @@ import {
   TRACKER_VERSION,
   computeLive,
   type FunnelStep,
-  type GoalDef,
 } from "../../modules/analytics/stats.service.js";
 import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
-import { Goal } from "../../modules/analytics/models/Goal.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
-import { canCreateFeature, canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
@@ -432,11 +429,10 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   const rangeKey = String(req.query.range ?? "24h");
   const askedCompare = parseCompareMode(req.query.compare);
 
-  const [sites, allowed, compareAllowed, goalDocs] = await Promise.all([
+  const [sites, allowed, compareAllowed] = await Promise.all([
     Site.find({ workspaceId: ws.id }).select("siteId name trackerVersion"),
     canUseRange(ws.id, rangeKey),
     canUseCompare(ws.id, askedCompare),
-    Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 }),
   ]);
 
   const ids = selectSiteIds(sites, req.query.sites);
@@ -472,13 +468,6 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
   // refusing the request — see `canUseCompare`.
   const compare = compareAllowed ? askedCompare : "previous";
 
-  const goalDefs = goalDocs.map<GoalDef>((g) => ({
-    id: g.id,
-    name: g.get("name"),
-    kind: g.get("kind"),
-    match: g.get("match"),
-  }));
-
   const cacheKey = JSON.stringify([
     ws.id,
     ids,
@@ -489,7 +478,6 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     req.query.to ?? null,
     req.query.compareFrom ?? null,
     req.query.compareTo ?? null,
-    goalDefs,
   ]);
 
   const payload = await statsCache(cacheKey, async () => {
@@ -506,14 +494,8 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     // actually drawing a comparison.
     const stats = await computeStats(ids, rangeKey, filters, win, compare !== "previous");
 
-    // Score the workspace's goals over the same window/scope. Goals live on the
-    // workspace, so they're resolved here rather than inside computeStats (which
-    // only knows about siteIds).
-    const goals = await computeGoals(ids, goalDefs, rangeKey, stats.visitors, {}, win);
-
     return {
       ...stats,
-      goals,
       filters,
       // Echo the resolved window so a custom range round-trips to the client.
       window: { since: win.since, until: win.until },
@@ -793,49 +775,6 @@ router.get("/:wid/track/:appUserId", async (req: AuthedRequest, res: Response) =
       ts: e.get("ts"),
     })),
   });
-});
-
-// --- goal definitions (conversions) -------------------------------------
-router.get("/:wid/goals", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req);
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
-  const goals = await Goal.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
-  res.json(
-    goals.map((g) => ({
-      id: g.id,
-      name: g.get("name"),
-      kind: g.get("kind"),
-      match: g.get("match"),
-    })),
-  );
-});
-
-router.post("/:wid/goals", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req, "editor");
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
-
-  const name = String(req.body?.name ?? "").trim().slice(0, 80);
-  const kind = req.body?.kind === "event" ? "event" : "page";
-  const match = String(req.body?.match ?? "").trim().slice(0, 300);
-  if (!name || !match) return res.status(400).json({ error: "name and match required" });
-
-  const allowed = await canCreateFeature(ws.id, "conversionGoals");
-  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
-
-  const goal = await Goal.create({ workspaceId: ws.id, name, kind, match });
-  res.status(201).json({ id: goal.id, name, kind, match });
-});
-
-router.delete("/:wid/goals/:gid", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req, "editor");
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
-  const goal = await Goal.findOne({ _id: req.params.gid, workspaceId: ws.id });
-  if (!goal) return res.status(404).json({ error: "goal not found" });
-  await goal.deleteOne();
-  res.status(204).end();
 });
 
 router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {

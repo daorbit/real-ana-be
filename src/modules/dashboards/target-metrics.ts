@@ -1,6 +1,4 @@
 import { Event } from "../analytics/models/Event.js";
-import { Goal } from "../analytics/models/Goal.js";
-import { computeGoals, resolveWindow } from "../analytics/stats.service.js";
 import { Subscription } from "../billing/models/Subscription.js";
 import { UsageMonth } from "../billing/models/UsageMonth.js";
 import { rollUsageMonth, usageMonthKey } from "../billing/usage-month.js";
@@ -22,7 +20,6 @@ export type TargetInput = {
   metric: TargetMetric;
   siteIds: string[];
   siteId: string;
-  goalId: string | null;
 };
 
 const SEARCH_DAYS = 28;
@@ -44,23 +41,6 @@ async function readTraffic(metric: "visitors" | "pageviews" | "sessions", siteId
   const match = eventWindow(siteIds, period);
   if (metric === "pageviews") return Event.countDocuments({ ...match, type: "pageview" });
   return distinctCount(match, metric === "visitors" ? "visitorHash" : "sessionId");
-}
-
-async function readConversions(input: TargetInput, period: PeriodWindow): Promise<MetricReading> {
-  if (!input.goalId) return { status: "unavailable", reason: "Pick a conversion goal to count." };
-  const goal = await Goal.findOne({ _id: input.goalId, workspaceId: input.workspaceId });
-  if (!goal) return { status: "unavailable", reason: "The conversion goal this counts was deleted." };
-
-  const win = resolveWindow("custom", period.start.toISOString(), new Date().toISOString());
-  const [result] = await computeGoals(
-    input.siteIds,
-    [{ id: goal.id, name: goal.get("name"), kind: goal.get("kind"), match: goal.get("match") }],
-    "custom",
-    0,
-    {},
-    win,
-  );
-  return { status: "ok", value: result?.conversions ?? 0 };
 }
 
 async function readFormSubmissions(workspaceId: string, period: PeriodWindow): Promise<number> {
@@ -111,9 +91,6 @@ export async function readMetric(input: TargetInput, period: PeriodWindow): Prom
     case "sessions":
       if (input.siteIds.length === 0) return { status: "unavailable", reason: "Add a site to start counting." };
       return { status: "ok", value: await readTraffic(input.metric, input.siteIds, period) };
-    case "conversions":
-      if (input.siteIds.length === 0) return { status: "unavailable", reason: "Add a site to start counting." };
-      return readConversions(input, period);
     case "formSubmissions":
       return { status: "ok", value: await readFormSubmissions(input.workspaceId, period) };
     case "searchPosition":

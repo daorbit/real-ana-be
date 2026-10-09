@@ -4,7 +4,6 @@ export const TARGET_METRICS = [
   "visitors",
   "pageviews",
   "sessions",
-  "conversions",
   "formSubmissions",
   "searchPosition",
 ] as const;
@@ -21,7 +20,6 @@ const goalTargetSchema = new Schema(
     target: { type: Number, required: true },
     period: { type: String, enum: TARGET_PERIODS, default: "month" },
     siteId: { type: String, default: "" },
-    goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }

@@ -637,7 +637,6 @@ export async function quotaSummary(workspaceId: string) {
     dashboards: features.dashboards,
     embeds: features.embeds,
     goalTargets: features.goalTargets,
-    conversionGoals: features.conversionGoals,
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,
     whatsappReports: plan.whatsappReports,
