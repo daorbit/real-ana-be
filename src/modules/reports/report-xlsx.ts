@@ -135,7 +135,7 @@ export async function buildReportWorkbook(input: ReportWorkbookInput): Promise<B
     addBreakdown(wb, "Browsers", "Browser", stats.browsers);
 
     if (stats.customEvents?.length) {
-      const sheet = wb.addWorksheet("Goals & events");
+      const sheet = wb.addWorksheet("Events");
       sheet.columns = [
         { header: "Event", key: "key", width: 34 },
         { header: "Visitors", key: "visitors", width: 14 },
