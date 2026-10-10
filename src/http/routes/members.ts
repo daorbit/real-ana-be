@@ -7,17 +7,14 @@ import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
 import { sendWorkspaceInviteEmail, mailConfigured } from "../../infra/mail/mailer.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
+import { recordAudit } from "../../modules/audit/audit.service.js";
 
-/**
- * Workspace membership: who is in a workspace, and who may change that.
- *
- * Mounted under `/api/workspaces/:wid/members`, so every route here resolves
- * the caller's own access through the same helper the rest of the app uses.
- *
- * Managing people is admin-and-up throughout. Reading the list is open to any
- * member, because knowing who else can see your analytics is not privileged
- * information to the people already in the room.
- */
+async function memberLabel(userId: unknown): Promise<string> {
+  const user = await User.findById(userId).select("name email").lean();
+  return (user?.name as string) || (user?.email as string) || "";
+}
+
+
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
@@ -184,6 +181,13 @@ router.post("/invites", async (req: AuthedRequest, res: Response) => {
     }, String(req.userId));
   }
 
+  await recordAudit(req, {
+    action: "member.invited",
+    workspaceId: access.workspace.id,
+    target: { kind: "invite", id: invite.id, label: email },
+    meta: { role },
+  });
+
   res.status(201).json({
     id: invite.id,
     email: invite.email,
@@ -234,7 +238,15 @@ router.delete("/invites/:id", async (req: AuthedRequest, res: Response) => {
   });
   if (!invite) return res.status(404).json({ error: "invitation not found" });
 
-  await invite.deleteOne();
+  await Promise.all([
+    invite.deleteOne(),
+    recordAudit(req, {
+      action: "member.invite_withdrawn",
+      workspaceId: access.workspace.id,
+      target: { kind: "invite", id: invite.id, label: invite.email },
+      meta: { role: invite.role },
+    }),
+  ]);
   res.status(204).end();
 });
 
@@ -274,8 +286,15 @@ router.patch("/:id", async (req: AuthedRequest, res: Response) => {
   if (ROLE_RANK[membership.role as WorkspaceRole] >= ROLE_RANK[access.role] && access.role !== "owner")
     return res.status(403).json({ error: "only the owner can change another admin's role" });
 
+  const previousRole = membership.role;
   membership.set("role", role);
-  await membership.save();
+  const [, label] = await Promise.all([membership.save(), memberLabel(membership.userId)]);
+  await recordAudit(req, {
+    action: "member.role_changed",
+    workspaceId: access.workspace.id,
+    target: { kind: "member", id: String(membership.userId), label },
+    meta: { from: previousRole, to: role },
+  });
   res.json({ id: membership.id, role: membership.role });
 });
 
@@ -310,7 +329,13 @@ router.delete("/:id", async (req: AuthedRequest, res: Response) => {
       return res.status(403).json({ error: "only the owner can remove another admin" });
   }
 
-  await membership.deleteOne();
+  const [, label] = await Promise.all([membership.deleteOne(), memberLabel(membership.userId)]);
+  await recordAudit(req, {
+    action: isSelf ? "member.left" : "member.removed",
+    workspaceId: access.workspace.id,
+    target: { kind: "member", id: String(membership.userId), label },
+    meta: { role: membership.role },
+  });
   res.status(204).end();
 });
 

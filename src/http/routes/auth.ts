@@ -25,8 +25,9 @@ import { emitTo } from "../../modules/notifications/notify.service.js";
 import { claimAttempt, clearAttempts } from "../../modules/security/attempt-lock.service.js";
 import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
+import { recordAudit, accountAuditPage, parseCursor } from "../../modules/audit/audit.service.js";
 import {
-  signToken, signDemoToken, requireAuth, blockDemoWrites, AuthedRequest,
+  signToken, signDemoToken, requireAuth, requireUnlocked, blockDemoWrites, AuthedRequest,
   signPending2faToken, verifyPending2faToken,
 } from "../middleware/auth.js";
 
@@ -547,16 +548,19 @@ router.post("/login", async (req, res) => {
         // Also in the dashboard, for whenever they next get in. If the lockout
         // was someone else trying their password, this is the record that
         // survives a deleted email.
-        await emitTo({
-          type: "security.alert",
-          userId: String(user._id),
-          data: {
-            what: "Sign-in was locked for 12 hours after five wrong passwords.",
-            event: "login.locked",
-            lockedUntil: until,
-          },
-          link: "/app/settings/security",
-        });
+        await Promise.all([
+          emitTo({
+            type: "security.alert",
+            userId: String(user._id),
+            data: {
+              what: "Sign-in was locked for 12 hours after five wrong passwords.",
+              event: "login.locked",
+              lockedUntil: until,
+            },
+            link: "/app/settings/security",
+          }),
+          recordAudit(req, { action: "account.login_locked", actorId: user.id }),
+        ]);
         return res.status(423).json({
           error: "too many failed attempts — this account is temporarily locked",
           locked: true,
@@ -579,8 +583,12 @@ router.post("/login", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = await signToken(user.id, req);
-    res.json({ token, user: await publicUser(user) });
+    const [token, profile] = await Promise.all([
+      signToken(user.id, req),
+      publicUser(user),
+      recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "password" } }),
+    ]);
+    res.json({ token, user: profile });
   } catch {
     res.status(500).json({ error: "login failed" });
   }
@@ -610,8 +618,11 @@ router.post("/2fa/verify", async (req, res) => {
     const totpOk = secret && /^\d{6}$/.test(cleanCode) ? await verifyTotpCode(cleanCode, secret) : false;
 
     if (totpOk) {
-      await clearAttempts(throttleKey);
-      const token = await signToken(user.id, req);
+      const [token] = await Promise.all([
+        signToken(user.id, req),
+        clearAttempts(throttleKey),
+        recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "2fa" } }),
+      ]);
       return res.json({ token, user: await publicUser(user) });
     }
 
@@ -629,7 +640,11 @@ router.post("/2fa/verify", async (req, res) => {
     if (matchedIndex === -1) return res.status(401).json({ error: "invalid code" });
 
     user.totpBackupCodeHashes = hashes.filter((_, i) => i !== matchedIndex);
-    await Promise.all([user.save(), clearAttempts(throttleKey)]);
+    await Promise.all([
+      user.save(),
+      clearAttempts(throttleKey),
+      recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "backup_code" } }),
+    ]);
     const token = await signToken(user.id, req);
     res.json({ token, user: await publicUser(user), backupCodeUsed: true });
   } catch {
@@ -679,7 +694,7 @@ router.post("/2fa/enable", requireAuth, async (req: AuthedRequest, res) => {
     user.totpEnabled = true;
     user.totpSecretEnc = encryptSecret(secret);
     user.totpBackupCodeHashes = hashes;
-    await user.save();
+    await Promise.all([user.save(), recordAudit(req, { action: "account.2fa_enabled" })]);
 
     // Shown once, in the clear, right here in the response — and mailed once,
     // too, so a codes list lost by closing the tab too soon isn't gone for
@@ -713,7 +728,7 @@ router.post("/2fa/disable", requireAuth, async (req: AuthedRequest, res) => {
       user.screenLockEnabled = false;
       user.lockedAt = null;
     }
-    await user.save();
+    await Promise.all([user.save(), recordAudit(req, { action: "account.2fa_disabled" })]);
 
     res.json({ ok: true });
   } catch {
@@ -773,7 +788,7 @@ router.post("/me/screen-lock/enable", requireAuth, blockDemoWrites, async (req: 
     }
 
     user.screenLockEnabled = true;
-    await user.save();
+    await Promise.all([user.save(), recordAudit(req, { action: "account.screen_lock_enabled" })]);
 
     res.json(await publicUser(user));
   } catch {
@@ -791,7 +806,7 @@ router.post("/me/screen-lock/disable", requireAuth, blockDemoWrites, async (req:
 
     user.screenLockEnabled = false;
     user.lockedAt = null;
-    await user.save();
+    await Promise.all([user.save(), recordAudit(req, { action: "account.screen_lock_disabled" })]);
 
     res.json({ ok: true });
   } catch {
@@ -869,7 +884,10 @@ router.post("/google", async (req, res) => {
       return res.json({ requires2fa: true, pendingToken: signPending2faToken(user.id) });
     }
 
-    const token = await signToken(user.id, req);
+    const [token] = await Promise.all([
+      signToken(user.id, req),
+      recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "google" } }),
+    ]);
     res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
   } catch (e) {
     console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
@@ -924,16 +942,43 @@ router.post("/sessions/:id/revoke", requireAuth, async (req: AuthedRequest, res:
   if (!session) return res.status(404).json({ error: "session not found" });
 
   session.revokedAt = new Date();
-  await session.save();
+  await Promise.all([
+    session.save(),
+    recordAudit(req, {
+      action: "account.session_revoked",
+      target: {
+        kind: "session",
+        id: session.id,
+        label: [session.browser, session.os].filter(Boolean).join(" · "),
+      },
+    }),
+  ]);
   res.json({ ok: true });
 });
 
 router.post("/sessions/revoke-others", requireAuth, async (req: AuthedRequest, res: Response) => {
-  await Session.updateMany(
+  const result = await Session.updateMany(
     { userId: req.userId, jti: { $ne: req.sessionJti }, revokedAt: null },
     { revokedAt: new Date() },
   );
+  if (result.modifiedCount) {
+    await recordAudit(req, { action: "account.sessions_revoked", meta: { count: result.modifiedCount } });
+  }
   res.json({ ok: true });
+});
+
+router.get("/activity", requireAuth, requireUnlocked, async (req: AuthedRequest, res: Response) => {
+  if (req.isDemo) return res.json({ items: [], nextCursor: null });
+
+  const cursor = parseCursor(req.query.cursor);
+  if (cursor === null) return res.status(400).json({ error: "cursor must be a valid date" });
+
+  res.json(
+    await accountAuditPage(String(req.userId), {
+      cursor,
+      limit: Number(req.query.limit) || undefined,
+    }),
+  );
 });
 
 router.post("/demo", async (req: Request, res: Response) => {
@@ -1019,12 +1064,15 @@ router.post("/me/password", requireAuth, blockDemoWrites, async (req: AuthedRequ
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     await user.save();
 
-    await emitTo({
-      type: "security.alert",
-      userId: String(user._id),
-      data: { what: "Your password was changed.", event: "password.changed" },
-      link: "/app/settings/security",
-    });
+    await Promise.all([
+      emitTo({
+        type: "security.alert",
+        userId: String(user._id),
+        data: { what: "Your password was changed.", event: "password.changed" },
+        link: "/app/settings/security",
+      }),
+      recordAudit(req, { action: "account.password_changed" }),
+    ]);
 
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
       console.error("[change-password] notice failed:", (e as Error)?.message)
@@ -1284,12 +1332,15 @@ router.post("/reset-password", async (req, res) => {
     await user.save();
     await pending.deleteOne();
 
-    await emitTo({
-      type: "security.alert",
-      userId: String(user._id),
-      data: { what: "Your password was reset.", event: "password.reset" },
-      link: "/app/settings/security",
-    });
+    await Promise.all([
+      emitTo({
+        type: "security.alert",
+        userId: String(user._id),
+        data: { what: "Your password was reset.", event: "password.reset" },
+        link: "/app/settings/security",
+      }),
+      recordAudit(req, { action: "account.password_reset", actorId: user.id }),
+    ]);
 
     sendPasswordChangedEmail({ email: user.email, name: user.name }).catch((e) =>
       console.error("[reset] change notice failed:", (e as Error)?.message)

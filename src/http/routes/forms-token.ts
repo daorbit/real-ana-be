@@ -60,7 +60,7 @@ router.post(
 
     const workspaceId = String(workspace._id);
     const expiresAt = Math.floor(Date.now() / 1000) + TTL_SECONDS;
-    const payload = `${workspaceId}.${expiresAt}`;
+    const payload = `${workspaceId}.${expiresAt}.${req.isDemo ? "" : String(req.userId ?? "")}`;
 
     res.json({
       token: `${payload}.${sign(payload, secret)}`,

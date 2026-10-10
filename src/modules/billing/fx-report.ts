@@ -19,13 +19,12 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
   const to = reportRecipient();
   if (!mailConfigured() || !to) return;
 
-  const rates = result.derived
-    .flatMap((c) => {
-      const rate = result.snapshot.rates[c];
-      if (!rate) return [];
-      return [`1 ${result.base} = ${rate} ${c}`, `1 ${c} = ${inverseRate(rate)} ${result.base}`];
-    })
-    .join(" · ");
+  const rateLines = result.derived.flatMap((c) => {
+    const rate = result.snapshot.rates[c];
+    if (!rate) return [];
+    return [`1 ${result.base} = ${rate} ${c}`, `1 ${c} = ${inverseRate(rate)} ${result.base}`];
+  });
+  const rates = rateLines.join(" · ");
 
   const rows = result.plans
     .map((plan) => {
@@ -87,7 +86,7 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
     `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan prices repriced</p>
      <p style="margin:0 0 20px;font-size:14.5px;line-height:1.7;color:${C.dim}">
        ${result.plans.length} plan${result.plans.length === 1 ? "" : "s"} and ${result.addons.length} add-on pack${result.addons.length === 1 ? "" : "s"} updated from the ${result.base} price at today's rate.
-       <br><span style="color:${C.accent};font-weight:600">${rates}</span>
+       ${rateLines.map((line) => `<br><span style="color:${C.accent};font-weight:600">${line}</span>`).join("")}
      </p>
      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
        <tr>${header}</tr>

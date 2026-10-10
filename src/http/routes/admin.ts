@@ -28,6 +28,7 @@ import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
+import { recordAudit } from "../../modules/audit/audit.service.js";
 
  
 const router = Router();
@@ -173,6 +174,11 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
     return res.status(400).json({ error: "cannot impersonate an admin" });
 
   const token = signImpersonationToken(target.id, req.userId as string);
+  await recordAudit(req, {
+    action: "account.impersonated",
+    actorId: target.id,
+    impersonatorId: req.userId,
+  });
 
   console.log(`[impersonate] admin ${req.userId} -> user ${target.id} (${target.email})`);
 

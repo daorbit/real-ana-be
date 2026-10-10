@@ -18,6 +18,7 @@ import { OrbitConversation } from "../orbit-history/models/OrbitConversation.js"
 import { OrbitMessage } from "../orbit-history/models/OrbitMessage.js";
 import { GoogleConnection } from "../reviews/models/GoogleConnection.js";
 import { SearchConsoleConnection } from "../seo/models/SearchConsoleConnection.js";
+import { AuditLog } from "../audit/models/AuditLog.js";
 import { disconnectGoogleReviews } from "../reviews/connection.service.js";
 import { disconnectSearchConsole } from "../seo/search-console-connection.service.js";
 import { purgeWorkspaces } from "../workspace/purge.service.js";
@@ -82,6 +83,7 @@ export async function deleteUserAccount(userId: string): Promise<{ workspacesDel
     ReferralCode.deleteMany({ userId }),
     Referral.deleteMany({ $or: [{ referrerId: userId }, { refereeId: userId }] }),
     Coupon.deleteMany({ ownerId: userId }),
+    AuditLog.deleteMany({ actorId: userId, workspaceId: null }),
   ]);
 
   if (user?.avatarPublicId) await deleteImage(String(user.avatarPublicId));

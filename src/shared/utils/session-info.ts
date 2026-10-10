@@ -33,9 +33,11 @@ function locationFor(ip: string): string {
 }
 
 export function sessionInfoFor(req: Request): SessionInfo {
-  const userAgent = req.headers["user-agent"] ?? "";
+  return describeClient(clientIp(req), req.headers["user-agent"] ?? "");
+}
+
+export function describeClient(ip: string, userAgent: string): SessionInfo {
   const { browser, os, device } = new UAParser(userAgent).getResult();
-  const ip = clientIp(req);
 
   return {
     userAgent,

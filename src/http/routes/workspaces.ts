@@ -35,6 +35,7 @@ import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
+import { recordAudit } from "../../modules/audit/audit.service.js";
 
 const STATS_CACHE_MS = 10_000;
 const statsCache = createTtlCache<Record<string, unknown>>(STATS_CACHE_MS, 500);
@@ -121,7 +122,14 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
     // `Workspace.userId` so that access is one mechanism with one lookup — the
     // owner is a member like everyone else, just the one who cannot be removed.
     await Membership.create({ workspaceId: ws.id, userId: req.userId, role: "owner" });
-    await assignFreePlan(ws.id, req.userId as string);
+    await Promise.all([
+      assignFreePlan(ws.id, req.userId as string),
+      recordAudit(req, {
+        action: "workspace.created",
+        workspaceId: ws.id,
+        target: { kind: "workspace", id: ws.id, label: ws.name },
+      }),
+    ]);
     // Same shape as the list route, so the client can drop it straight into
     // the cache without a second fetch to learn what plan it landed on.
     res.status(201).json({
@@ -223,6 +231,12 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     siteId: nanoid(16),
     trackerOptions: parseTrackerOptions(trackerOptions),
     purpose: typeof purpose === "string" ? purpose.trim().slice(0, 140) : "",
+  });
+  await recordAudit(req, {
+    action: "site.added",
+    workspaceId: ws.id,
+    target: { kind: "site", id: site.siteId as string, label: site.name as string },
+    meta: { domain: (site.domain as string) || (site.bundleId as string) || "" },
   });
   res.status(201).json(site);
 });
@@ -385,7 +399,15 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   if (req.body?.panels !== undefined) {
     ws.set("sharePanels", readPanels(req.body.panels));
   }
-  await ws.save();
+  await Promise.all([
+    ws.save(),
+    recordAudit(req, {
+      action: "workspace.share_updated",
+      workspaceId: ws.id,
+      target: { kind: "share", label: "Public dashboard" },
+      meta: { enabled, rotated: rotate },
+    }),
+  ]);
 
   res.json(shareState(ws));
 });
@@ -931,11 +953,20 @@ router.patch("/:wid", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
 
-  const ws = await Workspace.findByIdAndUpdate(
-    access.workspace.id,
-    { name, slug: slugify(name) || nanoid(6) },
-    { new: true },
-  );
+  const previousName = access.workspace.name;
+  const [ws] = await Promise.all([
+    Workspace.findByIdAndUpdate(
+      access.workspace.id,
+      { name, slug: slugify(name) || nanoid(6) },
+      { new: true },
+    ),
+    recordAudit(req, {
+      action: "workspace.renamed",
+      workspaceId: access.workspace.id,
+      target: { kind: "workspace", id: access.workspace.id, label: String(name) },
+      meta: { from: previousName, to: String(name) },
+    }),
+  ]);
   res.json(ws);
 });
 
@@ -959,7 +990,15 @@ router.delete(
       workspaceId: ws.id,
     });
     if (!site) return res.status(404).json({ error: "site not found" });
-    await purgeSite(site.siteId as string);
+    await Promise.all([
+      purgeSite(site.siteId as string),
+      recordAudit(req, {
+        action: "site.removed",
+        workspaceId: ws.id,
+        target: { kind: "site", id: site.siteId as string, label: site.name as string },
+        meta: { domain: (site.domain as string) || (site.bundleId as string) || "" },
+      }),
+    ]);
     res.status(204).end();
   },
 );
@@ -1047,6 +1086,12 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
     prefix,
     expiresAt,
   });
+  await recordAudit(req, {
+    action: "api_key.created",
+    workspaceId: ws.id,
+    target: { kind: "api_key", id: key.id, label: key.name as string },
+    meta: { prefix, expiresInDays: Number(req.body?.expiresInDays) || 0 },
+  });
   res.status(201).json({
     id: key.id,
     name: key.name,
@@ -1097,6 +1142,12 @@ router.patch("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
     { new: true },
   );
   if (!key) return res.status(404).json({ error: "key not found" });
+  await recordAudit(req, {
+    action: "api_key.updated",
+    workspaceId: access.workspace.id,
+    target: { kind: "api_key", id: key.id, label: name },
+    meta: { prefix: key.prefix as string },
+  });
   res.json({ id: key.id, name: key.name });
 });
 
@@ -1108,7 +1159,15 @@ router.delete("/:wid/keys/:kid", async (req: AuthedRequest, res: Response) => {
   const key = await ApiKey.findOne({ _id: req.params.kid, workspaceId: ws.id });
   if (!key) return res.status(404).json({ error: "key not found" });
   key.set("revoked", true);
-  await key.save();
+  await Promise.all([
+    key.save(),
+    recordAudit(req, {
+      action: "api_key.revoked",
+      workspaceId: ws.id,
+      target: { kind: "api_key", id: key.id, label: key.name as string },
+      meta: { prefix: key.prefix as string },
+    }),
+  ]);
   res.status(204).end();
 });
 

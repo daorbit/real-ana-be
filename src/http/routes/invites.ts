@@ -5,6 +5,7 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { User } from "../../modules/identity/models/User.js";
 import { emit } from "../../modules/notifications/notify.service.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
+import { recordAudit } from "../../modules/audit/audit.service.js";
 
 /**
  * Accepting a workspace invitation. Mounted at `/api/invites`.
@@ -104,20 +105,28 @@ router.post("/:token/accept", requireAuth, async (req: AuthedRequest, res: Respo
   // would report a membership change that did not happen.
   if (!existing) {
     const accepter = await User.findById(req.userId).select("name email avatarUrl");
-    await emit({
-      type: "invite.accepted",
-      workspaceId: workspace.id,
-      // The accepter is the actor, so they are left out of their own
-      // announcement by `emit`.
-      actorId: req.userId,
-      data: {
-        actorName: (accepter?.name as string) || (accepter?.email as string) || "Someone",
-        actorAvatarUrl: (accepter?.avatarUrl as string) || "",
-        workspaceName: workspace.get("name"),
-        role: invite.role,
-      },
-      link: "/app/members",
-    });
+    await Promise.all([
+      emit({
+        type: "invite.accepted",
+        workspaceId: workspace.id,
+        // The accepter is the actor, so they are left out of their own
+        // announcement by `emit`.
+        actorId: req.userId,
+        data: {
+          actorName: (accepter?.name as string) || (accepter?.email as string) || "Someone",
+          actorAvatarUrl: (accepter?.avatarUrl as string) || "",
+          workspaceName: workspace.get("name"),
+          role: invite.role,
+        },
+        link: "/app/members",
+      }),
+      recordAudit(req, {
+        action: "member.joined",
+        workspaceId: workspace.id,
+        target: { kind: "invite", id: invite.id, label: invite.email },
+        meta: { role: invite.role },
+      }),
+    ]);
   }
 
   res.json({

@@ -43,6 +43,7 @@ import navPrefsRoutes from "./http/routes/nav-prefs.js";
 import mediaRoutes from "./http/routes/media.js";
 import markerRoutes from "./http/routes/markers.js";
 import memberRoutes from "./http/routes/members.js";
+import auditRoutes from "./http/routes/audit.js";
 import inviteRoutes from "./http/routes/invites.js";
 import reportsPublicRoutes from "./http/routes/reports-public.js";
 import notificationRoutes from "./http/routes/notifications.js";
@@ -60,6 +61,7 @@ import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
 import { dashboardCors, orbitCors } from "./http/middleware/cors.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
 import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
+import { auditTrail } from "./http/middleware/audit-trail.js";
 
 const app = express();
 
@@ -120,10 +122,7 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 app.use(["/api/collect", "/api/ingest"], openCors, collectRoutes);
 app.use("/api/track", openCors, trackRoutes);
 
-// Serve embeddable tracker.js — gzipped, and revalidated on every load against
-// its ETag (Express derives it from the file's own mtime/size, which the build
-// script updates every time it regenerates this file). An unchanged file costs
-// a 304; a changed one reaches every customer site on its next page view.
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 app.get(
@@ -149,8 +148,6 @@ app.use(
   swaggerUi.serve,
   swaggerUi.setup(openApiSpec, {
     customSiteTitle: "Quantalog API reference",
-    // The topbar is Swagger's own branding and a URL box that only lets someone
-    // load a different API into our page.
     customCss: ".swagger-ui .topbar { display: none }",
 
     customJs: [
@@ -170,20 +167,15 @@ app.use(
   }),
 );
 
-// Platform API (server-to-server, API-key auth, any origin)
 app.use("/v1", openCors, v1Routes);
 
-// Public shared dashboards. Unauthenticated by design — the share token in the
-// path is the credential — so it sits outside the dashboard CORS allowlist:
-// the whole point is that anyone with the link can open it from anywhere.
+
 app.use("/api/share", openCors, shareRoutes);
 // Public per-report SEO audits. Same unauthenticated, token-in-path model as
 // the shared dashboards above.
 app.use("/api/public/seo", openCors, seoPublicRoutes);
 app.use("/api/public/plans", openCors, plansPublicRoutes);
-// Report unsubscribe links. Unauthenticated for the same reason as the share
-// links above — most recipients have no account, and requiring one to stop
-// receiving mail is how a report turns into a spam complaint.
+
 app.use("/api/public/reports", openCors, reportsPublicRoutes);
 
 app.use("/api/public/orbit", openCors, orbitPublicRoutes);
@@ -207,29 +199,19 @@ app.use("/api/auth/search-console", searchConsoleAuthRoutes);
 // prefix: a schedule publishes with that user's own LinkedIn token.
 app.use("/api/social/posts", dashboardCors, requireUnlocked, socialPostRoutes);
 
-// Dashboard API (restricted origin + JWT inside route modules). Not
-// `requireUnlocked`: this router is where /lock, /unlock and the account's own
-// settings live, so it has to stay reachable while the screen is locked — the
-// individual data-bearing routes below are the ones the lock actually guards.
 app.use("/api/auth", dashboardCors, authRoutes);
 
+app.use("/api/workspaces/:wid", auditTrail);
 app.use("/api/workspaces/:wid/orbit", orbitCors, requireApiKeyOrAuth, requireUnlocked, orbitRoutes);
-// Before the general workspace router: both mount on the same prefix, and the
-// composer's two routes are specific paths that a later `/:wid/...` pattern
-// could otherwise shadow.
+
 app.use("/api/workspaces", dashboardCors, requireUnlocked, socialAiRoutes);
 app.use("/api/workspaces", dashboardCors, requireUnlocked, workspaceRoutes);
-// Mints the short-lived token the embedded forms service needs before it will
-// hand over or change a workspace's payment credentials. Same prefix, same
-// membership check as everything else here.
+
 app.use("/api/workspaces", dashboardCors, requireUnlocked, formsTokenRoutes);
-// SEO audits hang off the same prefix; kept in their own router so the
-// workspace module stays about workspaces.
+
 app.use("/api/workspaces", dashboardCors, requireUnlocked, seoRoutes);
 app.use("/api/workspaces", dashboardCors, requireUnlocked, searchConsoleRoutes);
-// Competitor tracking keeps the `/seo/competitors` paths but lives in its own
-// router: it is the only place the server fetches a host the user typed, and
-// that is worth being able to read in one file.
+
 app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorRoutes);
 // The AI reading of a comparison, kept separate: it is the only competitor
 // endpoint that costs a model call, carries its own rate limit, and disappears
@@ -249,12 +231,11 @@ app.use("/api/workspaces/:wid/targets", dashboardCors, requireUnlocked, goalTarg
 app.use("/api/workspaces/:wid/embeds", dashboardCors, requireUnlocked, embedRoutes);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, requireUnlocked, memberRoutes);
+app.use("/api/workspaces/:wid/audit", dashboardCors, requireUnlocked, auditRoutes);
 // Accepting an invitation. Not under /workspaces: the recipient has no access
 // to the workspace yet, which is the whole point of the link.
 app.use("/api/invites", dashboardCors, requireUnlocked, inviteRoutes);
-// The notification panel. Scoped to the signed-in user rather than a workspace
-// prefix: the bell is one merged feed across every workspace they belong to,
-// plus account-level notices that belong to no workspace at all.
+
 app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes);
 app.use("/api/notes", dashboardCors, requireUnlocked, noteRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
@@ -262,11 +243,9 @@ app.use("/api/admin/referrals", dashboardCors, requireUnlocked, adminReferralRou
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 app.use("/api/referrals", dashboardCors, requireUnlocked, referralRoutes);
-// Third-party webhooks: no CORS (never called from a browser) and no JWT —
-// the signature check in the route itself is the credential.
+
 app.use("/api/webhooks", webhookRoutes);
-// Vercel Cron: same reasoning as the webhooks above — never called from a
-// browser, and `CRON_SECRET` in the route is the credential.
+
 app.use("/api/cron", cronRoutes);
 
 app.use("/api/internal/forms", formsInternalRoutes);

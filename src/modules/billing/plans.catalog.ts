@@ -51,6 +51,7 @@ export type PlanCatalogEntry = {
   maxDashboards: number;
   maxEmbeds: number;
   maxGoalTargets: number;
+  auditLogDays: number;
 };
 
 export type SearchInsightsAccess = "none" | "limited" | "full";
@@ -105,6 +106,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 1,
     maxEmbeds: 0,
     maxGoalTargets: 2,
+    auditLogDays: 7,
   },
   {
     slug: "starter",
@@ -123,6 +125,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "100 Google index checks / month",
       "10 custom dashboards & 5 embedded widgets",
       "10 goal targets",
+      "Audit log with 30 days of history",
     ],
     sortOrder: 1,
     allowedRanges: ALL_RANGES,
@@ -147,6 +150,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 10,
     maxEmbeds: 5,
     maxGoalTargets: 10,
+    auditLogDays: 30,
   },
   {
     slug: "pro",
@@ -166,6 +170,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "1,000 Google index checks / month",
       "50 custom dashboards & 100 embedded widgets",
       "30 goal targets",
+      "Audit log with 1 year of history",
     ],
     sortOrder: 2,
     allowedRanges: ALL_RANGES,
@@ -190,6 +195,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxDashboards: 50,
     maxEmbeds: 100,
     maxGoalTargets: 30,
+    auditLogDays: 365,
   },
 ];
 
@@ -223,6 +229,7 @@ const SUPERSEDES: Record<string, string[]> = {
   "50 custom dashboards & 100 embedded widgets": ["10 custom dashboards & 5 embedded widgets", "1 custom dashboard"],
   "10 goal targets": ["2 goal targets"],
   "30 goal targets": ["10 goal targets", "2 goal targets"],
+  "Audit log with 1 year of history": ["Audit log with 30 days of history"],
 };
 
  

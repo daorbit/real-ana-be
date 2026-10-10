@@ -12,6 +12,9 @@ import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { emit } from "../../modules/notifications/notify.service.js";
+import { recordForeignAudit } from "../../modules/audit/audit.service.js";
+import { FORMS_ACTIONS, type AuditAction } from "../../modules/audit/actions.js";
+import { Types } from "mongoose";
 
 
 const router = Router();
@@ -241,6 +244,36 @@ router.post(
       workspaceId: req.params.workspaceId,
       data: { formTitle, formId, answers },
       link: "/app/lead-capture",
+    });
+
+    res.status(204).end();
+  }),
+);
+
+router.post(
+  "/audit/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+
+    const { workspaceId } = req.params;
+    const body = req.body ?? {};
+    const action = String(body.action ?? "") as AuditAction;
+
+    if (!Types.ObjectId.isValid(workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    if (!FORMS_ACTIONS.includes(action)) return res.status(400).json({ error: "unknown action" });
+
+    const target = body.target && typeof body.target === "object" ? body.target : undefined;
+    const str = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
+
+    await recordForeignAudit({
+      action,
+      workspaceId,
+      actorId: str(body.actorId, 24) || null,
+      target: target ? { kind: str(target.kind, 40) || "form", id: str(target.id, 64), label: str(target.label, 160) } : undefined,
+      meta: body.meta && typeof body.meta === "object" ? body.meta : undefined,
+      source: "forms",
+      ip: str(body.ip, 64),
+      userAgent: str(body.userAgent, 400),
     });
 
     res.status(204).end();
