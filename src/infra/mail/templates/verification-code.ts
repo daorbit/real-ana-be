@@ -1,35 +1,30 @@
-import {
-  bannerShell,
-  codeBox,
-  greetingLine,
-  line,
-  signOff,
-  small,
-  type BannerName,
-} from "./shared.js";
+import { bigCode, cardLogo, fineprint, layout, pill, rule, strong, text, title } from "./layout.js";
 
-const BANNER: BannerName = "verification-code";
+export function verificationCodeHtml(code: string, minutes: number, email?: string): string {
+  const who = email ? ` for ${strong(email)}` : "";
 
-export function verificationCodeHtml(code: string, minutes: number, name?: string): string {
-  return bannerShell(
-    BANNER,
-    `${greetingLine(name)}
-     ${line("We received a request to verify your Quantalog account. Here is your one-time password (OTP):")}
-     ${codeBox(code, BANNER)}
-     ${small(`This code expires in ${minutes} minutes.`)}
-     ${line("If you didn't request this, you can safely ignore this email. No account has been created.", 18)}
-     ${signOff()}`,
-  );
+  return layout({
+    preheader: `Your Quantalog verification code is ${code}. It expires in ${minutes} minutes.`,
+    label: "Account security",
+    head: `${cardLogo()}
+      ${title("Verify your email")}`,
+    body: `${text(`Your Quantalog verification code is <span style="font-weight:600;color:#1d1d1f">${code}</span>. Use it to finish creating your account${who}.`)}
+      ${bigCode(code)}
+      ${pill(`Expires in ${minutes} minutes`)}
+      ${rule()}
+      ${fineprint("If you didn't request this code, you can ignore this email. Someone may have typed your address by mistake. Never share this code with anyone.")}`,
+    legal: "You received this email because a verification code was requested for this address.",
+  });
 }
 
 export function verificationCodeText(code: string, minutes: number, name?: string): string {
-  return `Hello${name?.trim() ? ` ${name.trim()}` : ""},
+  return `Hi${name?.trim() ? ` ${name.trim()}` : ""},
 
-We received a request to verify your Quantalog account. Your verification code is ${code}
+Your Quantalog verification code is ${code}
 
-It expires in ${minutes} minutes. Enter it on the signup page to finish creating your account.
+Use it to finish creating your account. It expires in ${minutes} minutes and can only be used once.
 
-If you didn't request this, you can safely ignore this email. No account has been created.
+If you didn't request this code, you can ignore this email. Someone may have typed your address by mistake. Never share this code with anyone.
 
 The Quantalog Team`;
 }

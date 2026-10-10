@@ -215,16 +215,11 @@ export async function sendOtpEmail(
   code: string,
   minutes: number,
 ): Promise<void> {
-  const banner = bannerAttachment("verification-code");
-
   await sendOne(
     to,
     `${code} is your Quantalog verification code`,
     verificationCodeText(code, minutes, to.name),
-    verificationCodeHtml(code, minutes, to.name),
-    // The markup references the banner by cid, so the part has to ride along —
-    // same contract as the logo.
-    banner ? [banner] : [],
+    verificationCodeHtml(code, minutes, to.email),
   );
 }
 
