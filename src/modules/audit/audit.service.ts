@@ -183,37 +183,10 @@ export async function workspaceAuditPage(workspaceId: string, options: Workspace
   return presentPage(rows, limit);
 }
 
-const TREND_DAYS = 14;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function utcDayKey(at: Date) {
-  return at.toISOString().slice(0, 10);
-}
-
-async function dailyCounts(workspaceId: string, since: Date) {
-  const today = new Date();
-  const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - (TREND_DAYS - 1) * DAY_MS);
-  const from = start > since ? start : since;
-
-  const rows = await AuditLog.aggregate<{ _id: string; count: number }>([
-    { $match: { workspaceId: new Types.ObjectId(workspaceId), createdAt: { $gte: from } } },
-    { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
-  ]);
-  const byDay = new Map(rows.map((r) => [r._id, r.count]));
-
-  return Array.from({ length: TREND_DAYS }, (_, i) => {
-    const date = utcDayKey(new Date(start.getTime() + i * DAY_MS));
-    return { date, count: byDay.get(date) ?? 0 };
-  });
-}
-
 export async function workspaceAuditSummary(workspaceId: string, since: Date) {
-  const [groups, days] = await Promise.all([
-    AuditLog.aggregate<{ _id: string; count: number; actors: Types.ObjectId[]; lastAt: Date }>([
-      { $match: { workspaceId: new Types.ObjectId(workspaceId), createdAt: { $gte: since } } },
-      { $group: { _id: "$action", count: { $sum: 1 }, actors: { $addToSet: "$actorId" }, lastAt: { $max: "$createdAt" } } },
-    ]),
-    dailyCounts(workspaceId, since),
+  const groups = await AuditLog.aggregate<{ _id: string; count: number; actors: Types.ObjectId[]; lastAt: Date }>([
+    { $match: { workspaceId: new Types.ObjectId(workspaceId), createdAt: { $gte: since } } },
+    { $group: { _id: "$action", count: { $sum: 1 }, actors: { $addToSet: "$actorId" }, lastAt: { $max: "$createdAt" } } },
   ]);
 
   const byCategory: Record<string, number> = {};
@@ -229,7 +202,7 @@ export async function workspaceAuditSummary(workspaceId: string, since: Date) {
     if (!lastAt || group.lastAt > lastAt) lastAt = group.lastAt;
   }
 
-  return { total, people: actors.size, lastAt, byCategory, days };
+  return { total, people: actors.size, lastAt, byCategory };
 }
 
 export async function accountAuditPage(userId: string, options: PageOptions) {
