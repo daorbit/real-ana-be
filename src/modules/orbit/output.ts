@@ -124,9 +124,26 @@ export function linkifyBareUrls(text: string): string {
   );
 }
 
+const WRAPPER_FENCE_LANGS = new Set(["", "json", "markdown", "md", "text", "txt", "plaintext"]);
+
+export function stripWrapperFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```([a-z]*)\s*\n?([\s\S]*?)\n?\s*```$/i.exec(trimmed);
+  if (!fenced || !WRAPPER_FENCE_LANGS.has(fenced[1].toLowerCase())) return trimmed;
+  return fenced[2].trim();
+}
+
+const EDIT_PREAMBLE_RE =
+  /^(?:sure|certainly|of course|okay|ok)?[,!.]?\s*here(?:'s| is| are)\s+(?:the|your|a)\s+(?:corrected|revised|edited|fixed|formatted|reformatted|updated|polished|proofread|improved|cleaned[- ]up|rewritten)\b[^\n]{0,60}:[ \t]*\n+/i;
+
+function stripEditPreamble(text: string): string {
+  const stripped = text.replace(EDIT_PREAMBLE_RE, "");
+  return stripWrapperFence(stripped);
+}
+
 export function tidyProse(text: string): string {
   return (
-    linkifyBareUrls(reformatSearchDump(stripCodeFence(text)))
+    linkifyBareUrls(reformatSearchDump(stripEditPreamble(stripWrapperFence(text))))
       // Zero-width space, joiner, non-joiner, BOM. Invisible, and they break
       // search, copy and word wrapping wherever they land.
       .replace(/[​-‍﻿]/g, "")
@@ -216,9 +233,11 @@ function fromEnvelope(
     .filter((s) => s.length > 0 && s.length <= maxSuggestionChars)
     .slice(0, maxSuggestions);
 
-  if (suggestions.length > 0) return { reply: rawReply, suggestions };
+  if (suggestions.length > 0) {
+    return { reply: splitFollowUpsMarker(rawReply)?.reply || rawReply, suggestions };
+  }
 
-  const split = splitTrailingQuestions(rawReply);
+  const split = splitAnswer(rawReply);
   return {
     reply: split.reply,
     suggestions: split.questions.slice(0, maxSuggestions),
@@ -234,6 +253,12 @@ function asProse(
   text: string,
   { maxSuggestions, maxReplyChars }: Limits,
 ): ModelAnswer | null {
+  const marked = splitFollowUpsMarker(text);
+  if (marked?.reply) {
+    const body = tidyProse(marked.reply).slice(0, maxReplyChars);
+    if (body) return { reply: body, suggestions: marked.questions.slice(0, maxSuggestions) };
+  }
+
   const tidied = tidyProse(text).slice(0, maxReplyChars);
   if (!tidied) return null;
 
@@ -244,6 +269,29 @@ function asProse(
   };
 }
 
+
+const FOLLOW_UPS_MARKER_RE = /\n?[ \t]*(?:\*\*|`)?<{2,3}\s*follow[\s_-]?ups?\s*>{2,3}(?:\*\*|`)?[ \t]*:?/i;
+
+function splitFollowUpsMarker(text: string): { reply: string; questions: string[] } | null {
+  const match = FOLLOW_UPS_MARKER_RE.exec(text);
+  if (!match) return null;
+
+  const reply = text.slice(0, match.index).trim();
+  const questions = text
+    .slice(match.index + match[0].length)
+    .split("\n")
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .map((l) => l.replace(/^["'“]|["'”]$/g, "").trim())
+    .filter((l) => l.length > 0 && l.length <= 80);
+
+  return { reply, questions };
+}
+
+function splitAnswer(reply: string): { reply: string; questions: string[] } {
+  const marked = splitFollowUpsMarker(reply);
+  if (marked?.reply) return marked;
+  return splitTrailingQuestions(reply);
+}
 
 function splitTrailingQuestions(reply: string): { reply: string; questions: string[] } {
 

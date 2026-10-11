@@ -1,6 +1,11 @@
 
 import sharp from "sharp";
-import { orbitPromptFor, orbitPromptWithData, orbitPromptWithDocument } from "./prompt.js";
+import {
+  orbitPromptFor,
+  orbitPromptWithData,
+  orbitPromptWithDocument,
+  withFinalReminder,
+} from "./prompt.js";
 import { docIndex, relevantKnowledge, selectedHeadings } from "./retrieval.js";
 import { cloudflareChat, cloudflareVisionChat, cloudflareGenerateImage } from "./cloudflare-ai.js";
 import { sanitiseModelAnswer } from "./output.js";
@@ -318,6 +323,8 @@ export async function askOrbit(
   if (options.documentText) {
     prompt = orbitPromptWithDocument(prompt, options.documentText, options.documentName || "attachment");
   }
+
+  if (!options.systemPrompt) prompt = withFinalReminder(prompt);
 
   let lastStatus = 502;
   const startedAt = Date.now();
