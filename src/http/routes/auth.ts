@@ -23,6 +23,7 @@ import {
 import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail, sendAccountDeletedEmail } from "../../infra/mail/mailer.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
 import { claimAttempt, clearAttempts } from "../../modules/security/attempt-lock.service.js";
+import { hasOwnershipFactor, rejectUnconfirmed, sendThrottled } from "../../modules/security/confirm-identity.service.js";
 import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
 import { recordAudit, accountAuditPage, parseCursor } from "../../modules/audit/audit.service.js";
@@ -39,49 +40,6 @@ function randomBackupCode(): string {
   const part = () =>
     Array.from({ length: 4 }, () => alphabet[randomInt(alphabet.length)]).join("");
   return `${part()}-${part()}`;
-}
-
-function sendThrottled(res: Response, lockedUntil: Date): void {
-  res.status(429).json({
-    error: "too many attempts — try again later",
-    retryAt: lockedUntil.toISOString(),
-  });
-}
-
-async function confirmOwnership(
-  user: InstanceType<typeof User>,
-  body: { password?: unknown; code?: unknown },
-): Promise<boolean> {
-  if (user.passwordHash) return bcrypt.compare(String(body.password ?? ""), user.passwordHash);
-
-  const code = String(body.code ?? "").replace(/\s+/g, "");
-  if (user.totpEnabled && user.totpSecretEnc && /^\d{6}$/.test(code)) {
-    const secret = decryptSecret(user.totpSecretEnc);
-    if (secret && (await verifyTotpCode(code, secret))) return true;
-  }
-  if (user.pinHash && /^\d{4}$/.test(code)) return bcrypt.compare(code, user.pinHash);
-  return false;
-}
-
-async function rejectUnconfirmed(
-  user: InstanceType<typeof User>,
-  body: { password?: unknown; code?: unknown },
-  res: Response,
-): Promise<boolean> {
-  const throttleKey = `confirm:${user.id}`;
-  const lockedUntil = await claimAttempt(throttleKey);
-  if (lockedUntil) {
-    sendThrottled(res, lockedUntil);
-    return true;
-  }
-
-  if (await confirmOwnership(user, body)) {
-    await clearAttempts(throttleKey);
-    return false;
-  }
-
-  res.status(401).json({ error: user.passwordHash ? "incorrect password" : "incorrect PIN or code" });
-  return true;
 }
 
 /**
@@ -1160,8 +1118,7 @@ router.post("/me/delete", requireAuth, blockDemoWrites, async (req: AuthedReques
   if (confirmEmail !== user.email.toLowerCase())
     return res.status(400).json({ error: "type your email address to confirm" });
 
-  const hasOwnershipFactor = Boolean(user.passwordHash || user.totpEnabled || user.pinHash);
-  if (hasOwnershipFactor && (await rejectUnconfirmed(user, req.body ?? {}, res))) return;
+  if (hasOwnershipFactor(user) && (await rejectUnconfirmed(user, req.body ?? {}, res))) return;
 
   const recipient = { email: user.email, name: user.name };
   let workspacesDeleted: number;

@@ -84,6 +84,7 @@ export const AUDIT_ACTIONS = {
   "api_key.created": "developers",
   "api_key.updated": "developers",
   "api_key.revoked": "developers",
+  "api_key.revealed": "developers",
 
   "form.created": "forms",
   "form.duplicated": "forms",

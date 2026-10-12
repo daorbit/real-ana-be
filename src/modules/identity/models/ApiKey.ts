@@ -7,6 +7,7 @@ const apiKeySchema = new Schema(
     name: { type: String, default: "Default key" },
     keyHash: { type: String, required: true, index: true }, // sha256 of raw key
     prefix: { type: String, required: true }, // e.g. sk_live_ab12 (for display)
+    keyEnc: { type: String, default: "", select: false },
     lastUsedAt: { type: Date },
     requestCount: { type: Number, default: 0 },
     expiresAt: { type: Date, default: null },

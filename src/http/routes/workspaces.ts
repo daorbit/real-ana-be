@@ -27,6 +27,8 @@ import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
 import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
+import { decryptApiKey, loadRevealTarget } from "../../modules/identity/api-key-reveal.service.js";
+import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
 import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
@@ -1077,13 +1079,14 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
   if (expiresAt === undefined) {
     return res.status(400).json({ error: "expiresInDays must be one of 7, 30, 60, 90, 180, 365 or null" });
   }
-  const { raw, keyHash, prefix } = generateKey();
+  const { raw, keyHash, prefix, keyEnc } = generateKey();
   const key = await ApiKey.create({
     workspaceId: ws.id,
     userId: req.userId,
     name: name || "Default key",
     keyHash,
     prefix,
+    keyEnc,
     expiresAt,
   });
   await recordAudit(req, {
@@ -1099,6 +1102,7 @@ router.post("/:wid/keys", async (req: AuthedRequest, res: Response) => {
     key: raw,
     createdAt: key.createdAt,
     expiresAt: key.get("expiresAt") ?? null,
+    revealable: true,
   });
 });
 
@@ -1109,6 +1113,7 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
   const ws = access.workspace;
   const keys = await ApiKey.find({ workspaceId: ws.id, revoked: false })
     .sort({ createdAt: -1 })
+    .select("+keyEnc")
     .populate<{ userId: { name?: string; email?: string } | null }>("userId", "name email");
   res.json(
     keys.map((k) => ({
@@ -1120,8 +1125,32 @@ router.get("/:wid/keys", async (req: AuthedRequest, res: Response) => {
       createdAt: k.get("createdAt"),
       expiresAt: k.get("expiresAt") ?? null,
       createdBy: k.userId ? { name: k.userId.name, email: k.userId.email } : null,
+      revealable: Boolean(k.get("keyEnc")),
     })),
   );
+});
+
+router.post("/:wid/keys/:kid/reveal", async (req: AuthedRequest, res: Response) => {
+  if (req.impersonatorId) return res.status(403).json({ error: "not available while impersonating" });
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  const target = await loadRevealTarget(ws.id, String(req.params.kid), String(req.userId));
+  if (!target.ok) return res.status(target.status).json({ error: target.error });
+  const { key, user } = target;
+  if (!hasOwnershipFactor(user)) {
+    return res.status(400).json({ error: "set a password or PIN in Security settings to reveal keys" });
+  }
+  if (await rejectUnconfirmed(user, req.body ?? {}, res)) return;
+  const raw = decryptApiKey(key);
+  if (!raw) return res.status(409).json({ error: "this key can't be revealed — create a new key instead" });
+  await recordAudit(req, {
+    action: "api_key.revealed",
+    workspaceId: ws.id,
+    target: { kind: "api_key", id: key.id, label: key.name as string },
+    meta: { prefix: key.prefix as string },
+  });
+  res.set("Cache-Control", "no-store").json({ id: key.id, key: raw });
 });
 
 router.get("/:wid/keys/usage", async (req: AuthedRequest, res: Response) => {

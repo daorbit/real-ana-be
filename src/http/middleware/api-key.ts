@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Response, NextFunction, Request } from "express";
 import { nanoid } from "nanoid";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
+import { encryptSecret } from "../../shared/utils/crypto-box.js";
 import { recordKeyRequest, watchKeyFailures } from "../../modules/identity/api-key-usage.service.js";
 
 export interface ApiKeyRequest extends Request {
@@ -15,7 +16,7 @@ export function generateKey() {
   const raw = `sk_live_${nanoid(32)}`;
   const keyHash = crypto.createHash("sha256").update(raw).digest("hex");
   const prefix = raw.slice(0, 12); // sk_live_ab12
-  return { raw, keyHash, prefix };
+  return { raw, keyHash, prefix, keyEnc: encryptSecret(raw) };
 }
 
 export function hashKey(raw: string): string {
