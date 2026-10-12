@@ -1,4 +1,7 @@
-# Pings the forms service's upload-sweep route every minute.
+# Pings the forms service's sweep routes every minute: uploads and payments
+# (abandoned checkouts and stale booking holds) on every tick, partial drafts
+# once a day at 03:00 UTC. One trigger for all three, because the account is at
+# its cron trigger limit.
 #
 # A respondent who picks a file and then abandons the form leaves an asset in
 # Cloudinary that nothing will ever reference. The route deletes those once they

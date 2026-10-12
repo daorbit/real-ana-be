@@ -1,28 +1,29 @@
-/**
- * Calls the forms service's upload-sweep route on schedule. That route does the
- * work; this Worker exists only because the sweep's grace period is measured in
- * minutes and the platform hosting the route cannot schedule itself that often.
- * See wrangler.toml for why.
- */
-
 export interface Env {
-  /** Base URL of the forms backend — a different deployment to the others here. */
   FORMS_API_BASE: string;
   CRON_SECRET: string;
 }
 
-/** Cold starts on the serverless side can time out a first attempt that would
- * have succeeded, so retry before giving up. Beyond this the next tick catches
- * up anyway: the route sweeps whatever is past its grace period rather than
- * whatever this tick missed. */
+interface Task {
+  path: string;
+  quietWhen: string;
+}
+
+const EVERY_TICK: Task[] = [
+  { path: "sweep-uploads", quietWhen: '"found":0' },
+  { path: "sweep-payments", quietWhen: '"deleted":0,"staleBookingHolds":0' },
+];
+
+const DAILY: Task = { path: "sweep-partials", quietWhen: '"deletedCount":0' };
+const DAILY_HOUR_UTC = 3;
+
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function callCronRoute(env: Env): Promise<void> {
-  const url = `${env.FORMS_API_BASE.replace(/\/$/, "")}/api/cron/sweep-uploads`;
+async function callCronRoute(env: Env, task: Task): Promise<void> {
+  const url = `${env.FORMS_API_BASE.replace(/\/$/, "")}/api/cron/${task.path}`;
 
   let lastError: Error | undefined;
 
@@ -34,39 +35,47 @@ async function callCronRoute(env: Env): Promise<void> {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
-      // The route returns its error inside the JSON body, so read it either way
-      // rather than reporting a bare status code.
       const body = await response.text();
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${body}`);
       }
 
-      // Quiet ticks are the norm — most minutes have nothing to sweep — so only
-      // say something when files actually went.
-      if (!body.includes('"found":0')) {
-        console.log(`sweep-uploads tick ok: ${body}`);
+      if (!body.includes(task.quietWhen)) {
+        console.log(`${task.path} tick ok: ${body}`);
       }
       return;
     } catch (error) {
       lastError = error as Error;
-      console.warn(`sweep-uploads tick attempt ${attempt}/${MAX_ATTEMPTS} failed: ${lastError.message}`);
+      console.warn(`${task.path} tick attempt ${attempt}/${MAX_ATTEMPTS} failed: ${lastError.message}`);
 
       if (attempt < MAX_ATTEMPTS) await sleep(RETRY_DELAY_MS);
     }
   }
 
-  // Throwing marks the invocation failed in the dashboard, which is what makes
-  // a persistent outage visible instead of silently dropping every tick.
-  throw new Error(`sweep-uploads tick failed after ${MAX_ATTEMPTS} attempts: ${lastError?.message}`);
+  throw new Error(`${task.path} tick failed after ${MAX_ATTEMPTS} attempts: ${lastError?.message}`);
+}
+
+function tasksFor(scheduledTime: number): Task[] {
+  const at = new Date(scheduledTime);
+  const daily = at.getUTCHours() === DAILY_HOUR_UTC && at.getUTCMinutes() === 0;
+  return daily ? [...EVERY_TICK, DAILY] : EVERY_TICK;
+}
+
+async function runAll(env: Env, tasks: Task[]): Promise<void> {
+  const results = await Promise.allSettled(tasks.map((task) => callCronRoute(env, task)));
+  const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+  if (failed.length) {
+    throw new Error(failed.map((r) => (r.reason as Error).message).join(" | "));
+  }
 }
 
 export default {
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (!env.CRON_SECRET) {
       throw new Error("CRON_SECRET is not set — refusing to run");
     }
 
-    ctx.waitUntil(callCronRoute(env));
+    ctx.waitUntil(runAll(env, tasksFor(controller.scheduledTime)));
   },
 } satisfies ExportedHandler<Env>;
