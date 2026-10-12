@@ -12,7 +12,7 @@ export async function loadRevealTarget(
   userId: string,
 ): Promise<RevealTarget> {
   const [key, user] = await Promise.all([
-    ApiKey.findOne({ _id: keyId, workspaceId, revoked: false }).select("+keyEnc name prefix"),
+    ApiKey.findOne({ _id: keyId, workspaceId, revoked: false }).select("name prefix keyEnc"),
     User.findById(userId).select("passwordHash pinHash totpEnabled totpSecretEnc"),
   ]);
   if (!key) return { ok: false, status: 404, error: "key not found" };
