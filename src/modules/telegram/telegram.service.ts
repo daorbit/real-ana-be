@@ -100,7 +100,7 @@ async function addChat(workspaceId: string, chat: TelegramChatInfo, via: Telegra
   if (chats.filter((c) => c.via === via).length >= MAX_CHATS) return false;
   await TelegramConnection.updateOne(
     { workspaceId },
-    { $push: { chats: { ...chat, via, linkedAt: new Date() } }, $setOnInsert: { workspaceId } },
+    { $push: { chats: { ...chat, via, linkedAt: new Date() } } },
     { upsert: true }
   );
   return true;
@@ -115,7 +115,6 @@ export async function setOwnBot(workspaceId: string, token: string): Promise<Tel
     {
       $set: { ownBot: { tokenEnc: encryptSecret(trimmed), username } },
       $pull: { chats: { via: "own" } },
-      $setOnInsert: { workspaceId },
     },
     { upsert: true }
   );

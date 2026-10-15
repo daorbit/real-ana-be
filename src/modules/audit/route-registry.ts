@@ -71,6 +71,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "DELETE", pattern: route(`/reports/${ID}`), action: "report.deleted", kind: "report", snapshot: byWorkspace(ReportSchedule, "name") },
   { method: "POST", pattern: route(`/reports/${ID}/test`), action: "report.test_sent", kind: "report", snapshot: byWorkspace(ReportSchedule, "name") },
   { method: "POST", pattern: route(`/reports/${ID}/test-whatsapp`), action: "report.test_sent", kind: "report", snapshot: byWorkspace(ReportSchedule, "name") },
+  { method: "POST", pattern: route(`/reports/${ID}/test-telegram`), action: "report.test_sent", kind: "report", snapshot: byWorkspace(ReportSchedule, "name") },
 
   { method: "POST", pattern: route("/segments"), action: "segment.created", kind: "segment" },
   { method: "PATCH", pattern: route(`/segments/${ID}`), action: "segment.updated", kind: "segment", snapshot: byWorkspace(Segment, "name") },
