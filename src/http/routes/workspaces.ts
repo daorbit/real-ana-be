@@ -38,6 +38,7 @@ import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
+import { bareDomain } from "../../modules/backlinks/domains.js";
 
 const STATS_CACHE_MS = 10_000;
 const statsCache = createTtlCache<Record<string, unknown>>(STATS_CACHE_MS, 500);
@@ -304,6 +305,52 @@ router.patch(
 
     site.set("trackerOptions", parseTrackerOptions(req.body));
     await site.save();
+    res.json(site);
+  },
+);
+
+const DOMAIN_PATTERN = /^(localhost|\d{1,3}(\.\d{1,3}){3}|[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)$/;
+
+router.patch(
+  "/:wid/sites/:siteId",
+  async (req: AuthedRequest, res: Response) => {
+    const access = await resolveAccess(req, "editor");
+    if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+    const ws = access.workspace;
+    const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
+    if (!site) return res.status(404).json({ error: "site not found" });
+
+    const { name, domain } = req.body ?? {};
+    const before = { name: site.name as string, domain: site.domain as string };
+
+    if (name !== undefined) {
+      const nextName = String(name).trim().slice(0, 60);
+      if (!nextName) return res.status(400).json({ error: "name required" });
+      site.set("name", nextName);
+    }
+
+    if (domain !== undefined) {
+      const nextDomain = bareDomain(String(domain)).replace(/\.$/, "");
+      if (site.platform !== "app" && !nextDomain) return res.status(400).json({ error: "domain required" });
+      if (nextDomain && (nextDomain.length > 253 || !DOMAIN_PATTERN.test(nextDomain)))
+        return res.status(400).json({ error: "enter a valid domain, like example.com" });
+      if (nextDomain && nextDomain !== before.domain) {
+        const taken = await Site.exists({ workspaceId: ws.id, domain: nextDomain, siteId: { $ne: site.siteId } });
+        if (taken) return res.status(409).json({ error: "a site with that domain already exists in this workspace" });
+      }
+      site.set("domain", nextDomain);
+    }
+
+    await site.save();
+    await recordAudit(req, {
+      action: "site.updated",
+      workspaceId: ws.id,
+      target: { kind: "site", id: site.siteId as string, label: site.name as string },
+      meta: {
+        ...(before.name !== site.name ? { fromName: before.name, toName: site.name as string } : {}),
+        ...(before.domain !== site.domain ? { fromDomain: before.domain, toDomain: site.domain as string } : {}),
+      },
+    });
     res.json(site);
   },
 );

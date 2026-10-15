@@ -42,6 +42,7 @@ export const AUDIT_ACTIONS = {
   "media.bulk_deleted": "workspace",
 
   "site.added": "sites",
+  "site.updated": "sites",
   "site.removed": "sites",
 
   "goal.created": "analytics",
