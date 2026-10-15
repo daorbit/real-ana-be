@@ -4,7 +4,7 @@ import { ReportSchedule, FREQUENCIES, computeNextRun, type Frequency } from "../
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { User } from "../../modules/identity/models/User.js";
 import { canCreateReportSchedule, canConfigureReport, canUseWhatsAppReports } from "../../modules/billing/quota.service.js";
-import { runSchedule, testWhatsApp } from "../../modules/reports/report-runner.js";
+import { runSchedule, testTelegram, testWhatsApp } from "../../modules/reports/report-runner.js";
 import { normalizePhone, whatsappConfigured, sessionStatus } from "../../infra/messaging/whatsapp.js";
 import { mailConfigured } from "../../infra/mail/mailer.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
@@ -40,7 +40,12 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
       label: p.label ?? "",
       optedOut: Boolean(p.optedOutAt),
     })),
-    channels: schedule.get("channels") ?? { email: true, whatsapp: false },
+    channels: {
+      email: schedule.get("channels")?.email ?? true,
+      whatsapp: schedule.get("channels")?.whatsapp ?? false,
+      telegram: schedule.get("channels")?.telegram ?? false,
+    },
+    telegramChatIds: schedule.get("telegramChatIds") ?? [],
     include: schedule.get("include"),
     attachXlsx: schedule.get("attachXlsx"),
     enabled: schedule.get("enabled"),
@@ -57,7 +62,7 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
  * can't see going out is a report you can't tell is broken.
  */
 async function readBody(req: AuthedRequest): Promise<
-  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; phones: { phone: string; label: string }[]; channels: { email: boolean; whatsapp: boolean }; include: Record<string, boolean>; attachXlsx: boolean } }
+  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; phones: { phone: string; label: string }[]; telegramChatIds: string[]; channels: { email: boolean; whatsapp: boolean; telegram: boolean }; include: Record<string, boolean>; attachXlsx: boolean } }
   | { ok: false; error: string }
 > {
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
@@ -103,9 +108,16 @@ async function readBody(req: AuthedRequest): Promise<
   const channels = {
     email: req.body?.channels?.email !== false,
     whatsapp: Boolean(req.body?.channels?.whatsapp),
+    telegram: Boolean(req.body?.channels?.telegram),
   };
-  if (!channels.email && !channels.whatsapp)
+  if (!channels.email && !channels.whatsapp && !channels.telegram)
     return { ok: false, error: "pick at least one delivery channel" };
+
+  const telegramChatIds: string[] = Array.isArray(req.body?.telegramChatIds)
+    ? [...new Set<string>(req.body.telegramChatIds.map((c: unknown) => String(c).trim()).filter((c: string) => /^-?\d{1,20}$/.test(c)))].slice(0, 20)
+    : [];
+  if (channels.telegram && !telegramChatIds.length)
+    return { ok: false, error: "pick at least one Telegram chat, or turn Telegram delivery off" };
 
   /**
    * WhatsApp goes to the account owner's own mobile, and nowhere else.
@@ -132,8 +144,22 @@ async function readBody(req: AuthedRequest): Promise<
 
   return {
     ok: true,
-    value: { name, siteIds, frequency: frequency as Frequency, emails, phones, channels, include, attachXlsx: req.body?.attachXlsx !== false },
+    value: {
+      name,
+      siteIds,
+      frequency: frequency as Frequency,
+      emails,
+      phones,
+      telegramChatIds: channels.telegram ? telegramChatIds : [],
+      channels,
+      include,
+      attachXlsx: req.body?.attachXlsx !== false,
+    },
   };
+}
+
+function recipientCount(value: { emails: string[]; telegramChatIds: string[] }): number {
+  return value.emails.length + value.telegramChatIds.length;
 }
 
 router.get("/", async (req: AuthedRequest, res: Response) => {
@@ -154,7 +180,7 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
   const allowed = await canCreateReportSchedule(ws.id);
   if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
 
-  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
+  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, recipientCount(parsed.value), parsed.value.channels.whatsapp);
   if (!configurable.ok) return planLimit(res, configurable.error, configurable.limit);
 
   const schedule = await ReportSchedule.create({
@@ -164,6 +190,7 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
     frequency: parsed.value.frequency,
     recipients: parsed.value.emails.map((email) => ({ email, unsubToken: nanoid(32) })),
     phoneRecipients: parsed.value.phones,
+    telegramChatIds: parsed.value.telegramChatIds,
     channels: parsed.value.channels,
     include: parsed.value.include,
     attachXlsx: parsed.value.attachXlsx,
@@ -183,7 +210,7 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
   const parsed = await readBody(req);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error });
 
-  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, parsed.value.emails.length, parsed.value.channels.whatsapp);
+  const configurable = await canConfigureReport(ws.id, parsed.value.frequency, recipientCount(parsed.value), parsed.value.channels.whatsapp);
   if (!configurable.ok) return planLimit(res, configurable.error, configurable.limit);
 
   // Existing recipients keep their unsubscribe token, and their unsubscribed
@@ -204,6 +231,7 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
     siteIds: parsed.value.siteIds,
     frequency: parsed.value.frequency,
     channels: parsed.value.channels,
+    telegramChatIds: parsed.value.telegramChatIds,
     phoneRecipients: parsed.value.phones.map((p) => {
       const prior = existingPhones.get(p.phone);
       return prior ? { ...p, optedOutAt: prior.optedOutAt } : p;
@@ -319,6 +347,25 @@ router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
   try {
     const messageId = await testWhatsApp(schedule, requested);
     res.json({ ok: true, sentTo: requested, messageId });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
+});
+
+router.post("/:id/test-telegram", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
+
+  const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
+  if (!schedule) return res.status(404).json({ error: "schedule not found" });
+  if (!(schedule.get("channels")?.telegram)) return res.status(400).json({ error: "Telegram delivery is off for this report" });
+
+  try {
+    const result = await testTelegram(schedule);
+    if (!result.telegramSent.length) {
+      return res.status(502).json({ error: result.telegramFailed[0]?.error ?? "could not send to Telegram" });
+    }
+    res.json({ ok: true, sentTo: result.telegramSent, failed: result.telegramFailed });
   } catch (e) {
     res.status(502).json({ error: (e as Error).message });
   }

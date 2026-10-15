@@ -92,7 +92,9 @@ const reportScheduleSchema = new Schema(
     channels: {
       email: { type: Boolean, default: true },
       whatsapp: { type: Boolean, default: false },
+      telegram: { type: Boolean, default: false },
     },
+    telegramChatIds: { type: [String], default: [] },
 
     /**
      * What goes in the email. All three off would send a greeting and nothing

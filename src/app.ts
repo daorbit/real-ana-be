@@ -37,6 +37,8 @@ import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
 import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
+import telegramRoutes from "./http/routes/telegram.js";
+import telegramWebhookRoutes from "./http/routes/telegram-webhook.js";
 import segmentRoutes from "./http/routes/segments.js";
 import brandingRoutes from "./http/routes/branding.js";
 import navPrefsRoutes from "./http/routes/nav-prefs.js";
@@ -220,6 +222,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorBriefRoutes
 app.use("/api/workspaces", dashboardCors, requireUnlocked, backlinkRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, requireUnlocked, reportRoutes);
+app.use("/api/workspaces/:wid/telegram", dashboardCors, requireUnlocked, telegramRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, requireUnlocked, segmentRoutes);
 app.use("/api/workspaces/:wid/branding", dashboardCors, requireUnlocked, brandingRoutes);
@@ -244,6 +247,7 @@ app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 app.use("/api/referrals", dashboardCors, requireUnlocked, referralRoutes);
 
+app.use("/api/webhooks/telegram", telegramWebhookRoutes);
 app.use("/api/webhooks", webhookRoutes);
 
 app.use("/api/cron", cronRoutes);

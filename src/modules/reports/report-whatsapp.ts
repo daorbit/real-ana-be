@@ -1,5 +1,6 @@
 import { sendWhatsApp } from "../../infra/messaging/whatsapp.js";
 import type { SeoRow } from "./report-xlsx.js";
+import { shortenUrl, signed, trend } from "./report-chat-text.js";
 
 /**
  * The scheduled report, as a WhatsApp message.
@@ -25,13 +26,6 @@ export type WhatsAppReportInput = {
   dashboardUrl?: string;
   isTest?: boolean;
 };
-
-/** An arrow and a signed percentage, or nothing when there's no prior period. */
-function trend(delta: number | null | undefined): string {
-  if (delta === null || delta === undefined || !Number.isFinite(delta)) return "";
-  if (delta === 0) return " (no change)";
-  return ` (${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)}%)`;
-}
 
 /**
  * Build the message body.
@@ -71,22 +65,3 @@ export async function sendWhatsAppReport(input: WhatsAppReportInput): Promise<st
   return sendWhatsApp(input.to, buildWhatsAppReport(input));
 }
 
-function signed(n: number): string {
-  return n > 0 ? `+${n}` : String(n);
-}
-
-/**
- * A URL short enough to read in a chat bubble.
- *
- * The host is dropped — every page in a report belongs to the same site, so
- * repeating the domain on every line costs width and says nothing.
- */
-function shortenUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const path = parsed.pathname === "/" ? "/" : parsed.pathname.replace(/\/$/, "");
-    return path.length > 40 ? `${path.slice(0, 37)}…` : path;
-  } catch {
-    return url.length > 40 ? `${url.slice(0, 37)}…` : url;
-  }
-}

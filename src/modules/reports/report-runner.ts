@@ -11,6 +11,8 @@ import { renderReportPage } from "./report-html.js";
 import { buildDigest } from "./digest.js";
 import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
 import { emit } from "../notifications/notify.service.js";
+import { sendTelegramReport, type TelegramReportInput } from "./report-telegram.js";
+import { deliveryFor } from "../telegram/telegram.service.js";
 
 
 const BATCH_LIMIT = 25;
@@ -166,7 +168,44 @@ export type SendOutcome = {
   /** Phone numbers the report reached, and the ones it didn't. */
   whatsappSent: string[];
   whatsappFailed: { phone: string; error: string }[];
+  telegramSent: string[];
+  telegramFailed: { chat: string; error: string }[];
 };
+
+type TelegramResult = Pick<SendOutcome, "telegramSent" | "telegramFailed">;
+
+async function deliverTelegram(
+  schedule: InstanceType<typeof ReportSchedule>,
+  input: Omit<TelegramReportInput, "reportName" | "reportUrl">
+): Promise<TelegramResult> {
+  const result: TelegramResult = { telegramSent: [], telegramFailed: [] };
+  const wanted = new Set(schedule.get("telegramChatIds") as string[]);
+  if (!wanted.size) return result;
+
+  const delivery = await deliveryFor(String(schedule.get("workspaceId")));
+  if (!delivery) {
+    result.telegramFailed.push({ chat: "Telegram", error: "Telegram is not connected" });
+    return result;
+  }
+
+  const chats = delivery.chats.filter((c) => wanted.has(c.chatId));
+  if (!chats.length) {
+    result.telegramFailed.push({ chat: "Telegram", error: "none of this report's Telegram chats are linked any more" });
+    return result;
+  }
+
+  const full: TelegramReportInput = {
+    ...input,
+    reportName: schedule.get("name") as string,
+    reportUrl: `${apiUrl()}/api/public/reports/view/${schedule.get("viewToken")}`,
+  };
+  const settled = await Promise.allSettled(chats.map((c) => sendTelegramReport(delivery.token, c.chatId, full)));
+  settled.forEach((s, i) => {
+    if (s.status === "fulfilled") result.telegramSent.push(chats[i].title);
+    else result.telegramFailed.push({ chat: chats[i].title, error: (s.reason as Error).message });
+  });
+  return result;
+}
 
 
 export async function runSchedule(
@@ -237,11 +276,14 @@ export async function runSchedule(
     skipped: [],
     whatsappSent: [],
     whatsappFailed: [],
+    telegramSent: [],
+    telegramFailed: [],
   };
 
   const channels = (schedule.get("channels") ?? { email: true, whatsapp: false }) as {
     email: boolean;
     whatsapp: boolean;
+    telegram?: boolean;
   };
 
   if (channels.email) {
@@ -317,7 +359,33 @@ export async function runSchedule(
     }
   }
 
+  if (channels.telegram && !options.onlyTo) {
+    const telegram = await deliverTelegram(schedule, {
+      workspaceName: workspace.get("name") as string,
+      periodLabel: label,
+      metrics,
+      seo,
+      digest: digest ?? undefined,
+      dashboardUrl,
+      isTest: options.isTest,
+    });
+    outcome.telegramSent = telegram.telegramSent;
+    outcome.telegramFailed = telegram.telegramFailed;
+  }
+
   return outcome;
+}
+
+export async function testTelegram(schedule: InstanceType<typeof ReportSchedule>): Promise<TelegramResult> {
+  const view = await buildReportView(schedule);
+  return deliverTelegram(schedule, {
+    workspaceName: view.workspaceName,
+    periodLabel: view.periodLabel,
+    metrics: view.metrics,
+    seo: view.seo,
+    dashboardUrl: view.dashboardUrl,
+    isTest: true,
+  });
 }
 
 /**
@@ -370,6 +438,7 @@ export type RunSummary = {
   skipped: number;
   /** WhatsApp messages delivered across the batch. */
   whatsappSent: number;
+  telegramSent: number;
   errors: string[];
 };
 
@@ -379,7 +448,16 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
     .sort({ nextRunAt: 1 })
     .limit(BATCH_LIMIT);
 
-  const summary: RunSummary = { due: due.length, attempted: 0, sent: 0, failed: 0, skipped: 0, whatsappSent: 0, errors: [] };
+  const summary: RunSummary = {
+    due: due.length,
+    attempted: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    whatsappSent: 0,
+    telegramSent: 0,
+    errors: [],
+  };
 
   for (const schedule of due) {
     const lastSentAt = schedule.get("lastSentAt") as Date | undefined;
@@ -395,12 +473,14 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
     try {
       const outcome = await runSchedule(schedule);
       summary.sent += outcome.sent.length;
-      summary.failed += outcome.failed.length + outcome.whatsappFailed.length;
+      summary.failed += outcome.failed.length + outcome.whatsappFailed.length + outcome.telegramFailed.length;
       summary.whatsappSent += outcome.whatsappSent.length;
+      summary.telegramSent += outcome.telegramSent.length;
 
       const problems = [
         ...outcome.failed.map((f) => `${f.email} (${f.error})`),
         ...outcome.whatsappFailed.map((f) => `${f.phone} (${f.error})`),
+        ...outcome.telegramFailed.map((f) => `Telegram ${f.chat} (${f.error})`),
       ];
       if (problems.length) summary.errors.push(`${outcome.scheduleName}: ${problems.join(", ")}`);
       schedule.set("lastError", problems.length ? problems[0] : undefined);
@@ -408,14 +488,15 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
       // Raised only when the report actually reached someone. A run that failed
       // every recipient has nothing to announce, and "your report is ready"
       // above an empty inbox is worse than silence.
-      if (outcome.sent.length || outcome.whatsappSent.length) {
+      const reached = outcome.sent.length + outcome.whatsappSent.length + outcome.telegramSent.length;
+      if (reached) {
         await emit({
           type: "report.ready",
           workspaceId: String(schedule.get("workspaceId")),
           data: {
             reportName: outcome.scheduleName,
             frequency,
-            recipientCount: outcome.sent.length + outcome.whatsappSent.length,
+            recipientCount: reached,
           },
           link: `/app/reports`,
         });
