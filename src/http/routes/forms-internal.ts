@@ -15,7 +15,7 @@ import { emit } from "../../modules/notifications/notify.service.js";
 import { recordForeignAudit } from "../../modules/audit/audit.service.js";
 import { FORMS_ACTIONS, type AuditAction } from "../../modules/audit/actions.js";
 import { parseFormAlert, sendFormAlert } from "../../modules/telegram/form-alert.js";
-import { TelegramError, importOwnBot } from "../../modules/telegram/telegram.service.js";
+import { TelegramError, importOwnBot, telegramSummary } from "../../modules/telegram/telegram.service.js";
 import { Types } from "mongoose";
 
 
@@ -249,6 +249,15 @@ router.post(
     });
 
     res.status(204).end();
+  }),
+);
+
+router.get(
+  "/telegram/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    if (!Types.ObjectId.isValid(req.params.workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    res.json(await telegramSummary(req.params.workspaceId));
   }),
 );
 

@@ -86,6 +86,19 @@ export async function telegramStatus(workspaceId: string): Promise<TelegramStatu
   };
 }
 
+export type TelegramSummary = { connected: boolean; sender: string | null; chats: number; alertChats: number };
+
+export async function telegramSummary(workspaceId: string): Promise<TelegramSummary> {
+  const status = await telegramStatus(workspaceId);
+  const sender = status.mode === "own" ? status.ownBot?.username : status.platformBot;
+  return {
+    connected: status.chats.length > 0,
+    sender: sender ? `@${sender}` : null,
+    chats: status.chats.length,
+    alertChats: status.chats.filter((c) => c.formAlerts).length,
+  };
+}
+
 export async function createLinkUrl(workspaceId: string, group: boolean): Promise<{ url: string; expiresAt: Date }> {
   const [username, doc] = await Promise.all([platformUsername(), loadConnection(workspaceId)]);
   if (!username) throw new TelegramError("Telegram delivery is not set up on this server");
