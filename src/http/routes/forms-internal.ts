@@ -14,7 +14,9 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { emit } from "../../modules/notifications/notify.service.js";
 import { recordForeignAudit } from "../../modules/audit/audit.service.js";
 import { FORMS_ACTIONS, type AuditAction } from "../../modules/audit/actions.js";
-import { parseFormAlert, sendFormAlert } from "../../modules/telegram/form-alert.js";
+import { parseFormAlert } from "../../modules/form-alerts/alert.js";
+import { sendWhatsAppAlert, whatsappAlertSummary } from "../../modules/form-alerts/whatsapp-alert.js";
+import { sendFormAlert } from "../../modules/telegram/form-alert.js";
 import { TelegramError, importOwnBot, telegramSummary } from "../../modules/telegram/telegram.service.js";
 import { Types } from "mongoose";
 
@@ -269,6 +271,26 @@ router.post(
     const alert = parseFormAlert(req.body);
     if (!alert) return res.status(400).json({ error: "title required" });
     res.json(await sendFormAlert(req.params.workspaceId, alert));
+  }),
+);
+
+router.get(
+  "/whatsapp/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    if (!Types.ObjectId.isValid(req.params.workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    res.json(await whatsappAlertSummary(req.params.workspaceId));
+  }),
+);
+
+router.post(
+  "/whatsapp/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    if (!Types.ObjectId.isValid(req.params.workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    const alert = parseFormAlert(req.body);
+    if (!alert) return res.status(400).json({ error: "title required" });
+    res.json(await sendWhatsAppAlert(req.params.workspaceId, alert));
   }),
 );
 
