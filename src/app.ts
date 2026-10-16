@@ -31,6 +31,7 @@ import searchConsoleRoutes from "./http/routes/search-console.js";
 import searchConsoleAuthRoutes from "./http/routes/search-console-auth.js";
 import competitorRoutes from "./http/routes/competitors.js";
 import competitorBriefRoutes from "./http/routes/competitor-brief.js";
+import workspaceAppRoutes from "./http/routes/workspace-apps.js";
 import backlinkRoutes from "./http/routes/backlinks.js";
 import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
@@ -215,6 +216,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, seoRoutes);
 app.use("/api/workspaces", dashboardCors, requireUnlocked, searchConsoleRoutes);
 
 app.use("/api/workspaces", dashboardCors, requireUnlocked, competitorRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, workspaceAppRoutes);
 // The AI reading of a comparison, kept separate: it is the only competitor
 // endpoint that costs a model call, carries its own rate limit, and disappears
 // entirely when the Cloudflare credentials are unset.

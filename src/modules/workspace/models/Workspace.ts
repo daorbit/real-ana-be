@@ -32,6 +32,13 @@ const workspaceSchema = new Schema(
 
     navPrefs: { type: navPrefsSchema, default: undefined },
 
+    apps: {
+      compare: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
+    },
+
     /**
      * Public share link.
      *

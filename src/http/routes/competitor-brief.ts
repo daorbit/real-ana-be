@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
-import { resolveSite, siteRefused } from "./resolve-site.js";
+import { siteRefused } from "./resolve-site.js";
+import { resolveCompareSite } from "./compare-access.js";
 import { rateLimit } from "../../infra/http-client/safe-fetch.js";
 import { competitorAnalysis } from "../../modules/seo/compare-analysis.service.js";
 import { briefingAvailable, generateBrief } from "../../modules/seo/competitor-brief.js";
@@ -35,7 +36,7 @@ const BRIEF_LIMIT = { capacity: 6, refillPerMinute: 6 };
 router.get(
   "/:wid/sites/:siteId/seo/competitors/brief/availability",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
+    const found = await resolveCompareSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     res.json({ available: briefingAvailable() });
@@ -52,7 +53,7 @@ router.get(
 router.post(
   "/:wid/sites/:siteId/seo/competitors/:competitorId/brief",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
+    const found = await resolveCompareSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     // 503 rather than 404: the endpoint exists and the deployment simply has no

@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
-import { resolveSite, siteRefused } from "./resolve-site.js";
+import { siteRefused } from "./resolve-site.js";
+import { resolveCompareSite } from "./compare-access.js";
 import { normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js";
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
 import { Competitor } from "../../modules/seo/models/Competitor.js";
@@ -54,7 +55,7 @@ function compareBudget(workspaceId: string) {
 router.get(
   "/:wid/sites/:siteId/seo/competitors",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
+    const found = await resolveCompareSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const list = await Competitor.find({ siteId: found.site.siteId }).sort({ createdAt: 1 });
@@ -66,7 +67,7 @@ router.get(
 router.get(
   "/:wid/sites/:siteId/seo/competitors/history",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
+    const found = await resolveCompareSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const [rows, mine] = await Promise.all([
@@ -91,7 +92,7 @@ router.get(
 router.get(
   "/:wid/sites/:siteId/seo/competitors/analysis",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
+    const found = await resolveCompareSite(req);
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const analysis = await competitorAnalysis(found.site.siteId);
@@ -103,7 +104,7 @@ router.get(
 router.post(
   "/:wid/sites/:siteId/seo/competitors",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
+    const found = await resolveCompareSite(req, "editor");
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
     const { ws, site } = found;
 
@@ -171,7 +172,7 @@ router.post(
 router.post(
   "/:wid/sites/:siteId/seo/competitors/refresh-all",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
+    const found = await resolveCompareSite(req, "editor");
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const budget = compareBudget(found.ws.id);
@@ -204,7 +205,7 @@ router.post(
 router.post(
   "/:wid/sites/:siteId/seo/competitors/:id/refresh",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
+    const found = await resolveCompareSite(req, "editor");
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const competitor = await Competitor.findOne({
@@ -231,7 +232,7 @@ router.post(
 router.delete(
   "/:wid/sites/:siteId/seo/competitors/:id",
   async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req, "editor");
+    const found = await resolveCompareSite(req, "editor");
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const deleted = await Competitor.findOneAndDelete({
