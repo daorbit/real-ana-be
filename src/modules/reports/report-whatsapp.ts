@@ -1,4 +1,3 @@
-import { sendWhatsApp } from "../../infra/messaging/whatsapp.js";
 import type { SeoRow } from "./report-xlsx.js";
 import { shortenUrl, signed, trend } from "./report-chat-text.js";
 
@@ -18,7 +17,6 @@ import { shortenUrl, signed, trend } from "./report-chat-text.js";
 type Metric = { label: string; value: string; delta?: number | null };
 
 export type WhatsAppReportInput = {
-  to: string;
   workspaceName: string;
   periodLabel: string;
   metrics: Metric[];
@@ -59,9 +57,5 @@ export function buildWhatsAppReport(input: WhatsAppReportInput): string {
   if (input.dashboardUrl) lines.push("", `Live dashboard: ${input.dashboardUrl}`);
 
   return lines.join("\n");
-}
-
-export async function sendWhatsAppReport(input: WhatsAppReportInput): Promise<string> {
-  return sendWhatsApp(input.to, buildWhatsAppReport(input));
 }
 

@@ -3,9 +3,8 @@ import { nanoid } from "nanoid";
 import { ReportSchedule, FREQUENCIES, computeNextRun, type Frequency } from "../../modules/reports/models/ReportSchedule.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { User } from "../../modules/identity/models/User.js";
-import { canCreateReportSchedule, canConfigureReport, canUseWhatsAppReports } from "../../modules/billing/quota.service.js";
+import { canCreateReportSchedule, canConfigureReport } from "../../modules/billing/quota.service.js";
 import { runSchedule, testTelegram, testWhatsApp } from "../../modules/reports/report-runner.js";
-import { normalizePhone, whatsappConfigured, sessionStatus } from "../../infra/messaging/whatsapp.js";
 import { mailConfigured } from "../../infra/mail/mailer.js";
 import { requireAuth, AuthedRequest } from "../middleware/auth.js";
 import { planLimit } from "../plan-limit.js";
@@ -35,17 +34,13 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
       email: r.email,
       unsubscribed: Boolean(r.unsubscribedAt),
     })),
-    phoneRecipients: (schedule.get("phoneRecipients") as { phone: string; label?: string; optedOutAt?: Date }[]).map((p) => ({
-      phone: p.phone,
-      label: p.label ?? "",
-      optedOut: Boolean(p.optedOutAt),
-    })),
     channels: {
       email: schedule.get("channels")?.email ?? true,
       whatsapp: schedule.get("channels")?.whatsapp ?? false,
       telegram: schedule.get("channels")?.telegram ?? false,
     },
     telegramChatIds: schedule.get("telegramChatIds") ?? [],
+    whatsappNumbers: schedule.get("whatsappNumbers") ?? [],
     include: schedule.get("include"),
     attachXlsx: schedule.get("attachXlsx"),
     enabled: schedule.get("enabled"),
@@ -62,7 +57,7 @@ function present(schedule: InstanceType<typeof ReportSchedule>) {
  * can't see going out is a report you can't tell is broken.
  */
 async function readBody(req: AuthedRequest): Promise<
-  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; phones: { phone: string; label: string }[]; telegramChatIds: string[]; channels: { email: boolean; whatsapp: boolean; telegram: boolean }; include: Record<string, boolean>; attachXlsx: boolean } }
+  | { ok: true; value: { name: string; siteIds: string[]; frequency: Frequency; emails: string[]; telegramChatIds: string[]; whatsappNumbers: string[]; channels: { email: boolean; whatsapp: boolean; telegram: boolean }; include: Record<string, boolean>; attachXlsx: boolean } }
   | { ok: false; error: string }
 > {
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
@@ -83,7 +78,7 @@ async function readBody(req: AuthedRequest): Promise<
   if (!include.analytics && !include.seo)
     return { ok: false, error: "include analytics, SEO, or both — a report of neither is empty" };
 
-  const owner = await User.findById(req.userId).select("email mobile");
+  const owner = await User.findById(req.userId).select("email");
   const ownerEmail = String(owner?.get("email") ?? "").toLowerCase();
 
   const submitted = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
@@ -103,8 +98,6 @@ async function readBody(req: AuthedRequest): Promise<
     ? req.body.siteIds.map((s: unknown) => String(s)).filter(Boolean).slice(0, 50)
     : [];
 
-  // Channels default to email-only, matching how every schedule behaved before
-  // WhatsApp existed.
   const channels = {
     email: req.body?.channels?.email !== false,
     whatsapp: Boolean(req.body?.channels?.whatsapp),
@@ -119,28 +112,11 @@ async function readBody(req: AuthedRequest): Promise<
   if (channels.telegram && !telegramChatIds.length)
     return { ok: false, error: "pick at least one Telegram chat, or turn Telegram delivery off" };
 
-  /**
-   * WhatsApp goes to the account owner's own mobile, and nowhere else.
-   *
-   * The platform sends from one paired number shared by every account, so a
-   * report delivered to a customer's client would arrive from a stranger's
-   * personal WhatsApp — and any complaint about it would land on the one
-   * account that can be banned. Restricting the channel to the owner's own
-   * verified mobile keeps it useful (you get your numbers on your phone)
-   * without turning a shared sender into a way to message third parties.
-   *
-   * Client-facing delivery stays on email, which has a real unsubscribe.
-   */
-  const phones: { phone: string; label: string }[] = [];
-  if (channels.whatsapp) {
-    const ownerMobile = normalizePhone(String(owner?.get("mobile") ?? ""));
-    if (!ownerMobile)
-      return {
-        ok: false,
-        error: "add your mobile number in Settings before turning on WhatsApp delivery",
-      };
-    phones.push({ phone: ownerMobile, label: "You" });
-  }
+  const whatsappNumbers: string[] = Array.isArray(req.body?.whatsappNumbers)
+    ? [...new Set<string>(req.body.whatsappNumbers.map((n: unknown) => String(n).replace(/[^\d]/g, "")).filter((n: string) => /^\d{8,15}$/.test(n)))].slice(0, 10)
+    : [];
+  if (channels.whatsapp && !whatsappNumbers.length)
+    return { ok: false, error: "pick at least one WhatsApp number, or turn WhatsApp delivery off" };
 
   return {
     ok: true,
@@ -149,8 +125,8 @@ async function readBody(req: AuthedRequest): Promise<
       siteIds,
       frequency: frequency as Frequency,
       emails,
-      phones,
       telegramChatIds: channels.telegram ? telegramChatIds : [],
+      whatsappNumbers: channels.whatsapp ? whatsappNumbers : [],
       channels,
       include,
       attachXlsx: req.body?.attachXlsx !== false,
@@ -158,8 +134,8 @@ async function readBody(req: AuthedRequest): Promise<
   };
 }
 
-function recipientCount(value: { emails: string[]; telegramChatIds: string[] }): number {
-  return value.emails.length + value.telegramChatIds.length;
+function recipientCount(value: { emails: string[]; telegramChatIds: string[]; whatsappNumbers: string[] }): number {
+  return value.emails.length + value.telegramChatIds.length + value.whatsappNumbers.length;
 }
 
 router.get("/", async (req: AuthedRequest, res: Response) => {
@@ -189,8 +165,8 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
     siteIds: parsed.value.siteIds,
     frequency: parsed.value.frequency,
     recipients: parsed.value.emails.map((email) => ({ email, unsubToken: nanoid(32) })),
-    phoneRecipients: parsed.value.phones,
     telegramChatIds: parsed.value.telegramChatIds,
+    whatsappNumbers: parsed.value.whatsappNumbers,
     channels: parsed.value.channels,
     include: parsed.value.include,
     attachXlsx: parsed.value.attachXlsx,
@@ -220,22 +196,13 @@ router.put("/:id", async (req: AuthedRequest, res: Response) => {
     (schedule.get("recipients") as { email: string; unsubToken: string; unsubscribedAt?: Date }[]).map((r) => [r.email, r])
   );
 
-  // Phone numbers keep their opted-out state across an edit, same reasoning as
-  // the email unsubscribe tokens above.
-  const existingPhones = new Map(
-    (schedule.get("phoneRecipients") as { phone: string; label?: string; optedOutAt?: Date }[]).map((p) => [p.phone, p])
-  );
-
   schedule.set({
     name: parsed.value.name,
     siteIds: parsed.value.siteIds,
     frequency: parsed.value.frequency,
     channels: parsed.value.channels,
     telegramChatIds: parsed.value.telegramChatIds,
-    phoneRecipients: parsed.value.phones.map((p) => {
-      const prior = existingPhones.get(p.phone);
-      return prior ? { ...p, optedOutAt: prior.optedOutAt } : p;
-    }),
+    whatsappNumbers: parsed.value.whatsappNumbers,
     include: parsed.value.include,
     attachXlsx: parsed.value.attachXlsx,
     recipients: parsed.value.emails.map(
@@ -294,59 +261,20 @@ router.post("/:id/test", async (req: AuthedRequest, res: Response) => {
   }
 });
 
-/**
- * Whether WhatsApp delivery is available, and the paired session's state.
- *
- * The session is checked live rather than cached: an unofficial gateway drops
- * its pairing without warning, and a UI that says "connected" from a lookup an
- * hour old is worse than one that says nothing.
- */
-router.get("/whatsapp/status", async (_req: AuthedRequest, res: Response) => {
-  if (!whatsappConfigured()) return res.json({ configured: false });
-
-  try {
-    const session = await sessionStatus();
-    // The paired number is deliberately not returned: it belongs to the
-    // platform, not the account, and no client screen has a use for it.
-    res.json({ configured: true, status: session.status });
-  } catch (e) {
-    // A gateway that is down is a status, not a server error — the page still
-    // renders, it just reports the channel as unavailable.
-    res.json({ configured: true, status: "error", error: (e as Error).message });
-  }
-});
-
-/**
- * Send this report over WhatsApp now, to one number the owner nominates.
- *
- * The number must already be on the schedule: "test" must not become a way to
- * message an arbitrary phone through someone else's paired account.
- */
 router.post("/:id/test-whatsapp", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res, "editor");
   if (!ws) return;
 
-  if (!whatsappConfigured()) return res.status(503).json({ error: "WhatsApp is not configured" });
-
-  // Checked here as well as on save: a schedule created on Pro keeps its
-  // WhatsApp channel after a downgrade, and without this the test button
-  // stays a working way to send messages the plan no longer includes.
-  const allowed = await canUseWhatsAppReports(ws.id);
-  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
-
   const schedule = await ReportSchedule.findOne({ _id: req.params.id, workspaceId: ws.id });
   if (!schedule) return res.status(404).json({ error: "schedule not found" });
-
-  const requested = normalizePhone(String(req.body?.phone ?? ""));
-  const onSchedule = (schedule.get("phoneRecipients") as { phone: string }[]).some(
-    (p) => p.phone === requested
-  );
-  if (!requested || !onSchedule)
-    return res.status(400).json({ error: "pick a number that is already on this report" });
+  if (!(schedule.get("channels")?.whatsapp)) return res.status(400).json({ error: "WhatsApp delivery is off for this report" });
 
   try {
-    const messageId = await testWhatsApp(schedule, requested);
-    res.json({ ok: true, sentTo: requested, messageId });
+    const result = await testWhatsApp(schedule);
+    if (!result.whatsappSent.length) {
+      return res.status(502).json({ error: result.whatsappFailed[0]?.error ?? "could not send to WhatsApp" });
+    }
+    res.json({ ok: true, sentTo: result.whatsappSent, failed: result.whatsappFailed });
   } catch (e) {
     res.status(502).json({ error: (e as Error).message });
   }

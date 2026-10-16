@@ -40,6 +40,7 @@ import formsInternalRoutes from "./http/routes/forms-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import telegramRoutes from "./http/routes/telegram.js";
 import telegramWebhookRoutes from "./http/routes/telegram-webhook.js";
+import whatsappRoutes from "./http/routes/whatsapp.js";
 import segmentRoutes from "./http/routes/segments.js";
 import brandingRoutes from "./http/routes/branding.js";
 import navPrefsRoutes from "./http/routes/nav-prefs.js";
@@ -225,6 +226,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, backlinkRoutes);
 // Scheduled email reports, same prefix and same ownership check.
 app.use("/api/workspaces/:wid/reports", dashboardCors, requireUnlocked, reportRoutes);
 app.use("/api/workspaces/:wid/telegram", dashboardCors, requireUnlocked, telegramRoutes);
+app.use("/api/workspaces/:wid/whatsapp", dashboardCors, requireUnlocked, whatsappRoutes);
 // Saved dashboard filters and timeline markers, same prefix and ownership rule.
 app.use("/api/workspaces/:wid/segments", dashboardCors, requireUnlocked, segmentRoutes);
 app.use("/api/workspaces/:wid/branding", dashboardCors, requireUnlocked, brandingRoutes);

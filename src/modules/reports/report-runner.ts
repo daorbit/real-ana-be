@@ -6,10 +6,10 @@ import { computeStats, resolveWindow } from "../analytics/stats.service.js";
 import { buildReportWorkbook, type SeoRow } from "./report-xlsx.js";
 import { sendReportEmail } from "./report-mail.js";
 import { mailConfigured } from "../../infra/mail/mailer.js";
-import { sendWhatsAppReport } from "./report-whatsapp.js";
+import { buildWhatsAppReport, type WhatsAppReportInput } from "./report-whatsapp.js";
 import { renderReportPage } from "./report-html.js";
 import { buildDigest } from "./digest.js";
-import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
+import { activeNumbers, sendToNumbers } from "../whatsapp/whatsapp.service.js";
 import { emit } from "../notifications/notify.service.js";
 import { buildTelegramReport, type TelegramReportInput } from "./report-telegram.js";
 import { deliveryFor, sendToChats } from "../telegram/telegram.service.js";
@@ -173,6 +173,28 @@ export type SendOutcome = {
 };
 
 type TelegramResult = Pick<SendOutcome, "telegramSent" | "telegramFailed">;
+type WhatsAppResult = Pick<SendOutcome, "whatsappSent" | "whatsappFailed">;
+
+async function deliverWhatsApp(
+  schedule: InstanceType<typeof ReportSchedule>,
+  input: WhatsAppReportInput
+): Promise<WhatsAppResult> {
+  const wanted = new Set(schedule.get("whatsappNumbers") as string[]);
+  if (!wanted.size) return { whatsappSent: [], whatsappFailed: [] };
+
+  const numbers = await activeNumbers(String(schedule.get("workspaceId")));
+  if (!numbers) {
+    return { whatsappSent: [], whatsappFailed: [{ phone: "WhatsApp", error: "WhatsApp is off or not on this plan" }] };
+  }
+
+  const picked = numbers.filter((n) => wanted.has(n.phone));
+  if (!picked.length) {
+    return { whatsappSent: [], whatsappFailed: [{ phone: "WhatsApp", error: "none of this report's WhatsApp numbers are connected any more" }] };
+  }
+
+  const sent = await sendToNumbers(picked, buildWhatsAppReport(input));
+  return { whatsappSent: sent.sent, whatsappFailed: sent.failed };
+}
 
 async function deliverTelegram(
   schedule: InstanceType<typeof ReportSchedule>,
@@ -276,9 +298,9 @@ export async function runSchedule(
     telegramFailed: [],
   };
 
-  const channels = (schedule.get("channels") ?? { email: true, whatsapp: false }) as {
+  const channels = (schedule.get("channels") ?? { email: true }) as {
     email: boolean;
-    whatsapp: boolean;
+    whatsapp?: boolean;
     telegram?: boolean;
   };
 
@@ -323,36 +345,17 @@ export async function runSchedule(
     }
   }
 
-  if (channels.whatsapp) {
-    // A test send goes to the owner's email only, so it must not fan out to
-    // every phone on the list — someone previewing a report should not message
-    // their client to find out what it looks like.
-    const phones = options.onlyTo
-      ? []
-      : (schedule.get("phoneRecipients") as { phone: string; optedOutAt?: Date }[]).filter(
-          (p) => !p.optedOutAt
-        );
-
-    if (phones.length && !whatsappConfigured()) {
-      outcome.whatsappFailed.push(...phones.map((p) => ({ phone: p.phone, error: "WhatsApp is not configured" })));
-    } else {
-      for (const recipient of phones) {
-        try {
-          await sendWhatsAppReport({
-            to: recipient.phone,
-            workspaceName: workspace.get("name") as string,
-            periodLabel: label,
-            metrics,
-            seo,
-            dashboardUrl,
-            isTest: options.isTest,
-          });
-          outcome.whatsappSent.push(recipient.phone);
-        } catch (e) {
-          outcome.whatsappFailed.push({ phone: recipient.phone, error: (e as Error).message });
-        }
-      }
-    }
+  if (channels.whatsapp && !options.onlyTo) {
+    const whatsapp = await deliverWhatsApp(schedule, {
+      workspaceName: workspace.get("name") as string,
+      periodLabel: label,
+      metrics,
+      seo,
+      dashboardUrl,
+      isTest: options.isTest,
+    });
+    outcome.whatsappSent = whatsapp.whatsappSent;
+    outcome.whatsappFailed = whatsapp.whatsappFailed;
   }
 
   if (channels.telegram && !options.onlyTo) {
@@ -384,43 +387,14 @@ export async function testTelegram(schedule: InstanceType<typeof ReportSchedule>
   });
 }
 
-/**
- * Send this report to one phone number, now.
- *
- * The WhatsApp counterpart to the owner-only email test: the owner picks which
- * of their own numbers to preview on, and nobody else is messaged.
- */
-export async function testWhatsApp(
-  schedule: InstanceType<typeof ReportSchedule>,
-  phone: string
-): Promise<string> {
-  const workspace = await Workspace.findById(schedule.get("workspaceId"));
-  if (!workspace) throw new Error("workspace no longer exists");
-
-  const configured = schedule.get("siteIds") as string[];
-  const siteIds = configured.length
-    ? configured
-    : (await Site.find({ workspaceId: workspace.id }).select("siteId").lean()).map((s) => s.siteId as string);
-
-  const frequency = schedule.get("frequency") as Frequency;
-  const include = schedule.get("include") as ReportInclude;
-  const range = rangeForFrequency(frequency);
-  const window = resolveWindow(range);
-
-  const stats = include.analytics && siteIds.length ? await computeStats(siteIds, range) : null;
-  const seo = include.seo ? await latestSeoRows(siteIds) : [];
-  const shareToken = workspace.get("shareToken") as string | undefined;
-
-  return sendWhatsAppReport({
-    to: phone,
-    workspaceName: workspace.get("name") as string,
-    periodLabel: periodLabel(frequency, window.since, window.until),
-    metrics: buildMetrics(stats),
-    seo,
-    dashboardUrl:
-      include.dashboardLink && workspace.get("shareEnabled") && shareToken
-        ? `${appUrl()}/share/${shareToken}`
-        : undefined,
+export async function testWhatsApp(schedule: InstanceType<typeof ReportSchedule>): Promise<WhatsAppResult> {
+  const view = await buildReportView(schedule);
+  return deliverWhatsApp(schedule, {
+    workspaceName: view.workspaceName,
+    periodLabel: view.periodLabel,
+    metrics: view.metrics,
+    seo: view.seo,
+    dashboardUrl: view.dashboardUrl,
     isTest: true,
   });
 }
