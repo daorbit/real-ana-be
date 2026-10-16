@@ -107,7 +107,14 @@ export async function addChat(
   if (chats.some((c) => c.chatId === chat.chatId && c.via === via)) {
     await TelegramConnection.updateOne(
       { workspaceId, chats: { $elemMatch: { chatId: chat.chatId, via } } },
-      { $set: { "chats.$.title": chat.title, "chats.$.type": chat.type, ...(formAlerts ? { "chats.$.formAlerts": true } : {}) } }
+      {
+        $set: {
+          "chats.$.title": chat.title,
+          "chats.$.type": chat.type,
+          "chats.$.linkedAt": new Date(),
+          ...(formAlerts ? { "chats.$.formAlerts": true } : {}),
+        },
+      }
     );
     return true;
   }

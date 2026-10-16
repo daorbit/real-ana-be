@@ -12,6 +12,13 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 - `src/app.ts`: middleware order and route mounting.
 - `src/http/routes/*`: thin handlers. They parse input, check access, call a service and respond.
 - `src/modules/<domain>/`: services and `models/`. Business logic lives here.
+- `src/modules/telegram/`:
+  - `telegram.service.ts`: connection, chats, form alerts flag, own bot, test send, `deliveryFor`.
+  - `telegram-updates.ts`: `/start <code>` and `/stop` from the Quantalog bot webhook.
+  - `platform-webhook.ts`: registers the webhook.
+  - `form-alert.ts`: da-forms alerts.
+
+  Raw Bot API calls live in `infra/messaging/telegram.ts`. Reports and forms both send through `sendToChats`.
 - `src/shared/utils/*`: generic helpers (`ttl-cache.ts`, `crypto-box.ts`, ...). `src/infra/*`: DB, mail, payments, storage, outbound HTTP.
 
 ## What every workspace request already pays
