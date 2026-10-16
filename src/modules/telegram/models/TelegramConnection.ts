@@ -9,6 +9,7 @@ const chatSchema = new Schema(
     title: { type: String, required: true, maxlength: 120 },
     type: { type: String, required: true },
     via: { type: String, enum: TELEGRAM_VIAS, required: true },
+    formAlerts: { type: Boolean, default: false },
     linkedAt: { type: Date, default: () => new Date() },
   },
   { _id: false }

@@ -41,8 +41,12 @@ export function platformBotToken(): string | null {
   return token && TOKEN_RE.test(token) ? token : null;
 }
 
+export function platformWebhookSecret(): string | null {
+  return process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || null;
+}
+
 export function telegramConfigured(): boolean {
-  return platformBotToken() !== null;
+  return platformBotToken() !== null && platformWebhookSecret() !== null;
 }
 
 export function isBotToken(raw: string): boolean {
@@ -121,6 +125,20 @@ export async function sendTelegram(token: string, chatId: string, html: string):
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
+  });
+}
+
+export async function webhookUrl(token: string): Promise<string> {
+  const info = await call<{ url?: string }>(token, "getWebhookInfo");
+  return info.url ?? "";
+}
+
+export async function setWebhook(token: string, url: string, secret: string): Promise<void> {
+  await call(token, "setWebhook", {
+    url,
+    secret_token: secret,
+    allowed_updates: ["message", "channel_post"],
+    drop_pending_updates: false,
   });
 }
 

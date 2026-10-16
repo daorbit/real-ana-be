@@ -9,6 +9,8 @@ import {
   findOwnChats,
   removeChat,
   removeOwnBot,
+  sendTestMessage,
+  setFormAlerts,
   setOwnBot,
   telegramStatus,
 } from "../../modules/telegram/telegram.service.js";
@@ -85,6 +87,18 @@ router.delete("/chats/:chatId", async (req: AuthedRequest, res: Response) => {
   const ws = await requireWorkspace(req, res, "editor");
   if (!ws) return;
   await respond(res, () => removeChat(ws.id, String(req.params.chatId)));
+});
+
+router.patch("/chats/:chatId", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireWorkspace(req, res, "editor");
+  if (!ws) return;
+  await respond(res, () => setFormAlerts(ws.id, String(req.params.chatId), Boolean(req.body?.formAlerts)));
+});
+
+router.post("/test", async (req: AuthedRequest, res: Response) => {
+  const ws = await editor(req, res);
+  if (!ws) return;
+  await respond(res, () => sendTestMessage(ws.id));
 });
 
 export default router;

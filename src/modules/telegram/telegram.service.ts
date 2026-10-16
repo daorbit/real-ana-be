@@ -1,40 +1,40 @@
 import { nanoid } from "nanoid";
 import { TelegramConnection, type TelegramVia } from "./models/TelegramConnection.js";
 import { TelegramLink } from "./models/TelegramLink.js";
-import { Workspace } from "../workspace/models/Workspace.js";
+import { ensurePlatformWebhook } from "./platform-webhook.js";
 import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
 import {
   TelegramError,
   botUsername,
   chatInfo,
-  escapeHtml,
   isBotToken,
   platformBotToken,
   recentChats,
   sendTelegram,
-  toChatInfo,
+  telegramConfigured,
   type TelegramChatInfo,
 } from "../../infra/messaging/telegram.js";
 
-const MAX_CHATS = 20;
+export const MAX_CHATS = 20;
 const LINK_TTL_MS = 30 * 60 * 1000;
-const START_RE = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{16,64})\s*$/;
-const STOP_RE = /^\/stop(?:@\w+)?\s*$/;
-const BARE_START_RE = /^\/start(?:@\w+)?\s*$/;
+const TEST_MESSAGE =
+  "<b>Quantalog test message</b>\nTelegram is connected. Reports and form alerts you route to this chat will arrive here.";
 
 export { TelegramError };
 
-type StoredChat = TelegramChatInfo & { via: TelegramVia; linkedAt: Date };
+export type StoredChat = TelegramChatInfo & { via: TelegramVia; formAlerts?: boolean; linkedAt: Date };
 
 export type TelegramStatus = {
   platformAvailable: boolean;
   platformBot: string | null;
   ownBot: { username: string } | null;
   mode: TelegramVia;
-  chats: { chatId: string; title: string; type: string; linkedAt: Date }[];
+  chats: { chatId: string; title: string; type: string; formAlerts: boolean; linkedAt: Date }[];
 };
 
 export type TelegramDelivery = { token: string; chats: StoredChat[] };
+
+export type SendResult = { sent: string[]; failed: { chat: string; error: string }[] };
 
 type ConnectionDoc = {
   ownBot?: { tokenEnc?: string; username?: string };
@@ -50,13 +50,18 @@ function ownToken(doc: ConnectionDoc | null): string | null {
   return enc ? decryptSecret(enc) : null;
 }
 
+function activeChats(doc: ConnectionDoc | null): StoredChat[] {
+  const mode = modeOf(doc);
+  return (doc?.chats ?? []).filter((c) => c.via === mode);
+}
+
 async function loadConnection(workspaceId: string): Promise<ConnectionDoc | null> {
   return TelegramConnection.findOne({ workspaceId }).select("ownBot chats").lean<ConnectionDoc>();
 }
 
-async function platformUsername(): Promise<string | null> {
+export async function platformUsername(): Promise<string | null> {
   const token = platformBotToken();
-  if (!token) return null;
+  if (!token || !telegramConfigured()) return null;
   try {
     return await botUsername(token);
   } catch {
@@ -66,41 +71,50 @@ async function platformUsername(): Promise<string | null> {
 
 export async function telegramStatus(workspaceId: string): Promise<TelegramStatus> {
   const [doc, platformBot] = await Promise.all([loadConnection(workspaceId), platformUsername()]);
-  const mode = modeOf(doc);
   return {
     platformAvailable: Boolean(platformBot),
     platformBot,
     ownBot: doc?.ownBot?.tokenEnc ? { username: doc.ownBot.username ?? "" } : null,
-    mode,
-    chats: (doc?.chats ?? [])
-      .filter((c) => c.via === mode)
-      .map((c) => ({ chatId: c.chatId, title: c.title, type: c.type, linkedAt: c.linkedAt })),
+    mode: modeOf(doc),
+    chats: activeChats(doc).map((c) => ({
+      chatId: c.chatId,
+      title: c.title,
+      type: c.type,
+      formAlerts: Boolean(c.formAlerts),
+      linkedAt: c.linkedAt,
+    })),
   };
 }
 
 export async function createLinkUrl(workspaceId: string, group: boolean): Promise<{ url: string; expiresAt: Date }> {
-  const username = await platformUsername();
+  const [username, doc] = await Promise.all([platformUsername(), loadConnection(workspaceId)]);
   if (!username) throw new TelegramError("Telegram delivery is not set up on this server");
+  if (modeOf(doc) === "own") throw new TelegramError("This workspace sends through its own bot. Add chats from that bot instead.");
   const code = nanoid(24);
   const expiresAt = new Date(Date.now() + LINK_TTL_MS);
-  await TelegramLink.create({ code, workspaceId, expiresAt });
+  await Promise.all([ensurePlatformWebhook(), TelegramLink.create({ code, workspaceId, expiresAt })]);
   return { url: `https://t.me/${username}?${group ? "startgroup" : "start"}=${code}`, expiresAt };
 }
 
-async function addChat(workspaceId: string, chat: TelegramChatInfo, via: TelegramVia): Promise<boolean> {
+export async function addChat(
+  workspaceId: string,
+  chat: TelegramChatInfo,
+  via: TelegramVia,
+  formAlerts = false
+): Promise<boolean> {
   const doc = await loadConnection(workspaceId);
   const chats = doc?.chats ?? [];
   if (chats.some((c) => c.chatId === chat.chatId && c.via === via)) {
     await TelegramConnection.updateOne(
       { workspaceId, chats: { $elemMatch: { chatId: chat.chatId, via } } },
-      { $set: { "chats.$.title": chat.title, "chats.$.type": chat.type } }
+      { $set: { "chats.$.title": chat.title, "chats.$.type": chat.type, ...(formAlerts ? { "chats.$.formAlerts": true } : {}) } }
     );
     return true;
   }
   if (chats.filter((c) => c.via === via).length >= MAX_CHATS) return false;
   await TelegramConnection.updateOne(
     { workspaceId },
-    { $push: { chats: { ...chat, via, linkedAt: new Date() } } },
+    { $push: { chats: { ...chat, via, formAlerts, linkedAt: new Date() } } },
     { upsert: true }
   );
   return true;
@@ -109,6 +123,7 @@ async function addChat(workspaceId: string, chat: TelegramChatInfo, via: Telegra
 export async function setOwnBot(workspaceId: string, token: string): Promise<TelegramStatus> {
   const trimmed = token.trim();
   if (!isBotToken(trimmed)) throw new TelegramError("That does not look like a bot token. It should look like 123456789:AAH…");
+  if (trimmed === platformBotToken()) throw new TelegramError("That is the Quantalog bot. Paste a token for a bot you created.");
   const username = await botUsername(trimmed);
   await TelegramConnection.updateOne(
     { workspaceId },
@@ -153,70 +168,59 @@ export async function removeChat(workspaceId: string, chatId: string): Promise<T
   return telegramStatus(workspaceId);
 }
 
+export async function setFormAlerts(workspaceId: string, chatId: string, on: boolean): Promise<TelegramStatus> {
+  const doc = await loadConnection(workspaceId);
+  const result = await TelegramConnection.updateOne(
+    { workspaceId, chats: { $elemMatch: { chatId, via: modeOf(doc) } } },
+    { $set: { "chats.$.formAlerts": on } }
+  );
+  if (!result.matchedCount) throw new TelegramError("That chat is not linked to this workspace");
+  return telegramStatus(workspaceId);
+}
+
 export async function deliveryFor(workspaceId: string): Promise<TelegramDelivery | null> {
   const doc = await loadConnection(workspaceId);
-  const mode = modeOf(doc);
-  const token = mode === "own" ? ownToken(doc) : platformBotToken();
+  const token = modeOf(doc) === "own" ? ownToken(doc) : platformBotToken();
   if (!token) return null;
-  return { token, chats: (doc?.chats ?? []).filter((c) => c.via === mode) };
+  return { token, chats: activeChats(doc) };
 }
 
-type IncomingMessage = { text?: string; chat?: Parameters<typeof toChatInfo>[0] };
-
-async function reply(chatId: string, html: string): Promise<void> {
-  const token = platformBotToken();
-  if (!token) return;
-  try {
-    await sendTelegram(token, chatId, html);
-  } catch {
-    return;
-  }
+export async function sendToChats(token: string, chats: StoredChat[], html: string): Promise<SendResult> {
+  const settled = await Promise.allSettled(chats.map((c) => sendTelegram(token, c.chatId, html)));
+  const result: SendResult = { sent: [], failed: [] };
+  settled.forEach((s, i) => {
+    if (s.status === "fulfilled") result.sent.push(chats[i].title);
+    else result.failed.push({ chat: chats[i].title, error: (s.reason as Error).message });
+  });
+  return result;
 }
 
-async function linkChat(code: string, message: Required<IncomingMessage>): Promise<void> {
-  const chat = toChatInfo(message.chat);
-  const link = await TelegramLink.findOneAndDelete({ code, expiresAt: { $gt: new Date() } }).lean<{ workspaceId: unknown }>();
-  if (!link) {
-    await reply(chat.chatId, "This link has expired. Open Quantalog → Reports and press <b>Connect Telegram</b> again.");
-    return;
-  }
-  const workspaceId = String(link.workspaceId);
-  const [added, workspace] = await Promise.all([
-    addChat(workspaceId, chat, "quantalog"),
-    Workspace.findById(workspaceId).select("name").lean<{ name?: string }>(),
-  ]);
-  const name = escapeHtml(workspace?.name ?? "your workspace");
-  await reply(
-    chat.chatId,
-    added
-      ? `Connected to <b>${name}</b>. Reports you send to Telegram in Quantalog will arrive here.\n\nSend /stop at any time to stop them.`
-      : `<b>${name}</b> already has ${MAX_CHATS} Telegram chats linked. Remove one in Quantalog, then try again.`
-  );
+export async function sendTestMessage(workspaceId: string): Promise<SendResult> {
+  const delivery = await deliveryFor(workspaceId);
+  if (!delivery) throw new TelegramError("Telegram is not connected");
+  if (!delivery.chats.length) throw new TelegramError("Link a chat first");
+  return sendToChats(delivery.token, delivery.chats, TEST_MESSAGE);
 }
 
-async function unlinkChat(chatId: string): Promise<void> {
-  await TelegramConnection.updateMany(
-    { "chats.chatId": chatId },
-    { $pull: { chats: { chatId, via: "quantalog" } } }
-  );
-  await reply(chatId, "Stopped. Quantalog will not send reports to this chat any more.");
-}
-
-export async function handleUpdate(update: {
-  message?: IncomingMessage;
-  channel_post?: IncomingMessage;
-}): Promise<void> {
-  const message = update.message ?? update.channel_post;
-  const text = message?.text?.trim();
-  if (!message?.chat || !text) return;
-
-  const start = START_RE.exec(text);
-  if (start) return linkChat(start[1], { text, chat: message.chat });
-  if (STOP_RE.test(text)) return unlinkChat(String(message.chat.id));
-  if (BARE_START_RE.test(text)) {
-    await reply(
-      String(message.chat.id),
-      "Hi! To get reports here, open Quantalog → Reports, turn on Telegram and press <b>Connect Telegram</b>."
+export async function importOwnBot(
+  workspaceId: string,
+  token: string,
+  chatId: string,
+  formAlerts: boolean
+): Promise<"imported" | "conflict"> {
+  const trimmed = token.trim();
+  if (!isBotToken(trimmed)) throw new TelegramError("invalid bot token");
+  const doc = await loadConnection(workspaceId);
+  const existing = ownToken(doc);
+  if (existing && existing !== trimmed) return "conflict";
+  if (!existing && (doc?.chats ?? []).some((c) => c.via === "quantalog")) return "conflict";
+  const [username, info] = await Promise.all([botUsername(trimmed), chatInfo(trimmed, chatId.trim())]);
+  if (!existing) {
+    await TelegramConnection.updateOne(
+      { workspaceId },
+      { $set: { ownBot: { tokenEnc: encryptSecret(trimmed), username } } },
+      { upsert: true }
     );
   }
+  return (await addChat(workspaceId, info, "own", formAlerts)) ? "imported" : "conflict";
 }

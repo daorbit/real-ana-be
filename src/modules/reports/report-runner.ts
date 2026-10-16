@@ -11,8 +11,8 @@ import { renderReportPage } from "./report-html.js";
 import { buildDigest } from "./digest.js";
 import { whatsappConfigured } from "../../infra/messaging/whatsapp.js";
 import { emit } from "../notifications/notify.service.js";
-import { sendTelegramReport, type TelegramReportInput } from "./report-telegram.js";
-import { deliveryFor } from "../telegram/telegram.service.js";
+import { buildTelegramReport, type TelegramReportInput } from "./report-telegram.js";
+import { deliveryFor, sendToChats } from "../telegram/telegram.service.js";
 
 
 const BATCH_LIMIT = 25;
@@ -199,12 +199,8 @@ async function deliverTelegram(
     reportName: schedule.get("name") as string,
     reportUrl: `${apiUrl()}/api/public/reports/view/${schedule.get("viewToken")}`,
   };
-  const settled = await Promise.allSettled(chats.map((c) => sendTelegramReport(delivery.token, c.chatId, full)));
-  settled.forEach((s, i) => {
-    if (s.status === "fulfilled") result.telegramSent.push(chats[i].title);
-    else result.telegramFailed.push({ chat: chats[i].title, error: (s.reason as Error).message });
-  });
-  return result;
+  const sent = await sendToChats(delivery.token, chats, buildTelegramReport(full));
+  return { telegramSent: sent.sent, telegramFailed: sent.failed };
 }
 
 

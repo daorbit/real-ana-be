@@ -14,6 +14,8 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { emit } from "../../modules/notifications/notify.service.js";
 import { recordForeignAudit } from "../../modules/audit/audit.service.js";
 import { FORMS_ACTIONS, type AuditAction } from "../../modules/audit/actions.js";
+import { parseFormAlert, sendFormAlert } from "../../modules/telegram/form-alert.js";
+import { TelegramError, importOwnBot } from "../../modules/telegram/telegram.service.js";
 import { Types } from "mongoose";
 
 
@@ -247,6 +249,34 @@ router.post(
     });
 
     res.status(204).end();
+  }),
+);
+
+router.post(
+  "/telegram/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    if (!Types.ObjectId.isValid(req.params.workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    const alert = parseFormAlert(req.body);
+    if (!alert) return res.status(400).json({ error: "title required" });
+    res.json(await sendFormAlert(req.params.workspaceId, alert));
+  }),
+);
+
+router.post(
+  "/telegram-import/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    if (!Types.ObjectId.isValid(req.params.workspaceId)) return res.status(400).json({ error: "invalid workspace" });
+    const botToken = typeof req.body?.botToken === "string" ? req.body.botToken : "";
+    const chatId = typeof req.body?.chatId === "string" ? req.body.chatId : "";
+    if (!botToken || !chatId) return res.status(400).json({ error: "botToken and chatId required" });
+    try {
+      res.json({ result: await importOwnBot(req.params.workspaceId, botToken, chatId, req.body?.formAlerts !== false) });
+    } catch (e) {
+      if (e instanceof TelegramError) return res.status(400).json({ error: e.message });
+      throw e;
+    }
   }),
 );
 

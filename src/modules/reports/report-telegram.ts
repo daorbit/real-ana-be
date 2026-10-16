@@ -1,4 +1,4 @@
-import { escapeHtml, sendTelegram } from "../../infra/messaging/telegram.js";
+import { escapeHtml } from "../../infra/messaging/telegram.js";
 import type { SeoRow } from "./report-xlsx.js";
 import { shortenUrl, signed, trend } from "./report-chat-text.js";
 import type { Digest } from "./digest.js";
@@ -49,8 +49,4 @@ export function buildTelegramReport(input: TelegramReportInput): string {
   if (links.length) lines.push("", links.join(" · "));
 
   return lines.join("\n");
-}
-
-export async function sendTelegramReport(token: string, chatId: string, input: TelegramReportInput): Promise<void> {
-  await sendTelegram(token, chatId, buildTelegramReport(input));
 }
