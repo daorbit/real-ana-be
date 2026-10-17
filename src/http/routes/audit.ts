@@ -17,9 +17,9 @@ router.use(blockDemoWrites);
 router.get("/", async (req: AuthedRequest, res: Response) => {
   const cursor = parseCursor(req.query.cursor);
   if (cursor === null) return res.status(400).json({ error: "cursor must be a valid date" });
-  const page = parsePage(req.query.page);
-  if (page === null) return res.status(400).json({ error: "page must be a positive whole number" });
-  const firstPage = page ? page === 1 : !cursor;
+  const pageNumber = parsePage(req.query.page);
+  if (pageNumber === null) return res.status(400).json({ error: "page must be a positive whole number" });
+  const firstPage = pageNumber ? pageNumber === 1 : !cursor;
 
   const category = isAuditCategory(req.query.category) ? req.query.category : undefined;
   const actorId = typeof req.query.actor === "string" ? req.query.actor : undefined;
@@ -34,7 +34,7 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
       cursor,
       category,
       actorId,
-      page,
+      page: pageNumber,
       limit: Number(req.query.limit) || undefined,
     }),
     firstPage ? workspaceAuditSummary(access.workspace.id, window.since) : null,
