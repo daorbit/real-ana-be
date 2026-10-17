@@ -23,6 +23,8 @@ import {
 import { installSnippetHtml } from "./templates/install-snippet.js";
 import { seoAuditHtml } from "./templates/seo-audit.js";
 import { coldInviteHtml } from "./templates/cold-invite.js";
+import { offerHtml } from "./templates/offer.js";
+import { upgradeHtml } from "./templates/upgrade.js";
 
 /** Which banner each designed layout carries. "plain" and "invite" have none. */
 const LAYOUT_BANNERS: Partial<Record<BodyLayout, BannerName>> = {
@@ -655,7 +657,7 @@ export function steps(rows: string[]): string {
 }
 
 
-export type BodyLayout = "plain" | "invite" | "install" | "welcome" | "feature";
+export type BodyLayout = "plain" | "invite" | "install" | "welcome" | "feature" | "offer" | "upgrade";
 
 
 /** Picks the renderer for a layout, falling back to plain where a CTA is required. */
@@ -678,6 +680,10 @@ export function renderBody(
       return welcomeBody(text, cta);
     case "feature":
       return seoAuditHtml(text, cta);
+    case "offer":
+      return offerHtml(text, cta);
+    case "upgrade":
+      return upgradeHtml(text, cta);
     default:
       return broadcastHtml(text, cta);
   }

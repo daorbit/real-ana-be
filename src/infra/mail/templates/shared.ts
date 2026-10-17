@@ -45,7 +45,9 @@ export type BannerName =
   | "report"
   | "contact-ack"
   | "newsletter"
-  | "broadcast";
+  | "broadcast"
+  | "offer"
+  | "upgrade";
 
 export type Theme = { accent: string; accentDeep: string; wash: string; edge: string };
 
@@ -65,6 +67,8 @@ export const THEMES: Record<BannerName, Theme> = {
   "contact-ack": { accent: "#0d9488", accentDeep: "#0f766e", wash: "#f1fafa", edge: "#d3ecea" },
   newsletter: { accent: "#7c3aed", accentDeep: "#6d28d9", wash: "#f7f4ff", edge: "#e5dbfb" },
   broadcast: { accent: "#0891b2", accentDeep: "#0e7490", wash: "#f3f8fb", edge: "#d8e9f1" },
+  offer: { accent: "#7c3aed", accentDeep: "#6d28d9", wash: "#f7f4ff", edge: "#e5dbfb" },
+  upgrade: { accent: "#059669", accentDeep: "#047857", wash: "#f2fbf7", edge: "#d5efe3" },
 };
 
 

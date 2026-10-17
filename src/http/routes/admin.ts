@@ -418,7 +418,7 @@ router.post("/email/preview", async (req: AuthedRequest, res: Response) => {
 
 
 function readLayout(raw: unknown): BodyLayout {
-  const known: BodyLayout[] = ["plain", "invite", "install", "welcome", "feature"];
+  const known: BodyLayout[] = ["plain", "invite", "install", "welcome", "feature", "offer", "upgrade"];
   return known.includes(raw as BodyLayout) ? (raw as BodyLayout) : "plain";
 }
 

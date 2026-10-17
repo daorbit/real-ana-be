@@ -118,6 +118,86 @@ It's under SEO in your dashboard, it works on any site you've added, and the rep
     cta: { label: "Run an audit", href: `${APP_URL}/app/seo` },
   },
   {
+    id: "upgrade-pro",
+    label: "Upgrade to Pro",
+    hint: "Show active users what the Pro plan adds",
+    segment: "installed",
+    layout: "upgrade",
+    subject: "Get more out of Quantalog with Pro",
+    body: `Hi {{name}},
+
+You've been using Quantalog for a while, so here's what the next step looks like.
+
+Pro is built for teams who check their numbers every day and look after more than one site. It keeps everything you use now and raises every limit.`,
+    cta: { label: "See the Pro plan", href: `${APP_URL}/app/billing?checkout=pro` },
+  },
+  {
+    id: "discount-offer",
+    label: "Discount offer",
+    hint: "A coupon for active users. Create the code in Admin → Plans & addons first, then edit the Code line",
+    segment: "installed",
+    layout: "offer",
+    subject: "20% off Quantalog Pro, for this week only",
+    body: `Hi {{name}},
+
+Thanks for building with Quantalog. As a thank-you, here's a discount on your next plan, whether that's Starter or Pro.
+
+Code: THANKS20
+Offer: 20% off your first payment
+Valid until: 31 October`,
+    cta: { label: "Claim my discount", href: `${APP_URL}/app/billing?checkout=pro` },
+  },
+  {
+    id: "welcome-offer",
+    label: "Welcome offer",
+    hint: "A first-plan discount for new signups. Create the code first, then edit the Code line",
+    segment: "all",
+    layout: "offer",
+    subject: "A welcome gift: 20% off your first plan",
+    body: `Hi {{name}},
+
+Welcome aboard. To help you get the most out of Quantalog from day one, here's a discount on any paid plan.
+
+Code: WELCOME20
+Offer: 20% off your first payment on Starter or Pro
+Valid until: 31 October
+
+Not sure which plan fits? Reply and tell me about your site. I'll point you to the right one.`,
+    cta: { label: "Choose my plan", href: `${APP_URL}/app/billing` },
+  },
+  {
+    id: "win-back",
+    label: "Win-back offer",
+    hint: "Invite quiet accounts back with a stronger discount. Create the code first",
+    segment: "all",
+    layout: "offer",
+    subject: "We'd love to have you back, with 30% off",
+    body: `Hi {{name}},
+
+It's been a while since you last used Quantalog, and a lot has shipped since then: goals that track themselves, lead capture forms, scheduled social posts and Orbit, our AI assistant.
+
+If you'd like to give it another go, this is on us.
+
+Code: COMEBACK30
+Offer: 30% off any paid plan
+Valid until: 31 October`,
+    cta: { label: "Come back for less", href: `${APP_URL}/app/billing` },
+  },
+  {
+    id: "limits",
+    label: "Near plan limits",
+    hint: "For accounts close to their monthly audits, crawls or events",
+    segment: "installed",
+    layout: "upgrade",
+    subject: "You're close to your Quantalog limits",
+    body: `Hi {{name}},
+
+A quick heads-up: your workspace is close to this month's limits. When it reaches them, new audits and crawls pause until the next cycle.
+
+Moving up a plan keeps everything running without a gap. Your sites, reports and settings all carry over.`,
+    cta: { label: "Compare plans", href: `${APP_URL}/app/billing` },
+  },
+  {
     id: "invite",
     label: "Invitation",
     hint: "Introduce Quantalog to someone who doesn't have an account",
