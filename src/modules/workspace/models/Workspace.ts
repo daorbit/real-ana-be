@@ -45,6 +45,14 @@ const workspaceSchema = new Schema(
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
       },
+      reviews: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
+      links: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
     },
 
     /**

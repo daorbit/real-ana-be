@@ -14,7 +14,9 @@
     "report:media-over-cap": "tsx scripts/report-media-over-cap.ts",
     "backfill:compare-app": "tsx scripts/backfill-compare-app.ts",
     "backfill:goals-app": "tsx scripts/backfill-goals-app.ts",
-    "backfill:notes-app": "tsx scripts/backfill-notes-app.ts"
+    "backfill:notes-app": "tsx scripts/backfill-notes-app.ts",
+    "backfill:reviews-app": "tsx scripts/backfill-reviews-app.ts",
+    "backfill:links-app": "tsx scripts/backfill-links-app.ts"
   },
   "dependencies": {
     "@otplib/plugin-base32-scure": "^13.5.0",

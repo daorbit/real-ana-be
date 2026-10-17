@@ -32,6 +32,7 @@ import {
   requireAuth,
 } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { badRequest, notFound } from "../../shared/errors/index.js";
 import { renderOAuthPopup, studioBase } from "../oauth-popup.js";
 
@@ -61,6 +62,7 @@ const REASON_TEXT: Record<string, string> = {
     "Google Reviews is not set up on this deployment yet. An administrator needs to add the Google credentials.",
   demo: "Google cannot be connected from a demo session.",
   no_access: "You do not have permission to connect Google for this workspace.",
+  app_off: "Quantalog Reviews is off for this workspace. Turn it on in Apps, then connect Google.",
   invalid_state: "That connection attempt expired. Close this window and start again.",
   missing_code: "Google did not return an authorisation code. Please try again.",
   denied: "You cancelled the Google authorisation.",
@@ -160,6 +162,7 @@ router.get(
     // business's review data to everyone in the workspace.
     const access = await resolveAccess({ userId } as AuthedRequest, "admin", workspaceId);
     if (isDenied(access)) return closePopup(res, "error", "no_access");
+    if (!appEnabled(access.workspace, "reviews")) return closePopup(res, "error", "app_off");
 
     const state = jwt.sign(
       {
@@ -315,6 +318,9 @@ async function connectionFor(req: AuthedRequest, minimum: "viewer" | "admin" = "
   const workspaceId = String(req.params.wid ?? "");
   const access = await resolveAccess(req, minimum, workspaceId);
   if (isDenied(access)) return { denied: access, workspaceId } as const;
+  if (!appEnabled(access.workspace, "reviews")) {
+    return { denied: { error: APP_DISABLED_MESSAGE.reviews, status: 403 }, workspaceId } as const;
+  }
 
   const connection = await GoogleConnection.findOne({ workspaceId });
   return { connection, workspaceId } as const;
@@ -528,6 +534,7 @@ router.get(
     const workspaceId = String(req.params.wid ?? "");
     const access = await resolveAccess(req, "viewer", workspaceId);
     if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+    if (!appEnabled(access.workspace, "reviews")) return res.status(403).json({ error: APP_DISABLED_MESSAGE.reviews });
 
     const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
     const filter: Record<string, unknown> = { workspaceId, deletedAt: null };
