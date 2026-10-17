@@ -1,7 +1,12 @@
 import { Router, Response } from "express";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
-import { workspaceAuditPage, workspaceAuditSummary, parseCursor } from "../../modules/audit/audit.service.js";
+import {
+  workspaceAuditPage,
+  workspaceAuditSummary,
+  parseCursor,
+  parsePage,
+} from "../../modules/audit/audit.service.js";
 import { auditWindow } from "../../modules/audit/retention.js";
 import { isAuditCategory } from "../../modules/audit/actions.js";
 
@@ -12,6 +17,9 @@ router.use(blockDemoWrites);
 router.get("/", async (req: AuthedRequest, res: Response) => {
   const cursor = parseCursor(req.query.cursor);
   if (cursor === null) return res.status(400).json({ error: "cursor must be a valid date" });
+  const page = parsePage(req.query.page);
+  if (page === null) return res.status(400).json({ error: "page must be a positive whole number" });
+  const firstPage = page ? page === 1 : !cursor;
 
   const category = isAuditCategory(req.query.category) ? req.query.category : undefined;
   const actorId = typeof req.query.actor === "string" ? req.query.actor : undefined;
@@ -26,9 +34,10 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
       cursor,
       category,
       actorId,
+      page,
       limit: Number(req.query.limit) || undefined,
     }),
-    cursor ? null : workspaceAuditSummary(access.workspace.id, window.since),
+    firstPage ? workspaceAuditSummary(access.workspace.id, window.since) : null,
   ]);
 
   res.json({

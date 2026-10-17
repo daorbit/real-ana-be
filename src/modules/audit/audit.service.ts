@@ -97,7 +97,10 @@ type WorkspacePageOptions = PageOptions & {
   since: Date;
   category?: AuditCategory;
   actorId?: string;
+  page?: number;
 };
+
+const MAX_PAGE = 10_000;
 
 type AuditRow = {
   _id: Types.ObjectId;
@@ -168,11 +171,30 @@ async function presentPage(rows: AuditRow[], limit: number) {
 export async function workspaceAuditPage(workspaceId: string, options: WorkspacePageOptions) {
   const limit = pageLimit(options.limit);
   const createdAt: Record<string, Date> = { $gte: options.since };
-  if (options.cursor) createdAt.$lt = options.cursor;
+  if (options.cursor && !options.page) createdAt.$lt = options.cursor;
 
   const filter: Record<string, unknown> = { workspaceId: new Types.ObjectId(workspaceId), createdAt };
   if (options.category) filter.action = { $in: actionsIn(options.category) };
   if (options.actorId && Types.ObjectId.isValid(options.actorId)) filter.actorId = new Types.ObjectId(options.actorId);
+
+  if (options.page) {
+    const page = options.page;
+    const [pageRows, total] = await Promise.all([
+      AuditLog.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select(ROW_FIELDS)
+        .lean<AuditRow[]>(),
+      AuditLog.countDocuments(filter),
+    ]);
+    const presented = await presentPage(pageRows, limit);
+    return {
+      ...presented,
+      nextCursor: null,
+      pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) },
+    };
+  }
 
   const rows = await AuditLog.find(filter)
     .sort({ createdAt: -1 })
@@ -217,6 +239,12 @@ export async function accountAuditPage(userId: string, options: PageOptions) {
     .lean<AuditRow[]>();
 
   return presentPage(rows, limit);
+}
+
+export function parsePage(raw: unknown): number | undefined | null {
+  if (raw === undefined || raw === "") return undefined;
+  const page = Number(raw);
+  return Number.isInteger(page) && page >= 1 && page <= MAX_PAGE ? page : null;
 }
 
 export function parseCursor(raw: unknown): Date | undefined | null {
