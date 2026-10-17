@@ -16,7 +16,8 @@
     "backfill:goals-app": "tsx scripts/backfill-goals-app.ts",
     "backfill:notes-app": "tsx scripts/backfill-notes-app.ts",
     "backfill:reviews-app": "tsx scripts/backfill-reviews-app.ts",
-    "backfill:links-app": "tsx scripts/backfill-links-app.ts"
+    "backfill:links-app": "tsx scripts/backfill-links-app.ts",
+    "backfill:media-app": "tsx scripts/backfill-media-app.ts"
   },
   "dependencies": {
     "@otplib/plugin-base32-scure": "^13.5.0",

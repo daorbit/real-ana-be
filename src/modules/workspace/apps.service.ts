@@ -1,6 +1,6 @@
 import { Workspace } from "./models/Workspace.js";
 
-export const WORKSPACE_APPS = ["compare", "goals", "notes", "reviews", "links"] as const;
+export const WORKSPACE_APPS = ["compare", "goals", "notes", "reviews", "links", "media"] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
@@ -9,6 +9,7 @@ export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
   notes: "Quantalog Notes is off for this workspace. Turn it on in Apps.",
   reviews: "Quantalog Reviews is off for this workspace. Turn it on in Apps.",
   links: "Quantalog Links is off for this workspace. Turn it on in Apps.",
+  media: "Quantalog Media is off for this workspace. Turn it on in Apps.",
 };
 
 type AppsCarrier = { get: (path: string) => unknown };
