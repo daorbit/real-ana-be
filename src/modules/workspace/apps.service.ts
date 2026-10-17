@@ -4,9 +4,9 @@ export const WORKSPACE_APPS = ["compare", "goals", "notes"] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
-  compare: "Quantalog Compare is off for this workspace. Turn it on in Settings → Connections.",
-  goals: "Quantalog Goals is off for this workspace. Turn it on in Settings → Connections.",
-  notes: "Quantalog Notes is off for this workspace. Turn it on in Settings → Connections.",
+  compare: "Quantalog Compare is off for this workspace. Turn it on in Apps.",
+  goals: "Quantalog Goals is off for this workspace. Turn it on in Apps.",
+  notes: "Quantalog Notes is off for this workspace. Turn it on in Apps.",
 };
 
 type AppsCarrier = { get: (path: string) => unknown };

@@ -7,7 +7,7 @@ import { escapeHtml, platformBotToken, sendTelegram, toChatInfo } from "../../in
 const START_RE = /^\/start(?:@\w+)?\s+([A-Za-z0-9_-]{16,64})\s*$/;
 const STOP_RE = /^\/stop(?:@\w+)?\s*$/;
 const BARE_START_RE = /^\/start(?:@\w+)?\s*$/;
-const WHERE = "Quantalog → Settings → Connections → Telegram";
+const WHERE = "Quantalog → Apps → Telegram";
 
 type IncomingMessage = { text?: string; chat?: Parameters<typeof toChatInfo>[0] };
 
