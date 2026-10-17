@@ -4,7 +4,7 @@ import { checkImageDataUrl, cloudinaryConfigured, deleteImage, uploadImage } fro
 export const MAX_NAV_LINKS = 10;
 const MAX_NAV_PATHS = 60;
 const MAX_LOGO_BYTES = 1024 * 1024;
-const LOCKED_PATHS = new Set(["/app", "/app/settings"]);
+const LOCKED_PATHS = new Set(["/app", "/app/apps", "/app/settings"]);
 
 type LinkMode = "external" | "internal";
 type StoredLink = {
