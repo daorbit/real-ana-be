@@ -116,6 +116,7 @@ export type SeoStrategyResult = {
   strategy: "mobile" | "desktop";
   scores: SeoScores;
   metrics: SeoMetrics;
+  screenshot: string | null;
 };
 
 export type SeoResource = {
@@ -602,8 +603,17 @@ type PsiAudit = {
       mainThreadTime?: number;
       blockingTime?: number;
     }>;
+    data?: string;
   };
 };
+
+const MAX_SCREENSHOT_LENGTH = 400_000;
+
+function screenshotOf(audits: Record<string, PsiAudit>): string | null {
+  const data = audits["final-screenshot"]?.details?.data;
+  if (typeof data !== "string" || !data.startsWith("data:image/")) return null;
+  return data.length <= MAX_SCREENSHOT_LENGTH ? data : null;
+}
 
 /** One metric inside a PageSpeed `loadingExperience` block. */
 type PsiCruxMetric = {
@@ -856,6 +866,7 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
             ? Number(audits["cumulative-layout-shift"].numericValue!.toFixed(3))
             : null,
       },
+      screenshot: screenshotOf(audits),
     });
 
     // Map each audit back to the category that references it, so the UI can

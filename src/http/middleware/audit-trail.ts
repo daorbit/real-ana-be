@@ -46,7 +46,7 @@ export function auditTrail(req: AuthedRequest, res: Response, next: NextFunction
   if (path === "/" || path === "") return next();
   if (SKIPPED_PREFIXES.some((prefix) => path.startsWith(prefix))) return next();
 
-  const workspaceId = req.params.wid;
+  const workspaceId = String(req.params.wid ?? "");
   if (!isValidObjectId(workspaceId)) return next();
 
   const matched = matchRoute(req.method, path);
