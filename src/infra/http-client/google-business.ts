@@ -199,7 +199,7 @@ export type ReviewPage = {
   totalReviewCount: number;
 };
 
-function toDate(value?: string): Date | null {
+export function toDate(value?: string): Date | null {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;

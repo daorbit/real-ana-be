@@ -1,11 +1,13 @@
 import { GoogleConnection } from "./models/GoogleConnection.js";
-import { GoogleLocation } from "./models/GoogleLocation.js";
+import { GoogleLocation, type LocationSource } from "./models/GoogleLocation.js";
 import { GoogleReview } from "./models/GoogleReview.js";
 import {
   GoogleApiError,
   listReviews,
   refreshAccessToken,
+  type ReviewPage,
 } from "../../infra/http-client/google-business.js";
+import { getPlaceReviews } from "../../infra/http-client/google-places.js";
 import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
 
  
@@ -113,20 +115,36 @@ export function explainGoogleError(err: unknown): string {
 }
 
  
+export function explainLocationError(err: unknown, source: LocationSource): string {
+  if (source === "places" && err instanceof GoogleApiError && err.kind === "not_enabled") {
+    return "Places API (New) is not enabled for this deployment.";
+  }
+  return explainGoogleError(err);
+}
+
+async function fetchReviewPage(location: {
+  get(path: string): unknown;
+}): Promise<ReviewPage> {
+  if (location.get("source") === "places") {
+    return getPlaceReviews(String(location.get("googleLocationId")));
+  }
+  const accessToken = await usableAccessToken(String(location.get("googleConnectionId")));
+  return listReviews(
+    accessToken,
+    String(location.get("googleAccountId")),
+    String(location.get("googleLocationId")),
+  );
+}
+
 export async function syncLocation(locationRowId: string): Promise<SyncResult> {
   const location = await GoogleLocation.findById(locationRowId);
   if (!location) throw new GoogleApiError("not_found", 404, "location not found");
 
-  const connectionId = String(location.get("googleConnectionId"));
   const workspaceId = location.get("workspaceId");
+  const source = (location.get("source") as LocationSource | undefined) ?? "business";
 
   try {
-    const accessToken = await usableAccessToken(connectionId);
-    const page = await listReviews(
-      accessToken,
-      String(location.get("googleAccountId")),
-      String(location.get("googleLocationId")),
-    );
+    const page = await fetchReviewPage(location);
 
     let added = 0;
     let updated = 0;
@@ -161,8 +179,8 @@ export async function syncLocation(locationRowId: string): Promise<SyncResult> {
       else if (result.modifiedCount) updated += 1;
     }
 
-    // Only safe when the whole list was read — see the note above.
-    const completeRead = page.reviews.length >= page.totalReviewCount;
+    const completeRead =
+      source === "places" || page.reviews.length >= page.totalReviewCount;
     let removed = 0;
     if (completeRead) {
       const seen = page.reviews.map((r) => r.reviewId);
@@ -198,7 +216,7 @@ export async function syncLocation(locationRowId: string): Promise<SyncResult> {
       averageRating: page.averageRating,
     };
   } catch (err) {
-    const message = explainGoogleError(err);
+    const message = explainLocationError(err, source);
     // A quota or outage failure is transient: the location stays `connected`
     // so the dashboard keeps showing cached reviews instead of implying the
     // business was disconnected. Only a permanent failure changes the status.

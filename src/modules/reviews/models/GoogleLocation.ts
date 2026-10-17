@@ -5,6 +5,13 @@ import mongoose, { Schema, InferSchemaType } from "mongoose";
 export const LOCATION_STATUS = ["connected", "disconnected", "error"] as const;
 export type LocationStatus = (typeof LOCATION_STATUS)[number];
 
+export const LOCATION_SOURCE = ["business", "places"] as const;
+export type LocationSource = (typeof LOCATION_SOURCE)[number];
+
+function isBusinessSource(this: { source?: LocationSource }): boolean {
+  return this.source !== "places";
+}
+
 const googleLocationSchema = new Schema(
   {
     workspaceId: {
@@ -13,15 +20,16 @@ const googleLocationSchema = new Schema(
       required: true,
       index: true,
     },
+    source: { type: String, enum: LOCATION_SOURCE, default: "business" },
     googleConnectionId: {
       type: Schema.Types.ObjectId,
       ref: "GoogleConnection",
-      required: true,
+      required: isBusinessSource,
       index: true,
     },
 
-   
-    googleAccountId: { type: String, required: true, trim: true },
+
+    googleAccountId: { type: String, required: isBusinessSource, trim: true, default: "" },
     googleLocationId: { type: String, required: true, trim: true },
  
     title: { type: String, trim: true, default: "" },

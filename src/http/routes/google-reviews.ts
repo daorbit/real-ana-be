@@ -17,12 +17,19 @@ import {
 } from "../../infra/http-client/google-business.js";
 import {
   explainGoogleError,
+  explainLocationError,
   syncLocation,
   usableAccessToken,
 } from "../../modules/reviews/sync.service.js";
+import { placesConfigured, searchPlaces } from "../../infra/http-client/google-places.js";
 import { verifyGoogleCredential } from "../../infra/http-client/google-auth.js";
 import { encryptSecret } from "../../shared/utils/crypto-box.js";
-import { disconnectGoogleReviews } from "../../modules/reviews/connection.service.js";
+import {
+  disconnectGoogleReviews,
+  removeReviewLocation,
+} from "../../modules/reviews/connection.service.js";
+import { connectPlaceLocation } from "../../modules/reviews/places.service.js";
+import type { LocationSource } from "../../modules/reviews/models/GoogleLocation.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
 import {
@@ -314,16 +321,30 @@ router.use(dashboardCors, requireAuth, blockDemoWrites);
  * connection is so much as looked up — the check that keeps one customer's
  * reviews out of another's workspace.
  */
-async function connectionFor(req: AuthedRequest, minimum: "viewer" | "admin" = "viewer") {
+async function accessFor(req: AuthedRequest, minimum: "viewer" | "admin" = "viewer") {
   const workspaceId = String(req.params.wid ?? "");
   const access = await resolveAccess(req, minimum, workspaceId);
   if (isDenied(access)) return { denied: access, workspaceId } as const;
   if (!appEnabled(access.workspace, "reviews")) {
     return { denied: { error: APP_DISABLED_MESSAGE.reviews, status: 403 }, workspaceId } as const;
   }
+  return { denied: null, workspaceId } as const;
+}
+
+async function connectionFor(req: AuthedRequest, minimum: "viewer" | "admin" = "viewer") {
+  const { denied, workspaceId } = await accessFor(req, minimum);
+  if (denied) return { denied, workspaceId } as const;
 
   const connection = await GoogleConnection.findOne({ workspaceId });
   return { connection, workspaceId } as const;
+}
+
+function sendGoogleError(res: Response, err: unknown, message: string) {
+  const status = err instanceof GoogleApiError ? err.status : 502;
+  res.status(status).json({
+    error: message,
+    kind: err instanceof GoogleApiError ? err.kind : "unknown",
+  });
 }
 
 /**
@@ -336,28 +357,30 @@ async function connectionFor(req: AuthedRequest, minimum: "viewer" | "admin" = "
 router.get(
   "/workspaces/:wid/status",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const { denied, connection, workspaceId } = await connectionFor(req);
+    const { denied, workspaceId } = await accessFor(req);
     if (denied) return res.status(denied.status).json({ error: denied.error });
 
     const missing = missingGoogleBusinessConfig();
-
-    if (!connection) {
-      return res.json({ configured: missing.length === 0, connected: false, locations: [] });
-    }
-
-    const locations = await GoogleLocation.find({ workspaceId }).sort({ createdAt: 1 });
+    const [connection, locations] = await Promise.all([
+      GoogleConnection.findOne({ workspaceId }),
+      GoogleLocation.find({ workspaceId }).sort({ createdAt: 1 }),
+    ]);
 
     res.json({
       configured: missing.length === 0,
-      connected: true,
-      connection: {
-        googleEmail: connection.get("googleEmail") ?? "",
-        status: connection.get("status"),
-        statusMessage: connection.get("statusMessage") ?? "",
-        connectedAt: connection.get("createdAt"),
-      },
+      placesConfigured: placesConfigured(),
+      connected: !!connection,
+      connection: connection
+        ? {
+            googleEmail: connection.get("googleEmail") ?? "",
+            status: connection.get("status"),
+            statusMessage: connection.get("statusMessage") ?? "",
+            connectedAt: connection.get("createdAt"),
+          }
+        : undefined,
       locations: locations.map((location) => ({
         id: String(location._id),
+        source: location.get("source") ?? "business",
         title: location.get("title"),
         address: location.get("address"),
         status: location.get("status"),
@@ -427,11 +450,7 @@ router.get(
           : "No business locations were found on this Google account.",
       });
     } catch (err) {
-      const status = err instanceof GoogleApiError ? err.status : 502;
-      res.status(status).json({
-        error: explainGoogleError(err),
-        kind: err instanceof GoogleApiError ? err.kind : "unknown",
-      });
+      sendGoogleError(res, err, explainGoogleError(err));
     }
   }),
 );
@@ -502,7 +521,7 @@ router.post(
 router.post(
   "/workspaces/:wid/locations/:id/sync",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const { denied, workspaceId } = await connectionFor(req, "admin");
+    const { denied, workspaceId } = await accessFor(req, "admin");
     if (denied) return res.status(denied.status).json({ error: denied.error });
 
     // Scoped by workspace, not just id: an id from another workspace must read
@@ -513,12 +532,74 @@ router.post(
     try {
       res.json(await syncLocation(String(location._id)));
     } catch (err) {
-      const status = err instanceof GoogleApiError ? err.status : 502;
-      res.status(status).json({
-        error: explainGoogleError(err),
-        kind: err instanceof GoogleApiError ? err.kind : "unknown",
-      });
+      const source = (location.get("source") as LocationSource | undefined) ?? "business";
+      sendGoogleError(res, err, explainLocationError(err, source));
     }
+  }),
+);
+
+router.delete(
+  "/workspaces/:wid/locations/:id",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { denied, workspaceId } = await accessFor(req, "admin");
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+
+    const removed = await removeReviewLocation(workspaceId, String(req.params.id));
+    if (!removed) throw notFound("location not found");
+
+    res.json({ removed: true });
+  }),
+);
+
+router.get(
+  "/workspaces/:wid/places/search",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { denied } = await accessFor(req, "admin");
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+    if (!placesConfigured())
+      return res.status(503).json({ error: "Google Places is not set up on this deployment yet." });
+
+    const query = String(req.query.q ?? "").trim().slice(0, 200);
+    if (query.length < 2) return res.json({ places: [] });
+
+    try {
+      res.json({ places: await searchPlaces(query) });
+    } catch (err) {
+      sendGoogleError(res, err, explainLocationError(err, "places"));
+    }
+  }),
+);
+
+router.post(
+  "/workspaces/:wid/places/locations",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const { denied, workspaceId } = await accessFor(req, "admin");
+    if (denied) return res.status(denied.status).json({ error: denied.error });
+    if (!placesConfigured())
+      return res.status(503).json({ error: "Google Places is not set up on this deployment yet." });
+
+    const placeId = String(req.body?.placeId ?? "").trim();
+    const title = String(req.body?.title ?? "").trim().slice(0, 300);
+    const address = String(req.body?.address ?? "").trim().slice(0, 500);
+    if (!placeId || !/^[A-Za-z0-9_-]{10,300}$/.test(placeId)) throw badRequest("placeId is required");
+
+    const { location, sync, syncError } = await connectPlaceLocation(workspaceId, {
+      placeId,
+      title,
+      address,
+    });
+
+    res.status(201).json({
+      location: {
+        id: String(location._id),
+        source: "places",
+        title: location.get("title"),
+        address: location.get("address"),
+        status: location.get("status"),
+      },
+      sync,
+      syncError,
+    });
   }),
 );
 
