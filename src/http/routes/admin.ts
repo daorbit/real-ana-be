@@ -29,6 +29,7 @@ import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
+import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
 
  
 const router = Router();
@@ -145,6 +146,12 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     page,
     pages: Math.max(1, Math.ceil(total / USERS_PAGE_SIZE)),
   });
+});
+
+router.get("/users/:userId/overview", async (req: AuthedRequest, res: Response) => {
+  const overview = await adminUserOverview(String(req.params.userId));
+  if (!overview) return res.status(404).json({ error: "user not found" });
+  res.json(overview);
 });
 
 router.get("/users/:userId/billing", async (req: AuthedRequest, res: Response) => {
