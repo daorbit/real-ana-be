@@ -37,6 +37,14 @@ const workspaceSchema = new Schema(
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
       },
+      goals: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
+      notes: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
     },
 
     /**

@@ -9,6 +9,8 @@ import {
   type TargetDraft,
 } from "../../modules/dashboards/goal-targets.service.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
+import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { planLimit } from "../plan-limit.js";
@@ -17,6 +19,16 @@ import { canCreateFeature } from "../../modules/billing/quota.service.js";
 const router = Router({ mergeParams: true });
 router.use(requireAuth);
 router.use(blockDemoWrites);
+
+async function requireGoalsWorkspace(req: AuthedRequest, res: Response, minimum?: WorkspaceRole) {
+  const ws = await requireWorkspace(req, res, minimum);
+  if (!ws) return null;
+  if (!appEnabled(ws, "goals")) {
+    res.status(403).json({ error: APP_DISABLED_MESSAGE.goals });
+    return null;
+  }
+  return ws;
+}
 
 async function validateRefs(workspaceId: string, draft: TargetDraft): Promise<string | null> {
   if (draft.siteId) {
@@ -34,7 +46,7 @@ async function siteIdsOf(workspaceId: string): Promise<string[]> {
 router.get(
   "/",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const ws = await requireWorkspace(req, res);
+    const ws = await requireGoalsWorkspace(req, res);
     if (!ws) return;
     res.json(await workspaceTargets(ws.id));
   }),
@@ -43,7 +55,7 @@ router.get(
 router.post(
   "/",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const ws = await requireWorkspace(req, res, "editor");
+    const ws = await requireGoalsWorkspace(req, res, "editor");
     if (!ws) return;
 
     const draft = parseTargetDraft(req.body);
@@ -62,7 +74,7 @@ router.post(
 router.put(
   "/:id",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const ws = await requireWorkspace(req, res, "editor");
+    const ws = await requireGoalsWorkspace(req, res, "editor");
     if (!ws) return;
     if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "goal not found" });
 
@@ -83,7 +95,7 @@ router.put(
 router.delete(
   "/:id",
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const ws = await requireWorkspace(req, res, "editor");
+    const ws = await requireGoalsWorkspace(req, res, "editor");
     if (!ws) return;
     if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "goal not found" });
 

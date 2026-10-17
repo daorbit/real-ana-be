@@ -12,7 +12,9 @@
     "start:dist": "node dist/index.js",
     "backfill:events": "tsx scripts/backfill-event-usage.ts",
     "report:media-over-cap": "tsx scripts/report-media-over-cap.ts",
-    "backfill:compare-app": "tsx scripts/backfill-compare-app.ts"
+    "backfill:compare-app": "tsx scripts/backfill-compare-app.ts",
+    "backfill:goals-app": "tsx scripts/backfill-goals-app.ts",
+    "backfill:notes-app": "tsx scripts/backfill-notes-app.ts"
   },
   "dependencies": {
     "@otplib/plugin-base32-scure": "^13.5.0",

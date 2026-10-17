@@ -1,10 +1,12 @@
 import { Workspace } from "./models/Workspace.js";
 
-export const WORKSPACE_APPS = ["compare"] as const;
+export const WORKSPACE_APPS = ["compare", "goals", "notes"] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
   compare: "Quantalog Compare is off for this workspace. Turn it on in Settings → Connections.",
+  goals: "Quantalog Goals is off for this workspace. Turn it on in Settings → Connections.",
+  notes: "Quantalog Notes is off for this workspace. Turn it on in Settings → Connections.",
 };
 
 type AppsCarrier = { get: (path: string) => unknown };
