@@ -18,6 +18,7 @@ import {
   type PageLink,
 } from "./link-check.js";
 import { analyzeAiSearch, type AiSearchReport } from "./ai-search.js";
+import { previewScreenshot, type RawScreenshots } from "./screenshot.js";
 
 const PAGE_TIMEOUT = 15_000;
 const PSI_TIMEOUT = 70_000;
@@ -607,14 +608,6 @@ type PsiAudit = {
   };
 };
 
-const MAX_SCREENSHOT_LENGTH = 400_000;
-
-function screenshotOf(audits: Record<string, PsiAudit>): string | null {
-  const data = audits["final-screenshot"]?.details?.data;
-  if (typeof data !== "string" || !data.startsWith("data:image/")) return null;
-  return data.length <= MAX_SCREENSHOT_LENGTH ? data : null;
-}
-
 /** One metric inside a PageSpeed `loadingExperience` block. */
 type PsiCruxMetric = {
   percentile?: number;
@@ -815,6 +808,7 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
 
   const results: SeoStrategyResult[] = [];
   const suggestions = new Map<string, SeoSuggestion>();
+  const rawShots = new Map<SeoStrategyResult["strategy"], RawScreenshots>();
 
   // Everything below comes from the mobile response where both succeed, since
   // mobile is the profile Google indexes and ranks with.
@@ -866,7 +860,11 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
             ? Number(audits["cumulative-layout-shift"].numericValue!.toFixed(3))
             : null,
       },
-      screenshot: screenshotOf(audits),
+      screenshot: null,
+    });
+    rawShots.set(strategies[i], {
+      full: lighthouse.fullPageScreenshot?.screenshot?.data,
+      final: audits["final-screenshot"]?.details?.data,
     });
 
     // Map each audit back to the category that references it, so the UI can
@@ -907,6 +905,12 @@ async function runPageSpeed(url: string): Promise<SeoPerformance> {
       suggestions: [],
     };
   }
+
+  await Promise.all(
+    results.map(async (result) => {
+      result.screenshot = await previewScreenshot(rawShots.get(result.strategy) ?? {}, result.strategy);
+    }),
+  );
 
   const desktop = results.find((r) => r.strategy === "desktop") ?? null;
   const mobile = results.find((r) => r.strategy === "mobile") ?? null;
