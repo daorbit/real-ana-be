@@ -7,6 +7,7 @@ const alertEventSchema = new Schema(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true },
     rule: { type: String, enum: ALERT_RULES, required: true },
+    key: { type: String, default: "" },
     title: { type: String, required: true },
     summary: { type: String, default: "" },
     siteId: { type: String, default: "" },

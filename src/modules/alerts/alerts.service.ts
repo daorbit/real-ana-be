@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { AlertSettings } from "./models/AlertSettings.js";
 import { AlertEvent } from "./models/AlertEvent.js";
 import { Workspace } from "../workspace/models/Workspace.js";
@@ -12,11 +13,13 @@ import { evaluateAlerts, type AlertCondition, type AlertSite } from "./checks.js
 import { deliverAlerts, type DeliveryReport } from "./deliver.js";
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 const BATCH_SIZE = 25;
 const CONCURRENCY = 5;
 const CLAIM_MS = 15 * 60 * 1000;
 const RETRY_MS = 15 * 60 * 1000;
-const HISTORY_LIMIT = 20;
+const HISTORY_LIMIT = 50;
+const ACTIVITY_DAYS = 30;
 
 type StoredRule = { enabled?: boolean; value?: number };
 type SettingsLean = {
@@ -65,32 +68,69 @@ export async function scheduleAlertChecks(workspaceId: string, enabled: boolean)
   );
 }
 
+async function dailyCounts(workspaceId: string, now: Date): Promise<{ day: string; count: number }[]> {
+  const since = new Date(now.getTime() - (ACTIVITY_DAYS - 1) * DAY_MS);
+  since.setUTCHours(0, 0, 0, 0);
+  const rows = await AlertEvent.aggregate<{ _id: string; count: number }>([
+    { $match: { workspaceId: new Types.ObjectId(workspaceId), createdAt: { $gte: since } } },
+    { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
+  ]);
+  const byDay = new Map(rows.map((r) => [r._id, r.count]));
+  return Array.from({ length: ACTIVITY_DAYS }, (_, i) => {
+    const day = new Date(since.getTime() + i * DAY_MS).toISOString().slice(0, 10);
+    return { day, count: byDay.get(day) ?? 0 };
+  });
+}
+
+type HistoryRow = { _id: unknown; rule: string; key?: string; title: string; summary: string; link: string; createdAt: Date };
+
+function presentHistory(h: HistoryRow) {
+  return { id: String(h._id), rule: h.rule, title: h.title, summary: h.summary, link: h.link, createdAt: h.createdAt };
+}
+
 export async function alertsOverview(workspaceId: string, checkEveryHours: number) {
-  const [doc, history, telegram, whatsapp] = await Promise.all([
-    loadSettings(workspaceId),
+  const now = new Date();
+  const doc = await loadSettings(workspaceId);
+  const active = doc.active ?? {};
+  const activeKeys = Object.keys(active);
+
+  const [history, ongoingEvents, daily, sites, telegram, whatsapp] = await Promise.all([
     AlertEvent.find({ workspaceId })
       .sort({ createdAt: -1 })
       .limit(HISTORY_LIMIT)
-      .select("rule title summary link siteId createdAt")
-      .lean(),
+      .select("rule key title summary link createdAt")
+      .lean<HistoryRow[]>(),
+    activeKeys.length
+      ? AlertEvent.find({ workspaceId, key: { $in: activeKeys } })
+          .sort({ createdAt: -1 })
+          .limit(activeKeys.length * 3)
+          .select("rule key title summary link createdAt")
+          .lean<HistoryRow[]>()
+      : Promise.resolve([] as HistoryRow[]),
+    dailyCounts(workspaceId, now),
+    Site.countDocuments({ workspaceId }),
     telegramSummary(workspaceId),
     whatsappStatus(workspaceId),
   ]);
+
+  const latestByKey = new Map<string, HistoryRow>();
+  for (const event of ongoingEvents) {
+    if (event.key && !latestByKey.has(event.key)) latestByKey.set(event.key, event);
+  }
 
   return {
     config: configOf(doc),
     checkEveryHours,
     lastCheckedAt: doc.lastCheckedAt ?? null,
     nextCheckAt: doc.nextCheckAt ?? null,
-    ongoing: Object.keys(doc.active ?? {}).length,
-    history: history.map((h) => ({
-      id: String(h._id),
-      rule: h.rule,
-      title: h.title,
-      summary: h.summary,
-      link: h.link,
-      createdAt: h.createdAt,
-    })),
+    ongoing: activeKeys.length,
+    sitesWatched: sites,
+    incidents: activeKeys.flatMap((key) => {
+      const event = latestByKey.get(key);
+      return event ? [{ ...presentHistory(event), since: active[key] }] : [];
+    }),
+    daily,
+    history: history.map(presentHistory),
     channels: {
       email: { available: mailConfigured() },
       telegram: { available: telegram.connected && telegram.chats > 0, chats: telegram.chats },
@@ -180,7 +220,15 @@ async function checkWorkspace(
       await Promise.all([
         deliverAlerts({ id: workspaceId, name: workspace.name ?? "your workspace" }, fresh, config.channels),
         AlertEvent.insertMany(
-          fresh.map((c) => ({ workspaceId, rule: c.rule, title: c.title, summary: c.summary, siteId: c.siteId, link: c.link })),
+          fresh.map((c) => ({
+            workspaceId,
+            rule: c.rule,
+            key: stateKey(c.key),
+            title: c.title,
+            summary: c.summary,
+            siteId: c.siteId,
+            link: c.link,
+          })),
           { ordered: false },
         ),
       ]);

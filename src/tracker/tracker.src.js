@@ -915,11 +915,14 @@
         ".qlp-backdrop{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,.55);opacity:0;transition:opacity .2s ease}" +
         ".qlp-backdrop.qlp-slide{background:transparent;pointer-events:none;align-items:flex-end;justify-content:flex-end}" +
         ".qlp-backdrop.qlp-in{opacity:1}" +
-        ".qlp-card{position:relative;width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow:hidden;border-radius:16px;background:#fff;box-shadow:0 24px 64px rgba(15,23,42,.28);transform:translateY(12px);transition:transform .2s ease;pointer-events:auto}" +
+        ".qlp-card{position:relative;width:100%;max-width:520px;transform:translateY(12px);transition:transform .2s ease;pointer-events:auto}" +
+        ".qlp-body{max-height:calc(100vh - 32px);overflow:hidden;border-radius:16px;background:#fff;box-shadow:0 24px 64px rgba(15,23,42,.28)}" +
         ".qlp-slide .qlp-card{max-width:380px}" +
         ".qlp-in .qlp-card{transform:none}" +
         ".qlp-frame{display:block;width:100%;height:420px;max-height:calc(100vh - 32px);border:0}" +
-        ".qlp-close{position:absolute;top:10px;right:10px;z-index:1;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.08);color:#0f172a;font:20px/30px system-ui,sans-serif;cursor:pointer}" +
+        ".qlp-close{position:absolute;top:-12px;right:-12px;z-index:1;display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:1px solid rgba(15,23,42,.12);border-radius:50%;background:#fff;color:#0f172a;box-shadow:0 2px 8px rgba(15,23,42,.18);cursor:pointer}" +
+        ".qlp-close:hover{background:#f1f5f9}" +
+        ".qlp-close svg{width:14px;height:14px}" +
         "@media (prefers-reduced-motion: reduce){.qlp-backdrop,.qlp-card{transition:none}}";
       var style = document.createElement("style");
       style.setAttribute("data-quantalog", "popups");
@@ -945,13 +948,27 @@
       close.type = "button";
       close.className = "qlp-close";
       close.setAttribute("aria-label", "Close");
-      close.appendChild(document.createTextNode("×"));
+      var svgNs = "http://www.w3.org/2000/svg";
+      var icon = document.createElementNS(svgNs, "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("aria-hidden", "true");
+      var cross = document.createElementNS(svgNs, "path");
+      cross.setAttribute("d", "M6 6l12 12M18 6L6 18");
+      cross.setAttribute("fill", "none");
+      cross.setAttribute("stroke", "currentColor");
+      cross.setAttribute("stroke-width", "2.2");
+      cross.setAttribute("stroke-linecap", "round");
+      icon.appendChild(cross);
+      close.appendChild(icon);
+      var body = document.createElement("div");
+      body.className = "qlp-body";
       var frame = document.createElement("iframe");
       frame.className = "qlp-frame";
       frame.title = "Form";
       frame.src = p.url;
+      body.appendChild(frame);
       card.appendChild(close);
-      card.appendChild(frame);
+      card.appendChild(body);
       backdrop.appendChild(card);
       document.body.appendChild(backdrop);
       requestAnimationFrame(function () {
