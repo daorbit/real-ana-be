@@ -94,6 +94,9 @@ function getTransport(): Transporter {
     pool: true,
     maxConnections: 1,
     maxMessages: 50,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
   });
 
   return transporter;

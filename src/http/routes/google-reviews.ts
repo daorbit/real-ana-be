@@ -13,7 +13,6 @@ import {
   listAccounts,
   listLocations,
   missingGoogleBusinessConfig,
-  revokeToken,
 } from "../../infra/http-client/google-business.js";
 import {
   explainGoogleError,
@@ -251,7 +250,6 @@ router.get(
     // this scope every later call 403s, and the connection would look healthy
     // right up until the first sync.
     if (tokens.scope && !tokens.scope.includes("business.manage")) {
-      await revokeToken(tokens.accessToken);
       return closePopup(res, "error", "scope_declined");
     }
 
@@ -260,7 +258,6 @@ router.get(
     // the honest move is to refuse now rather than ship a connection that
     // breaks silently after lunch.
     if (!tokens.refreshToken) {
-      await revokeToken(tokens.accessToken);
       return closePopup(res, "error", "no_refresh_token");
     }
 
@@ -664,17 +661,6 @@ router.get(
   }),
 );
 
-/**
- * Remove the connection and everything cached under it.
- *
- * The Google grant is revoked first, then the local rows are deleted — a user
- * who disconnects expects Quantalog to stop holding their review data, and
- * leaving it behind so a reconnect is faster is not a trade that is ours to
- * make on their behalf.
- *
- * Revocation is best effort inside `revokeToken`: an unreachable Google must
- * not prevent someone removing a connection.
- */
 router.delete(
   "/workspaces/:wid/connection",
   asyncHandler(async (req: AuthedRequest, res: Response) => {

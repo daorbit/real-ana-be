@@ -4,7 +4,6 @@ import {
   exchangeGoogleCode,
   googleGetJson,
   refreshGoogleToken,
-  revokeGoogleToken,
   type GoogleClientConfig,
   type GoogleTokens,
 } from "./google-oauth.js";
@@ -69,10 +68,6 @@ export function exchangeCodeForTokens(code: string): Promise<GoogleTokens> {
 
 export function refreshAccessToken(refreshToken: string): Promise<GoogleTokens> {
   return refreshGoogleToken(config(), refreshToken);
-}
-
-export function revokeToken(token: string): Promise<void> {
-  return revokeGoogleToken(token, "google-business");
 }
 
 export type GoogleAccount = {

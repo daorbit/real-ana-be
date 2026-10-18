@@ -5,7 +5,6 @@ import {
   googlePostJson,
   googleSend,
   refreshGoogleToken,
-  revokeGoogleToken,
   type GoogleClientConfig,
   type GoogleTokens,
 } from "./google-oauth.js";
@@ -51,10 +50,6 @@ export function exchangeSearchConsoleCode(code: string): Promise<GoogleTokens> {
 
 export function refreshSearchConsoleToken(refreshToken: string): Promise<GoogleTokens> {
   return refreshGoogleToken(config(), refreshToken);
-}
-
-export function revokeSearchConsoleToken(token: string): Promise<void> {
-  return revokeGoogleToken(token, "search-console");
 }
 
 export function hasSearchConsoleScope(scope: string): boolean {

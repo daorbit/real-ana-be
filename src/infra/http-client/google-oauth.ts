@@ -2,7 +2,6 @@ import axios, { AxiosError } from "axios";
 
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 
 export const GOOGLE_TIMEOUT_MS = 15_000;
 
@@ -221,20 +220,13 @@ export async function refreshGoogleToken(
       const reason = String(
         (err.response?.data as { error?: string } | undefined)?.error ?? "",
       );
-      if (reason === "invalid_grant" || reason === "invalid_client")
+      if (reason === "invalid_grant")
         throw new GoogleApiError("revoked", 409, "Google authorisation was revoked");
+      if (reason === "invalid_client" || reason === "unauthorized_client") {
+        console.error(`[google] token refresh rejected the OAuth client (${reason}) — check this deployment's Google client id and secret`);
+        throw new GoogleApiError("unknown", 500, "Google OAuth client is misconfigured");
+      }
     }
     throw classifyGoogleError(err);
-  }
-}
-
-export async function revokeGoogleToken(token: string, label = "google"): Promise<void> {
-  try {
-    await axios.post(REVOKE_URL, new URLSearchParams({ token }), {
-      timeout: GOOGLE_TIMEOUT_MS,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    });
-  } catch (err) {
-    console.warn(`[${label}] revoke failed:`, err instanceof Error ? err.message : err);
   }
 }

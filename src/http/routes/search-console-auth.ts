@@ -8,7 +8,6 @@ import {
   fetchGoogleProfile,
   hasSearchConsoleScope,
   missingSearchConsoleConfig,
-  revokeSearchConsoleToken,
   searchConsoleRedirectUri,
 } from "../../infra/http-client/search-console.js";
 import { explainSearchConsoleError } from "../../modules/seo/search-console.service.js";
@@ -151,12 +150,10 @@ router.get(
     }
 
     if (tokens.scope && !hasSearchConsoleScope(tokens.scope)) {
-      await revokeSearchConsoleToken(tokens.accessToken);
       return closePopup(res, "error", "scope_declined");
     }
 
     if (!tokens.refreshToken) {
-      await revokeSearchConsoleToken(tokens.accessToken);
       return closePopup(res, "error", "no_refresh_token");
     }
 

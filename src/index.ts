@@ -3,6 +3,9 @@ import app from "./app.js";
 import { connectDB } from "./infra/db/connection.js";
 import { startFxCron } from "./modules/billing/fx-cron.js";
 import { primeOrbitKnowledge } from "./modules/orbit/corpus.js";
+import { installProcessGuards } from "./infra/monitoring/process-guards.js";
+
+installProcessGuards();
 
 const PORT = process.env.PORT ?? 4000;
 
