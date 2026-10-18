@@ -42,7 +42,7 @@ const REASON_TEXT: Record<string, string> = {
   missing_code: "Google did not return an authorisation code. Please try again.",
   denied: "You cancelled the Google authorisation.",
   no_refresh_token:
-    "Google did not return a refresh token. Remove Quantalog from your Google account permissions and try again.",
+    "Google did not finish granting long-term access. Please try again, and contact support if it keeps happening.",
   scope_declined:
     "Search Console access was not granted. Tick the Search Console permission on Google's consent screen.",
   google_failed: "Google could not complete the connection. Please try again.",
