@@ -8,7 +8,7 @@ import {
   classifyRequest, classifyTraffic, parseClientSignals, type TrafficVerdict,
 } from "../../modules/analytics/bot-detect.js";
 
-const UNBILLED_TYPES = new Set(["interact"]);
+const UNBILLED_TYPES = new Set(["interact", "popup"]);
 
 const router = Router();
 

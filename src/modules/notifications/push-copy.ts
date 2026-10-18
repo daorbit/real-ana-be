@@ -115,6 +115,13 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
       return { title: "Tracking stopped", body: `${site} has stopped sending events.` };
     }
 
+    case "alert.triggered": {
+      return {
+        title: str(data, "title", "Quantalog alert"),
+        body: str(data, "summary", "Something changed on your site.").slice(0, 160),
+      };
+    }
+
     case "social.post.failed": {
       const channel = str(data, "channel");
       return {

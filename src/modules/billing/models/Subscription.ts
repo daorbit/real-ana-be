@@ -75,6 +75,7 @@ const subscriptionSchema = new Schema(
      * be charged for. Reset with the rest of the counters when the usage month changes.
      */
     formSubmissionsUsed: { type: Number, default: 0 },
+    lastFormSubmissionAt: { type: Date },
     expiryRemindersSent: { type: [Number], default: [] },
     /**
      * Responses bought on top of the plan's monthly allowance.

@@ -1,9 +1,10 @@
 import { Dashboard } from "../dashboards/models/Dashboard.js";
 import { Embed } from "../dashboards/models/Embed.js";
 import { GoalTarget, TARGET_METRICS } from "../dashboards/models/GoalTarget.js";
+import { Popup } from "../popups/models/Popup.js";
 import type { PlanCatalogEntry } from "./plans.catalog.js";
 
-export type CountedFeature = "dashboards" | "embeds" | "goalTargets";
+export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups";
 
 type FeatureSpec = {
   kind: string;
@@ -38,6 +39,14 @@ export const COUNTED_FEATURES: Record<CountedFeature, FeatureSpec> = {
     plural: "goal targets",
     limit: (p) => p.maxGoalTargets,
     count: (workspaceId) => GoalTarget.countDocuments({ workspaceId, metric: { $in: TARGET_METRICS } }),
+  },
+  popups: {
+    kind: "popups",
+    label: "Website popups",
+    noun: "website popup",
+    plural: "website popups",
+    limit: (p) => p.maxPopups,
+    count: (workspaceId) => Popup.countDocuments({ workspaceId }),
   },
 };
 

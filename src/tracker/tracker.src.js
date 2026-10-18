@@ -567,6 +567,8 @@
   window.addEventListener("touchstart", onTrusted("touch"), passiveOpts);
   window.addEventListener("wheel", onTrusted("scroll"), passiveOpts);
 
+  var routeHook = null;
+
   /* ------------------------------------------------------------------
    * Pageview
    * ------------------------------------------------------------------ */
@@ -631,6 +633,8 @@
       bot: botSignals(),
       utm: utm(),
     });
+
+    if (routeHook) routeHook(path);
   }
 
   pageview();
@@ -840,6 +844,219 @@
     });
   }
 
+
+  var popupsOn = opt("popups") !== "off" && !botSignals() && typeof fetch === "function";
+  var popupBase = opt("popups-api") || origin;
+
+  if (popupsOn && popupBase) {
+    var POPUP_KEY = "_va_pop_";
+    var EXIT_FALLBACK_MS = 20000;
+    var popupList = [];
+    var popupArmed = null;
+    var popupOpen = false;
+    var popupStyled = false;
+
+    function readJson(storeName, key) {
+      try {
+        return JSON.parse(window[storeName].getItem(key) || "null");
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeJson(storeName, key, value) {
+      try {
+        window[storeName].setItem(key, JSON.stringify(value));
+      } catch (e) {}
+    }
+
+    function isPhone() {
+      try {
+        return window.matchMedia("(max-width: 767px)").matches;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function patternMatches(pattern, path) {
+      var escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+      return new RegExp("^" + escaped + "$").test(path.split("?")[0]);
+    }
+
+    function pageAllowed(p, path) {
+      var mode = p.pages && p.pages.mode;
+      if (!mode || mode === "all") return true;
+      var hit = false;
+      for (var n = 0; n < p.pages.patterns.length; n++) {
+        if (patternMatches(p.pages.patterns[n], path)) hit = true;
+      }
+      return mode === "include" ? hit : !hit;
+    }
+
+    function popupEligible(p, path) {
+      if (p.devices === "desktop" && isPhone()) return false;
+      if (p.devices === "mobile" && !isPhone()) return false;
+      if (!pageAllowed(p, path)) return false;
+      var seen = readJson("localStorage", POPUP_KEY + p.id);
+      if (seen && seen.done) return false;
+      if (readJson("sessionStorage", POPUP_KEY + p.id)) return false;
+      if (seen && seen.at && p.showAgainDays > 0 && Date.now() - seen.at < p.showAgainDays * 86400000) return false;
+      return true;
+    }
+
+    function popupEvent(p, name) {
+      post({ siteId: siteId, type: "popup", name: name, path: currentPath(), sessionId: session().id, props: { popupId: p.id } });
+    }
+
+    function injectPopupStyles() {
+      if (popupStyled) return;
+      popupStyled = true;
+      var css =
+        ".qlp-backdrop{position:fixed;inset:0;z-index:2147483646;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,.55);opacity:0;transition:opacity .2s ease}" +
+        ".qlp-backdrop.qlp-slide{background:transparent;pointer-events:none;align-items:flex-end;justify-content:flex-end}" +
+        ".qlp-backdrop.qlp-in{opacity:1}" +
+        ".qlp-card{position:relative;width:100%;max-width:520px;max-height:calc(100vh - 32px);overflow:hidden;border-radius:16px;background:#fff;box-shadow:0 24px 64px rgba(15,23,42,.28);transform:translateY(12px);transition:transform .2s ease;pointer-events:auto}" +
+        ".qlp-slide .qlp-card{max-width:380px}" +
+        ".qlp-in .qlp-card{transform:none}" +
+        ".qlp-frame{display:block;width:100%;height:420px;max-height:calc(100vh - 32px);border:0}" +
+        ".qlp-close{position:absolute;top:10px;right:10px;z-index:1;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:rgba(15,23,42,.08);color:#0f172a;font:20px/30px system-ui,sans-serif;cursor:pointer}" +
+        "@media (prefers-reduced-motion: reduce){.qlp-backdrop,.qlp-card{transition:none}}";
+      var style = document.createElement("style");
+      style.setAttribute("data-quantalog", "popups");
+      style.appendChild(document.createTextNode(css));
+      document.head.appendChild(style);
+    }
+
+    function showPopup(p) {
+      if (popupOpen || !document.body) return;
+      popupOpen = true;
+      disarmPopup();
+      injectPopupStyles();
+      writeJson("localStorage", POPUP_KEY + p.id, { at: Date.now() });
+      writeJson("sessionStorage", POPUP_KEY + p.id, 1);
+
+      var backdrop = document.createElement("div");
+      backdrop.className = "qlp-backdrop" + (p.layout === "slide" ? " qlp-slide" : "");
+      var card = document.createElement("div");
+      card.className = "qlp-card";
+      card.setAttribute("role", "dialog");
+      card.setAttribute("aria-modal", p.layout === "slide" ? "false" : "true");
+      var close = document.createElement("button");
+      close.type = "button";
+      close.className = "qlp-close";
+      close.setAttribute("aria-label", "Close");
+      close.appendChild(document.createTextNode("×"));
+      var frame = document.createElement("iframe");
+      frame.className = "qlp-frame";
+      frame.title = "Form";
+      frame.src = p.url;
+      card.appendChild(close);
+      card.appendChild(frame);
+      backdrop.appendChild(card);
+      document.body.appendChild(backdrop);
+      requestAnimationFrame(function () {
+        backdrop.className += " qlp-in";
+      });
+      popupEvent(p, "view");
+
+      var closeTimer = null;
+
+      function onMessage(e) {
+        if (!e.data || e.source !== frame.contentWindow) return;
+        if (e.data.type === "da-forms:height") frame.style.height = e.data.height + "px";
+        if (e.data.type === "da-forms:ready") {
+          frame.contentWindow.postMessage({ type: "da-forms:context", page: location.href, referrer: document.referrer }, "*");
+        }
+        if (e.data.type === "da-forms:submitted") {
+          writeJson("localStorage", POPUP_KEY + p.id, { at: Date.now(), done: true });
+          popupEvent(p, "submit");
+          closeTimer = setTimeout(dismiss, 4000);
+        }
+      }
+
+      function onKey(e) {
+        if (e.key === "Escape") dismiss();
+      }
+
+      function dismiss() {
+        if (closeTimer) clearTimeout(closeTimer);
+        window.removeEventListener("message", onMessage);
+        document.removeEventListener("keydown", onKey);
+        if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop);
+        popupOpen = false;
+      }
+
+      window.addEventListener("message", onMessage);
+      document.addEventListener("keydown", onKey);
+      close.addEventListener("click", dismiss);
+      backdrop.addEventListener("click", function (e) {
+        if (e.target === backdrop && p.layout !== "slide") dismiss();
+      });
+    }
+
+    function disarmPopup() {
+      if (!popupArmed) return;
+      if (popupArmed.timer) clearTimeout(popupArmed.timer);
+      if (popupArmed.scroll) window.removeEventListener("scroll", popupArmed.scroll);
+      if (popupArmed.exit) document.removeEventListener("mouseout", popupArmed.exit);
+      popupArmed = null;
+    }
+
+    function armPopup(path) {
+      disarmPopup();
+      if (popupOpen) return;
+      var p = null;
+      for (var n = 0; n < popupList.length; n++) {
+        if (popupEligible(popupList[n], path)) {
+          p = popupList[n];
+          break;
+        }
+      }
+      if (!p) return;
+
+      var armed = { timer: null, scroll: null, exit: null };
+      var fire = function () {
+        showPopup(p);
+      };
+      var type = p.trigger && p.trigger.type;
+
+      if (type === "scroll") {
+        armed.scroll = function () {
+          if (maxScroll >= p.trigger.scrollPercent) fire();
+        };
+        window.addEventListener("scroll", armed.scroll, { passive: true });
+      } else if (type === "exit" && !isPhone()) {
+        armed.exit = function (e) {
+          if (!e.relatedTarget && e.clientY <= 0) fire();
+        };
+        document.addEventListener("mouseout", armed.exit);
+      } else {
+        var delay = type === "exit" ? EXIT_FALLBACK_MS : Math.max(0, (p.trigger && p.trigger.delaySeconds) || 0) * 1000;
+        armed.timer = setTimeout(fire, delay);
+      }
+      popupArmed = armed;
+    }
+
+    function loadPopups() {
+      fetch(popupBase + "/api/popups/" + encodeURIComponent(siteId), { credentials: "omit", mode: "cors" })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) {
+          if (!data || !data.popups || !data.popups.length) return;
+          popupList = data.popups;
+          routeHook = armPopup;
+          armPopup(currentPath());
+        })
+        .catch(function () {});
+    }
+
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(loadPopups, { timeout: 4000 });
+    } else {
+      setTimeout(loadPopups, 1500);
+    }
+  }
 
   var appUserId = "";
 

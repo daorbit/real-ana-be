@@ -8,6 +8,7 @@ import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
 import { syncDue } from "../../modules/reviews/sync.service.js";
 import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
+import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -132,20 +133,42 @@ router.get("/reviews", async (req: Request, res: Response) => {
 });
 
  
+async function runAlerts() {
+  const summary = await runDueAlerts();
+  if (summary.checked > 0) console.log(`[cron] alerts: ${summary.checked} checked, ${summary.fired} fired`);
+  if (summary.errors.length) console.error("[cron] alert errors:", summary.errors.join(" | "));
+  return summary;
+}
+
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
+  const [posts, alerts] = await Promise.allSettled([runDuePosts(), runAlerts()]);
+  const alertResult =
+    alerts.status === "fulfilled" ? alerts.value : { error: (alerts.reason as Error)?.message ?? "alerts failed" };
+  if (alerts.status === "rejected") console.error("[cron] alert run failed:", alertResult);
+
+  if (posts.status === "rejected") {
+    const message = (posts.reason as Error)?.message ?? "social posts failed";
+    console.error("[cron] social post run failed:", message);
+    return res.status(500).json({ ok: false, error: message, alerts: alertResult });
+  }
+
+  const summary = posts.value;
+  if (summary.attempted > 0) {
+    console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
+  }
+  if (summary.errors.length) console.error("[cron] social errors:", summary.errors.join(" | "));
+  res.json({ ok: true, ...summary, alerts: alertResult });
+});
+
+router.get("/alerts", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+
   try {
-    const summary = await runDuePosts();
-    // Quiet when idle: a line per empty tick buries everything else in the
-    // log, and most ticks have nothing due.
-    if (summary.attempted > 0) {
-      console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
-    }
-    if (summary.errors.length) console.error("[cron] social errors:", summary.errors.join(" | "));
-    res.json({ ok: true, ...summary });
+    res.json({ ok: true, ...(await runAlerts()) });
   } catch (e) {
-    console.error("[cron] social post run failed:", (e as Error).message);
+    console.error("[cron] alert run failed:", (e as Error).message);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -289,6 +312,14 @@ router.get("/run", async (req: Request, res: Response) => {
     const message = (e as Error).message;
     console.error("[cron] social post run failed:", message);
     errors.push(`social-posts: ${message}`);
+  }
+
+  try {
+    ran.alerts = await runAlerts();
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] alert run failed:", message);
+    errors.push(`alerts: ${message}`);
   }
 
   try {

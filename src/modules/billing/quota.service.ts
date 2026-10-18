@@ -4,6 +4,7 @@ import { Site } from "../analytics/models/Site.js";
 import {
   getPlanCatalogEntry,
   MAX_SITES_PER_WORKSPACE,
+  type PlanCatalogEntry,
   type RangeKey,
   type Frequency,
   type CompareModeKey,
@@ -457,6 +458,7 @@ export async function formLimits(workspaceId: string) {
 export async function recordFormSubmission(workspaceId: string): Promise<void> {
   await rollUsageMonth(workspaceId);
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
+  const stamp = { lastFormSubmissionAt: new Date() };
 
   const withinPlan = await Subscription.findOneAndUpdate(
     {
@@ -466,19 +468,36 @@ export async function recordFormSubmission(workspaceId: string): Promise<void> {
         { formSubmissionsUsed: { $exists: false } },
       ],
     },
-    { $inc: { formSubmissionsUsed: 1 } },
+    { $inc: { formSubmissionsUsed: 1 }, $set: stamp },
   );
   if (withinPlan) return;
 
   const credited = await Subscription.findOneAndUpdate(
     { workspaceId, addonFormSubmissionCredits: { $gt: 0 } },
-    { $inc: { addonFormSubmissionCredits: -1 } },
+    { $inc: { addonFormSubmissionCredits: -1 }, $set: stamp },
   );
   // Neither had room: the response is stored regardless, so this only records
   // that the workspace is now over its allowance.
   if (!credited) {
-    await Subscription.updateOne({ workspaceId }, { $inc: { formSubmissionsUsed: 1 } });
+    await Subscription.updateOne({ workspaceId }, { $inc: { formSubmissionsUsed: 1 }, $set: stamp });
   }
+}
+
+export type WorkspacePlanInfo = { plan: PlanCatalogEntry; lastFormSubmissionAt: Date | null };
+
+export async function workspacePlans(workspaceIds: string[]): Promise<Map<string, WorkspacePlanInfo>> {
+  const free = getPlanCatalogEntry("free")!;
+  const subs = await Subscription.find({ workspaceId: { $in: workspaceIds } })
+    .select("workspaceId planSlug currentPeriodEnd lastFormSubmissionAt")
+    .lean();
+  const byWorkspace = new Map(subs.map((s) => [String(s.workspaceId), s]));
+  return new Map(
+    workspaceIds.map((id) => {
+      const sub = byWorkspace.get(id);
+      const plan = sub && !isExpired(sub) ? (getPlanCatalogEntry(sub.planSlug as string) ?? free) : free;
+      return [id, { plan, lastFormSubmissionAt: (sub?.lastFormSubmissionAt as Date | undefined) ?? null }];
+    }),
+  );
 }
 
 /** Whether this workspace's plan allows a post to repeat rather than go out once. */
@@ -663,6 +682,8 @@ export async function quotaSummary(workspaceId: string) {
     dashboards: features.dashboards,
     embeds: features.embeds,
     goalTargets: features.goalTargets,
+    popups: features.popups,
+    alertCheckHours: plan.alertCheckHours,
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,
     whatsappReports: plan.whatsappReports,

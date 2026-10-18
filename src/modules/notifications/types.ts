@@ -30,6 +30,7 @@ export const NOTIFICATION_TYPES = [
   "seo.audit.done",
   "seo.rank.changed",
   "tracking.stopped",
+  "alert.triggered",
   "social.post.failed",
   "lead.captured",
   "admin.message",
@@ -99,6 +100,7 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
    * optional — data lost while it goes unnoticed cannot be backfilled.
    */
   "tracking.stopped": { scope: "workspace", minRole: "editor", optional: false, push: true, mailedElsewhere: true },
+  "alert.triggered": { scope: "workspace", minRole: "editor", optional: true, push: true, mailedElsewhere: true },
   /** A scheduled post did not go out. Whoever scheduled it thinks it did. */
   "social.post.failed": { scope: "workspace", minRole: "editor", optional: false, push: true, mailedElsewhere: true },
   /** A new lead came in through a capture form — same shape as a submission. */
