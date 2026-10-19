@@ -1,8 +1,8 @@
 import { Router, type Response } from "express";
-import { createHmac } from "node:crypto";
 import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
+import { formsServiceSecret, signFormsWorkspaceToken } from "../../shared/utils/forms-workspace-token.js";
 
 /**
  * Short-lived proof that a browser may act for a workspace inside the forms
@@ -32,10 +32,6 @@ const TTL_SECONDS = 60 * 60;
  */
 const MINIMUM_ROLE = "editor" as const;
 
-function sign(payload: string, secret: string): string {
-  return createHmac("sha256", secret).update(payload).digest("base64url");
-}
-
 /**
  * Mints a token for the workspace named in the path.
  *
@@ -47,7 +43,7 @@ router.post(
   "/:wid/forms-token",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const secret = process.env.FORMS_SERVICE_SECRET;
+    const secret = formsServiceSecret();
     if (!secret) {
       // Fails closed, exactly as `forms-internal` does. A token endpoint that
       // signs with an empty key would hand out forgeable credentials.
@@ -58,14 +54,14 @@ router.post(
     const workspace = await requireWorkspace(req, res, MINIMUM_ROLE);
     if (!workspace) return; // requireWorkspace has already answered
 
-    const workspaceId = String(workspace._id);
-    const expiresAt = Math.floor(Date.now() / 1000) + TTL_SECONDS;
-    const payload = `${workspaceId}.${expiresAt}.${req.isDemo ? "" : String(req.userId ?? "")}`;
-
-    res.json({
-      token: `${payload}.${sign(payload, secret)}`,
-      expiresAt,
-    });
+    res.json(
+      signFormsWorkspaceToken(
+        secret,
+        String(workspace._id),
+        req.isDemo ? "" : String(req.userId ?? ""),
+        TTL_SECONDS,
+      ),
+    );
   }),
 );
 

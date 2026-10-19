@@ -15,6 +15,12 @@ export const dashboardCors = cors({
   },
 });
 
+export const connectorCors = cors({
+  origin: "*",
+  exposedHeaders: ["WWW-Authenticate", "Mcp-Session-Id", "Mcp-Protocol-Version"],
+  allowedHeaders: ["Authorization", "Content-Type", "Mcp-Protocol-Version", "Mcp-Session-Id", "Last-Event-ID"],
+});
+
 function sameHost(origin: string, host: string | undefined): boolean {
   try {
     return Boolean(host) && new URL(origin).host === host;

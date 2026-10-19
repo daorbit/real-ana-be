@@ -20,6 +20,7 @@
     "backfill:media-app": "tsx scripts/backfill-media-app.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@otplib/plugin-base32-scure": "^13.5.0",
     "@otplib/plugin-crypto-node": "^13.5.0",
     "@sentry/node": "^10.76.0",
@@ -49,7 +50,8 @@
     "sharp": "^0.35.3",
     "swagger-ui-express": "^5.0.1",
     "ua-parser-js": "^2.0.10",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

@@ -19,6 +19,7 @@ import { Backlink } from "../backlinks/models/Backlink.js";
 import { CompetitorBacklink } from "../backlinks/models/CompetitorBacklink.js";
 import { ApiKey } from "../identity/models/ApiKey.js";
 import { ApiKeyUsage } from "../identity/models/ApiKeyUsage.js";
+import { purgeGrantsFor } from "../mcp-oauth/grant.service.js";
 import { Subscription } from "../billing/models/Subscription.js";
 import { UsageMonth } from "../billing/models/UsageMonth.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
@@ -86,6 +87,7 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
     Project.deleteMany(byWorkspace),
     ApiKey.deleteMany(byWorkspace),
     ApiKeyUsage.deleteMany(byWorkspace),
+    purgeGrantsFor(byWorkspace),
     UsageMonth.deleteMany(byWorkspace),
     ReportSchedule.deleteMany(byWorkspace),
     ScheduledPost.deleteMany(byWorkspace),

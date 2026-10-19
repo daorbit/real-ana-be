@@ -38,11 +38,18 @@ export async function resolveAccess(
   minimum: WorkspaceRole = "viewer",
   workspaceId?: string,
 ): Promise<Access | Denied> {
-  const wid = workspaceId ?? req.params.wid;
-  if (!wid) return { error: "workspace not found", status: 404 };
+  return resolveAccessFor(req.userId, workspaceId ?? req.params.wid, minimum);
+}
+
+export async function resolveAccessFor(
+  userId: string | undefined,
+  wid: string | undefined,
+  minimum: WorkspaceRole = "viewer",
+): Promise<Access | Denied> {
+  if (!wid || !userId) return { error: "workspace not found", status: 404 };
 
   const [membership, workspace] = await Promise.all([
-    Membership.findOne({ workspaceId: wid, userId: req.userId }),
+    Membership.findOne({ workspaceId: wid, userId }),
     Workspace.findById(wid),
   ]);
   if (!membership) return { error: "workspace not found", status: 404 };

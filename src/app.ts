@@ -61,11 +61,16 @@ import popupRoutes from "./http/routes/popups.js";
 import popupPublicRoutes from "./http/routes/popups-public.js";
 import embedRoutes from "./http/routes/embeds.js";
 import embedPublicRoutes from "./http/routes/embed-public.js";
+import oauthRoutes from "./http/routes/oauth.js";
+import oauthConsentRoutes from "./http/routes/oauth-consent.js";
+import wellKnownRoutes from "./http/routes/well-known.js";
+import mcpRoutes from "./http/routes/mcp.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
-import { dashboardCors, orbitCors } from "./http/middleware/cors.js";
+import { connectorCors, dashboardCors, orbitCors } from "./http/middleware/cors.js";
+import { requireMcpEnabled } from "./http/middleware/mcp-guards.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
 import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
 import { auditTrail } from "./http/middleware/audit-trail.js";
@@ -263,6 +268,11 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/cron", cronRoutes);
 
 app.use("/api/internal/forms", formsInternalRoutes);
+
+app.use("/.well-known", connectorCors, requireMcpEnabled, wellKnownRoutes);
+app.use("/oauth", connectorCors, requireMcpEnabled, oauthRoutes);
+app.use("/mcp", connectorCors, requireMcpEnabled, mcpRoutes);
+app.use("/api/oauth", dashboardCors, requireMcpEnabled, requireUnlocked, oauthConsentRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -22,6 +22,7 @@ import { AuditLog } from "../audit/models/AuditLog.js";
 import { disconnectGoogleReviews } from "../reviews/connection.service.js";
 import { disconnectSearchConsole } from "../seo/search-console-connection.service.js";
 import { purgeWorkspaces } from "../workspace/purge.service.js";
+import { purgeGrantsFor } from "../mcp-oauth/grant.service.js";
 import { revokeLinkedInToken } from "../../infra/http-client/linkedin-auth.js";
 import { deleteImage } from "../../infra/storage/cloudinary.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
@@ -69,6 +70,7 @@ export async function deleteUserAccount(userId: string): Promise<{ workspacesDel
   await Promise.all([
     Membership.deleteMany({ userId }),
     Session.deleteMany({ userId }),
+    purgeGrantsFor({ userId }),
     PasswordReset.deleteMany({ userId }),
     ApiKey.deleteMany({ userId }),
     SocialConnection.deleteMany({ userId }),
