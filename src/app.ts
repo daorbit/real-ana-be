@@ -151,6 +151,12 @@ app.get(
 );
 
 
+app.get(["/favicon.ico", "/favicon.png"], openCors, (_req, res) => {
+  res.type("image/png");
+  res.set("Cache-Control", "public, max-age=86400");
+  res.sendFile(path.join(publicDir, "favicon.png"));
+});
+
 const openApiSpec = buildOpenApiSpec();
 app.get("/openapi.json", openCors, (_req: Request, res: Response) => {
   res.json(openApiSpec);

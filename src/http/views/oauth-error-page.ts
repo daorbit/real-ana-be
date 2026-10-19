@@ -10,6 +10,7 @@ export function renderOAuthErrorPage(message: string): string {
 <title>Connection failed · Quantalog</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
   :root { color-scheme: light dark; }
   body {

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpAuthContext } from "../mcp-oauth/token.service.js";
+import { issuerUrl } from "../mcp-oauth/config.js";
 import { registerTool } from "./tool-runner.js";
 import { getWorkspaceTool } from "./tools/workspace.tool.js";
 import { getFormDetailsTool, listFormsTool } from "./tools/forms.tools.js";
@@ -15,7 +16,16 @@ const INSTRUCTIONS =
   "Results are paginated; request further pages only when needed.";
 
 export function buildMcpServer(auth: McpAuthContext): McpServer {
-  const server = new McpServer({ name: "quantalog", version: "1.0.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer(
+    {
+      name: "quantalog",
+      title: "Quantalog",
+      version: "1.0.0",
+      websiteUrl: "https://quantalog.daorbit.in",
+      icons: [{ src: `${issuerUrl()}/favicon.png`, mimeType: "image/png", sizes: ["256x256"] }],
+    },
+    { instructions: INSTRUCTIONS },
+  );
 
   registerTool(server, auth, getWorkspaceTool);
   registerTool(server, auth, listFormsTool);
