@@ -14,7 +14,7 @@ import {
   type SearchType,
   type SearchUrlInspection,
 } from "../../infra/http-client/search-console.js";
-import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
+import { decryptSecret, encryptSecret, readStoredSecret } from "../../shared/utils/crypto-box.js";
 import { pageViewSeries, pageViewsByPath, pathOf, type PageViewSeries } from "./search-page-views.js";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -42,14 +42,21 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
     if (token) return token;
   }
 
-  const storedRefresh = decryptSecret(String(connection.get("refreshToken") ?? ""));
-  if (!storedRefresh) {
+  const storedRefresh = readStoredSecret(connection.get("refreshToken"));
+  if (!storedRefresh.ok && storedRefresh.reason === "missing") {
+    console.warn(`[search-console] connection ${connectionId} has no refresh token — marking signed out`);
     await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
+  if (!storedRefresh.ok) {
+    console.error(
+      `[search-console] connection ${connectionId} refresh token cannot be decrypted here — TOKEN_ENCRYPTION_KEY differs from the server that connected it; leaving the connection untouched`,
+    );
+    throw new GoogleApiError("unavailable", 503, "stored Google credentials cannot be read by this server");
+  }
 
   try {
-    const tokens = await refreshSearchConsoleToken(storedRefresh);
+    const tokens = await refreshSearchConsoleToken(storedRefresh.value);
     await SearchConsoleConnection.updateOne(
       { _id: connectionId },
       {
@@ -64,6 +71,7 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
     return tokens.accessToken;
   } catch (err) {
     if (err instanceof GoogleApiError && err.kind === "revoked") {
+      console.warn(`[search-console] connection ${connectionId} refresh rejected by Google (${err.message}) — marking signed out`);
       await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     }
     throw err;
@@ -93,6 +101,7 @@ export async function withGoogleSession<T>(connectionId: string, run: () => Prom
     return await run();
   } catch (err) {
     if (isRevoked(err)) {
+      console.warn(`[search-console] connection ${connectionId} still unauthorised after a fresh token (${err instanceof Error ? err.message : ""}) — marking signed out`);
       await markRevoked(connectionId, SIGNED_OUT_MESSAGE);
     }
     throw err;

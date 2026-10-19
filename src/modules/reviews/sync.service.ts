@@ -8,7 +8,7 @@ import {
   type ReviewPage,
 } from "../../infra/http-client/google-business.js";
 import { getPlaceReviews } from "../../infra/http-client/google-places.js";
-import { decryptSecret, encryptSecret } from "../../shared/utils/crypto-box.js";
+import { decryptSecret, encryptSecret, readStoredSecret } from "../../shared/utils/crypto-box.js";
 
  
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
@@ -42,17 +42,23 @@ export async function usableAccessToken(connectionId: string): Promise<string> {
     if (token) return token;
   }
 
-  const storedRefresh = decryptSecret(String(connection.get("refreshToken") ?? ""));
-  if (!storedRefresh) {
+  const storedRefresh = readStoredSecret(connection.get("refreshToken"));
+  if (!storedRefresh.ok && storedRefresh.reason === "missing") {
     await markConnectionRevoked(
       connectionId,
       "Google did not provide a refresh token. Reconnect Google to continue syncing.",
     );
     throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
+  if (!storedRefresh.ok) {
+    console.error(
+      `[reviews] connection ${connectionId} refresh token cannot be decrypted here — TOKEN_ENCRYPTION_KEY differs from the server that connected it; leaving the connection untouched`,
+    );
+    throw new GoogleApiError("unavailable", 503, "stored Google credentials cannot be read by this server");
+  }
 
   try {
-    const tokens = await refreshAccessToken(storedRefresh);
+    const tokens = await refreshAccessToken(storedRefresh.value);
     await GoogleConnection.updateOne(
       { _id: connectionId },
       {

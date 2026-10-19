@@ -98,6 +98,17 @@ export function decryptSecret(payload: string): string | null {
   }
 }
 
+export type StoredSecret =
+  | { ok: true; value: string }
+  | { ok: false; reason: "missing" | "undecryptable" };
+
+export function readStoredSecret(payload: unknown): StoredSecret {
+  const raw = typeof payload === "string" ? payload : "";
+  if (!raw) return { ok: false, reason: "missing" };
+  const value = decryptSecret(raw);
+  return value ? { ok: true, value } : { ok: false, reason: "undecryptable" };
+}
+
 /**
  * Constant-time string comparison, for values where a mismatch is a security
  * outcome rather than a lookup miss.
