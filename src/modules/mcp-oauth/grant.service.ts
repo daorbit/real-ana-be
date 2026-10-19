@@ -2,7 +2,9 @@ import { Types } from "mongoose";
 import { OAuthGrant } from "./models/OAuthGrant.js";
 import { OAuthToken } from "./models/OAuthToken.js";
 import { OAuthCode } from "./models/OAuthCode.js";
+import { OAuthClient } from "./models/OAuthClient.js";
 import { Workspace } from "../workspace/models/Workspace.js";
+import { redirectHost } from "./redirect-uri.js";
 import { describeScopes, isScope } from "./scopes.js";
 
 export async function revokeGrant(grantId: Types.ObjectId | string, reason: string): Promise<void> {
@@ -17,18 +19,22 @@ export async function listUserGrants(userId: string) {
   const grants = await OAuthGrant.find({ userId, revokedAt: null, activatedAt: { $ne: null } })
     .sort({ activatedAt: -1 })
     .limit(100)
-    .select("workspaceId clientName scopes activatedAt lastUsedAt")
+    .select("workspaceId clientId clientName scopes activatedAt lastUsedAt")
     .lean();
 
   const workspaceIds = [...new Set(grants.map((g) => String(g.workspaceId)))];
-  const workspaces = workspaceIds.length
-    ? await Workspace.find({ _id: { $in: workspaceIds } }).select("name").lean()
-    : [];
+  const clientIds = [...new Set(grants.map((g) => g.clientId))];
+  const [workspaces, clients] = await Promise.all([
+    workspaceIds.length ? Workspace.find({ _id: { $in: workspaceIds } }).select("name").lean() : [],
+    clientIds.length ? OAuthClient.find({ clientId: { $in: clientIds } }).select("clientId redirectUris").lean() : [],
+  ]);
   const nameById = new Map(workspaces.map((w) => [String(w._id), w.name as string]));
+  const hostByClient = new Map(clients.map((c) => [c.clientId, redirectHost(c.redirectUris[0] ?? "")]));
 
   return grants.map((g) => ({
     id: String(g._id),
     clientName: g.clientName,
+    clientHost: hostByClient.get(g.clientId) ?? "",
     workspaceId: String(g.workspaceId),
     workspaceName: nameById.get(String(g.workspaceId)) ?? "",
     scopes: describeScopes(g.scopes.filter(isScope)),

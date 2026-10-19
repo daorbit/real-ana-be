@@ -5,7 +5,7 @@ export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const AUTH_CODE_TTL_SECONDS = 5 * 60;
 export const AUTH_REQUEST_TTL_SECONDS = 10 * 60;
 
-const DEFAULT_REDIRECT_HOSTS = ["claude.ai", "claude.com"];
+const DEFAULT_REDIRECT_HOSTS = ["claude.ai", "claude.com", "chatgpt.com", "chat.openai.com"];
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
 export function mcpEnabled(): boolean {
