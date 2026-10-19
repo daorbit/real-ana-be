@@ -3,6 +3,7 @@ import { requireAuth, type AuthedRequest } from "../middleware/auth.js";
 import { approveRequest, denyRequest, describeRequest } from "../../modules/mcp-oauth/authorize.service.js";
 import { listUserGrants, revokeUserGrant } from "../../modules/mcp-oauth/grant.service.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
+import { resourceUrl } from "../../modules/mcp-oauth/config.js";
 import { badRequest, forbidden, notFound } from "../../shared/errors/index.js";
 
 const router = Router();
@@ -44,7 +45,7 @@ router.post("/requests/:requestId/deny", async (req: AuthedRequest, res: Respons
 });
 
 router.get("/grants", async (req: AuthedRequest, res: Response) => {
-  res.json({ items: await listUserGrants(String(req.userId)) });
+  res.json({ items: await listUserGrants(String(req.userId)), mcpUrl: resourceUrl() });
 });
 
 router.delete("/grants/:grantId", async (req: AuthedRequest, res: Response) => {
