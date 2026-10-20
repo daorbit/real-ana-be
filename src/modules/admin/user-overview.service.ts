@@ -47,7 +47,7 @@ export async function adminUserOverview(userId: string) {
   const since = new Date(Date.now() - WINDOW_DAYS * DAY_MS);
 
   const [user, owned, memberships, signIns] = await Promise.all([
-    User.findById(uid).select("email name role avatarUrl createdAt totpEnabled screenLockEnabled").lean(),
+    User.findById(uid).select("email name role avatarUrl createdAt totpEnabled screenLockEnabled referralSources").lean(),
     Workspace.find({ userId: uid }).select("userId name createdAt apps").limit(MAX_WORKSPACES).lean<WorkspaceRow[]>(),
     Membership.find({ userId: uid }).select("workspaceId role").limit(MAX_WORKSPACES).lean(),
     AuditLog.find({ actorId: uid, action: "account.login" })
@@ -158,6 +158,7 @@ export async function adminUserOverview(userId: string) {
       createdAt: user.createdAt,
       totpEnabled: Boolean(user.totpEnabled),
       screenLockEnabled: Boolean(user.screenLockEnabled),
+      referralSources: (user.referralSources ?? []).map(String),
       plan: accountPlan ? { slug: accountPlan.slug, name: accountPlan.name, expired: accountPlan.expired } : null,
       lastEventAt,
     },

@@ -23,6 +23,8 @@ import {
 import { sendTwoFactorBackupCodesEmail, sendAccountLockedEmail, sendAccountDeletedEmail } from "../../infra/mail/mailer.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
 import { claimAttempt, clearAttempts } from "../../modules/security/attempt-lock.service.js";
+import { overRateLimit } from "../../modules/security/rate-limit.service.js";
+import { hashIp } from "../../shared/utils/ip-hash.js";
 import { hasOwnershipFactor, rejectUnconfirmed, sendThrottled } from "../../modules/security/confirm-identity.service.js";
 import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
@@ -225,6 +227,8 @@ const OTP_MAX_ATTEMPTS = 5;
 const OTP_MAX_SENDS = 5;
 /** Minimum gap between codes, so "resend" can't be leaned on. */
 const OTP_RESEND_GAP_MS = 60 * 1000;
+const SIGNUP_PER_IP = 10;
+const SIGNUP_WINDOW_MS = 15 * 60 * 1000;
 
 /**
  * A six-digit code, from the cryptographic generator.
@@ -263,23 +267,24 @@ router.post("/signup", async (req, res) => {
     const cleanName = String(name).trim();
     const parts = cleanName.split(/\s+/);
 
-    const taken = await User.findOne({ email: cleanEmail });
+    if (await overRateLimit(`signup:${hashIp(req.ip ?? "")}`, SIGNUP_PER_IP, SIGNUP_WINDOW_MS)) {
+      return res.status(429).json({ error: "Too many signup attempts. Please wait a few minutes and try again." });
+    }
+
+    const taken = await User.findOne({ email: cleanEmail }).select("passwordHash googleId linkedinId githubId");
+    if (taken && !taken.passwordHash) {
+      const provider = socialProvider(taken);
+      return res.status(409).json({
+        error: `this account uses ${provider} sign-in — continue with ${provider}`,
+        provider: provider.toLowerCase(),
+        code: "email_taken",
+      });
+    }
     if (taken) {
-      // Tell the real owner, and only the real owner, that the address is in
-      // use — over email, where an enumerating caller cannot read it. The HTTP
-      // response below is identical either way.
-      try {
-        await sendOne(
-          { email: cleanEmail, name: taken.name },
-          "Someone tried to sign up with your email",
-          `Hi ${taken.name},\n\nSomeone just tried to create a Quantalog account with this email address, but you already have one.\n\nIf that was you, log in instead — or reset your password if you've forgotten it.\n\nIf it wasn't, you can safely ignore this message. Nothing about your account has changed.`,
-        );
-      } catch {
-        // The caller must not learn that this branch was taken, so a mail
-        // failure here is logged and swallowed rather than surfaced.
-        console.warn(`[signup] could not send already-registered notice to ${cleanEmail}`);
-      }
-      return res.status(202).json({ pending: true, email: cleanEmail, expiresInMinutes: OTP_TTL_MINUTES });
+      return res.status(409).json({
+        error: "This email is already registered. Log in instead, or reset your password if you've forgotten it.",
+        code: "email_taken",
+      });
     }
 
     const code = generateOtp();
