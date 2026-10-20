@@ -27,6 +27,7 @@ const siteSchema = new Schema(
      */
     trackerVersion: { type: Number, default: 1 },
     firstEventAt: { type: Date, default: null },
+    logoUrl: { type: String, default: "" },
     /**
      * The tracker options chosen when the snippet was built.
      *

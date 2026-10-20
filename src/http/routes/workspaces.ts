@@ -4,6 +4,7 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { fillMissingFirstEvents } from "../../modules/analytics/site-first-event.js";
+import { parseSiteLogoUrl } from "../../modules/analytics/site-logo.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
@@ -214,8 +215,10 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "editor");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
-  const { name, platform, domain, framework, bundleId, trackerOptions, purpose } = req.body ?? {};
+  const { name, platform, domain, framework, bundleId, trackerOptions, purpose, logoUrl } = req.body ?? {};
   if (!name) return res.status(400).json({ error: "name required" });
+  const logo = parseSiteLogoUrl(logoUrl);
+  if (logo === null) return res.status(400).json({ error: "the logo must be an https image URL" });
   // Web sites are still domain-bound (that's what the tracker snippet installs
   // against); app sites are identified by bundleId instead.
   if (platform !== "app" && !domain)
@@ -235,6 +238,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     siteId: nanoid(16),
     trackerOptions: parseTrackerOptions(trackerOptions),
     purpose: typeof purpose === "string" ? purpose.trim().slice(0, 140) : "",
+    logoUrl: logo,
   });
   await recordAudit(req, {
     action: "site.added",
@@ -322,8 +326,14 @@ router.patch(
     const site = await Site.findOne({ siteId: req.params.siteId, workspaceId: ws.id });
     if (!site) return res.status(404).json({ error: "site not found" });
 
-    const { name, domain } = req.body ?? {};
-    const before = { name: site.name as string, domain: site.domain as string };
+    const { name, domain, logoUrl } = req.body ?? {};
+    const before = { name: site.name as string, domain: site.domain as string, logoUrl: site.get("logoUrl") as string };
+
+    if (logoUrl !== undefined) {
+      const logo = parseSiteLogoUrl(logoUrl);
+      if (logo === null) return res.status(400).json({ error: "the logo must be an https image URL" });
+      site.set("logoUrl", logo);
+    }
 
     if (name !== undefined) {
       const nextName = String(name).trim().slice(0, 60);
@@ -351,6 +361,7 @@ router.patch(
       meta: {
         ...(before.name !== site.name ? { fromName: before.name, toName: site.name as string } : {}),
         ...(before.domain !== site.domain ? { fromDomain: before.domain, toDomain: site.domain as string } : {}),
+        ...(before.logoUrl !== site.get("logoUrl") ? { logoChanged: true } : {}),
       },
     });
     res.json(site);
