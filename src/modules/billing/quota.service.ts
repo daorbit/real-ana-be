@@ -232,17 +232,26 @@ export async function canCreateSite(
   const plan = await currentPlan(workspaceId);
   if (!plan) return { ok: false, error: "this workspace has no active plan — subscribe to add a site" };
 
-  const sub = await Subscription.findOne({ workspaceId }).select("addonSiteSlots");
-  const cap = MAX_SITES_PER_WORKSPACE + ((sub?.get("addonSiteSlots") as number) ?? 0);
+  const [sub, count] = await Promise.all([
+    Subscription.findOne({ workspaceId }).select("addonSiteSlots"),
+    Site.countDocuments({ workspaceId }),
+  ]);
+  const cap = siteCap(sub?.get("addonSiteSlots") as number | undefined);
 
-  const count = await Site.countDocuments({ workspaceId });
   if (count >= cap)
     return {
       ok: false,
-      error: `a workspace holds up to ${cap} sites — create another workspace to track more`,
+      error:
+        cap === 1
+          ? "Each workspace tracks one site. Create a new workspace to track another."
+          : `This workspace already tracks ${cap} sites. Create a new workspace to track another.`,
       limit: { kind: "sites", label: "Sites", used: count, quota: cap, plan: plan.name },
     };
   return { ok: true };
+}
+
+function siteCap(addonSlots: number | undefined): number {
+  return MAX_SITES_PER_WORKSPACE + (addonSlots ?? 0);
 }
 
 
@@ -643,7 +652,7 @@ export async function quotaSummary(workspaceId: string) {
       used: (sub.eventsUsed as number) ?? 0,
     },
     sites: {
-      quota: MAX_SITES_PER_WORKSPACE + ((sub.get("addonSiteSlots") as number) ?? 0),
+      quota: Math.max(siteCap(sub.get("addonSiteSlots") as number | undefined), siteCount),
       used: siteCount,
       addonSlots: (sub.get("addonSiteSlots") as number) ?? 0,
     },

@@ -11,6 +11,7 @@ import { requireApiKey, ApiKeyRequest } from "../middleware/api-key.js";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { computeStats, parseFilters } from "../../modules/analytics/stats.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
+import { guardSiteCreation } from "../site-limit.js";
 
 const router = Router();
 router.use(requireApiKey);
@@ -58,6 +59,7 @@ router.post("/projects/:pid/sites", async (req: ApiKeyRequest, res: Response) =>
   if (!project) return res.status(404).json({ error: "project not found" });
   const { name, domain, framework } = req.body ?? {};
   if (!name || !domain) return res.status(400).json({ error: "name, domain required" });
+  if (!(await guardSiteCreation(res, req.workspaceId!))) return;
   const site = await Site.create({
     workspaceId: req.workspaceId,
     projectId: project.id,

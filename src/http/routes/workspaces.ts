@@ -9,6 +9,7 @@ import { cloudinaryConfigured } from "../../infra/storage/cloudinary.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
+import { guardSiteCreation } from "../site-limit.js";
 import {
   computeStats,
   computeFunnel,
@@ -32,7 +33,7 @@ import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
 import { decryptApiKey, loadRevealTarget } from "../../modules/identity/api-key-reveal.service.js";
 import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
-import { canCreateSite, canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
@@ -225,8 +226,7 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   if (platform !== "app" && !domain)
     return res.status(400).json({ error: "domain required" });
 
-  const allowed = await canCreateSite(ws.id);
-  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
+  if (!(await guardSiteCreation(res, ws.id))) return;
 
   const site = await Site.create({
     workspaceId: ws.id,

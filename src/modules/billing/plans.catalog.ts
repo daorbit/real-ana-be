@@ -1,5 +1,5 @@
 
-export const MAX_SITES_PER_WORKSPACE = 2;
+export const MAX_SITES_PER_WORKSPACE = 1;
 
 export type RangeKey = "1h" | "24h" | "7d" | "30d" | "custom";
 
