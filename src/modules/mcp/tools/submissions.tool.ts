@@ -5,7 +5,9 @@ import { formIdArg, isoDateArg, limitArg, pageArg, paging } from "../limits.js";
 import { flattenFields, presentSubmission } from "../presenters.js";
 import type { ToolDef } from "../tool-runner.js";
 
-type SubmissionPage = { items: Record<string, unknown>[]; total: number };
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+type SubmissionPage ={ items: Record<string, unknown>[]; total: number };
 type FormDoc = { fields?: Parameters<typeof flattenFields>[0] };
 
 const listSubmissionsInput = {
@@ -28,7 +30,8 @@ export const listSubmissionsTool: ToolDef<typeof listSubmissionsInput> = {
   scope: "submissions:read",
   input: listSubmissionsInput,
   run: async (ctx, args) => {
-    if (args.from && args.to && Date.parse(args.from) > Date.parse(args.to)) {
+    const to = args.to && DATE_ONLY.test(args.to) ? `${args.to}T23:59:59.999Z` : args.to;
+    if (args.from && to && Date.parse(args.from) > Date.parse(to)) {
       throw new ToolError("from must be earlier than to");
     }
 
@@ -38,7 +41,7 @@ export const listSubmissionsTool: ToolDef<typeof listSubmissionsInput> = {
         page: args.page,
         limit: args.limit,
         from: args.from,
-        to: args.to,
+        to,
         stage: args.stage,
         minScore: args.minScore,
         q: args.search,

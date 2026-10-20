@@ -1009,6 +1009,7 @@ export async function computeStats(
   // Bounded on both ends so a custom window doesn't spill past its end date.
   const base: Match = { siteId: inSites, ts: { $gte: since, $lt: until }, ...fMatch };
   const pageviewBase: Match = { ...base, type: "pageview" };
+  const entryBase: Match = { ...pageviewBase, isEntry: true };
 
   const [
     current,
@@ -1045,18 +1046,18 @@ export async function computeStats(
     totals(siteIds, prevSince, prevUntil, fMatch),
     Event.distinct("visitorHash", { siteId: inSites, ts: { $gte: liveSince }, ...fMatch }),
     topBy(pageviewBase, "path"),
-    topBy({ ...pageviewBase, isEntry: true }, "path"),
+    topBy(entryBase, "path"),
     topBy({ ...base, type: "engagement", isExit: true }, "path"),
-    topBy(base, "referrer"),
+    topBy(entryBase, "referrer"),
     topBy(pageviewBase, "device"),
     topBy(pageviewBase, "browser"),
     topBy(pageviewBase, "os"),
     topBy(pageviewBase, "country"),
     topBy(pageviewBase, "language"),
     screenSizes(pageviewBase),
-    topBy(base, "utm.source"),
-    topBy(base, "utm.medium"),
-    topBy(base, "utm.campaign"),
+    topBy(entryBase, "utm.source"),
+    topBy(entryBase, "utm.medium"),
+    topBy(entryBase, "utm.campaign"),
     topClicks(base),
     Event.countDocuments({ ...base, type: "click" }),
     timeseriesFor(pageviewBase, windowMs),
@@ -1067,7 +1068,7 @@ export async function computeStats(
     landingPages(siteIds, since, until, fMatch),
     customEvents(base),
     // Channels grouped per session, so count entry pageviews rather than every view.
-    channels({ ...pageviewBase, isEntry: true }),
+    channels(entryBase),
     outboundClicks(base),
     topErrors(base),
     withCompareSeries

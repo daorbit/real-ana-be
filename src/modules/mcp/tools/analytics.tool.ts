@@ -4,11 +4,11 @@ import { computeStats, resolveWindow } from "../../analytics/stats.service.js";
 import { canUseRange } from "../../billing/quota.service.js";
 import { createTtlCache } from "../../../shared/utils/ttl-cache.js";
 import { ToolError } from "../errors.js";
-import { topRows } from "../presenters.js";
+import { presentTraffic } from "../presenters.js";
 import type { ToolDef } from "../tool-runner.js";
 
 const MAX_SITES = 50;
-const statsCache = createTtlCache<Awaited<ReturnType<typeof computeStats>>>(30_000, 200);
+const statsCache = createTtlCache<ReturnType<typeof presentTraffic>>(30_000, 200);
 
 const analyticsInput = {
   range: z.enum(["24h", "7d", "30d"]).default("7d").describe("Reporting window"),
@@ -19,7 +19,7 @@ export const getAnalyticsSummaryTool: ToolDef<typeof analyticsInput> = {
   name: "get_analytics_summary",
   title: "Get website analytics summary",
   description:
-    "Summarises website traffic for the workspace's tracked sites: visitors, pageviews, sessions and bounce rate with change versus the previous period, visitors online now, and the top pages, referrers, countries and devices.",
+    "Summarises website traffic for the workspace's tracked sites over the window: visitors, pageviews, sessions, bounce rate, average session time and pages per session, the same figures for the previous period with percentage change (null when the previous period had no traffic), visitors online now, an hourly (24h) or daily trend, and top pages, entry pages, referrers, marketing channels, UTM sources, countries, devices and browsers. Each list's name says what it counts.",
   scope: "analytics:read",
   input: analyticsInput,
   run: async (ctx, args) => {
@@ -34,23 +34,16 @@ export const getAnalyticsSummaryTool: ToolDef<typeof analyticsInput> = {
     if (!allowed.ok) throw new ToolError(allowed.error);
 
     const ids = scoped.map((s) => s.siteId as string).sort();
-    const stats = await statsCache(`${ctx.workspaceId}:${ids.join(",")}:${args.range}`, () =>
-      computeStats(ids, args.range, undefined, resolveWindow(args.range)),
-    );
+    const traffic = await statsCache(`${ctx.workspaceId}:${ids.join(",")}:${args.range}`, async () => {
+      const win = resolveWindow(args.range);
+      const stats = await computeStats(ids, args.range, undefined, win);
+      return presentTraffic(stats, win, args.range === "24h");
+    });
 
     return {
       range: args.range,
       sites: scoped.map((s) => ({ siteId: s.siteId, name: s.name, domain: s.domain })),
-      visitors: stats.visitors,
-      pageviews: stats.pageviews,
-      sessions: stats.sessions,
-      bounceRatePct: stats.bounceRate,
-      changeVsPreviousPct: stats.deltas ?? null,
-      onlineNow: stats.live,
-      topPages: topRows(stats.topPages),
-      topReferrers: topRows(stats.topReferrers),
-      countries: topRows(stats.countries),
-      devices: topRows(stats.devices),
+      ...traffic,
     };
   },
 };

@@ -3,8 +3,6 @@ import { rangeDaysArg, rangeToDays, TOP_N } from "../limits.js";
 import type { ToolDef } from "../tool-runner.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const LEAD_SOURCE_RANGE: Record<string, string> = { "7d": "30d", "30d": "30d", "90d": "90d", "365d": "365d" };
-
 function windowFor(range: "7d" | "30d" | "90d" | "365d") {
   const until = new Date();
   const since = new Date(until.getTime() - rangeToDays(range) * DAY_MS);
@@ -26,12 +24,12 @@ export const getLeadSummaryTool: ToolDef<typeof summaryInput> = {
     const window = windowFor(args.range);
     const [pipeline, sources] = await Promise.all([
       readFormsWorkspace<Record<string, unknown>>(ctx.workspaceId, ctx.userId, "/pipeline-summary", window),
-      readFormsWorkspace<LeadSources>(ctx.workspaceId, ctx.userId, "/lead-sources", { range: LEAD_SOURCE_RANGE[args.range] }),
+      readFormsWorkspace<LeadSources>(ctx.workspaceId, ctx.userId, "/lead-sources", { range: args.range }),
     ]);
     return {
       range: args.range,
       ...pipeline,
-      sources: { window: LEAD_SOURCE_RANGE[args.range], channels: sources.sources.slice(0, TOP_N) },
+      sources: { window: args.range, channels: sources.sources.slice(0, TOP_N) },
     };
   },
 };

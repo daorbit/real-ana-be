@@ -76,7 +76,7 @@ export function presentFormDetails(form: Raw, analytics: FormAnalytics | null) {
       ? {
           views: analytics.viewCount ?? 0,
           responses: analytics.submissionCount ?? 0,
-          completionRate: analytics.completionRate ?? 0,
+          completionRatePct: Math.round((analytics.completionRate ?? 0) * 1000) / 10,
           topSources: (analytics.sources ?? []).slice(0, TOP_N),
           last14Days: analytics.daily ?? [],
           abandonmentTracked: Boolean(analytics.partialsEnabled),
@@ -136,4 +136,70 @@ type Row = { key: string; count: number };
 
 export function topRows(rows: unknown): Row[] {
   return ((rows as Row[]) ?? []).filter((r) => r?.key).slice(0, TOP_N);
+}
+
+type TrafficTotals = {
+  visitors: number;
+  pageviews: number;
+  sessions: number;
+  bounceRate: number;
+  avgSessionMs: number;
+  pagesPerSession: number;
+};
+
+type TrafficStats = TrafficTotals & {
+  live: number;
+  comparison: TrafficTotals & { since: Date; until: Date };
+  timeseries: { bucket: string; views: number; visitors: number }[];
+  topPages: unknown;
+  entryPages: unknown;
+  topReferrers: unknown;
+  channels: unknown;
+  utmSources: unknown;
+  countries: unknown;
+  devices: unknown;
+  browsers: unknown;
+};
+
+function changePct(current: number, previous: number): number | null {
+  if (!previous) return null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+function presentTotals(t: TrafficTotals) {
+  return {
+    visitors: t.visitors,
+    pageviews: t.pageviews,
+    sessions: t.sessions,
+    bounceRatePct: t.bounceRate,
+    avgSessionSeconds: Math.round((t.avgSessionMs ?? 0) / 1000),
+    pagesPerSession: Math.round((t.pagesPerSession ?? 0) * 10) / 10,
+  };
+}
+
+export function presentTraffic(stats: TrafficStats, window: { since: Date; until: Date }, hourly: boolean) {
+  const prev = stats.comparison;
+  return {
+    window: { since: window.since, until: window.until },
+    totals: presentTotals(stats),
+    previousPeriod: { since: prev.since, until: prev.until, ...presentTotals(prev) },
+    changeVsPreviousPct: {
+      visitors: changePct(stats.visitors, prev.visitors),
+      pageviews: changePct(stats.pageviews, prev.pageviews),
+      sessions: changePct(stats.sessions, prev.sessions),
+    },
+    onlineNow: stats.live,
+    trend: {
+      bucket: hourly ? "hour (UTC)" : "day (UTC)",
+      points: (stats.timeseries ?? []).map((p) => ({ period: p.bucket, pageviews: p.views, visitors: p.visitors })),
+    },
+    topPagesByPageviews: topRows(stats.topPages),
+    entryPagesBySessions: topRows(stats.entryPages),
+    referrersBySessions: topRows(stats.topReferrers),
+    channelsBySessions: topRows(stats.channels),
+    utmSourcesBySessions: topRows(stats.utmSources),
+    countriesByPageviews: topRows(stats.countries),
+    devicesByPageviews: topRows(stats.devices),
+    browsersByPageviews: topRows(stats.browsers),
+  };
 }
