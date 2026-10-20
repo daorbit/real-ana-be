@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
+import { fillMissingFirstEvents } from "../../modules/analytics/site-first-event.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
@@ -282,6 +283,7 @@ router.get("/:wid/sites", async (req: AuthedRequest, res: Response) => {
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
   const sites = await Site.find({ workspaceId: ws.id }).sort({ createdAt: -1 });
+  await fillMissingFirstEvents(sites);
   res.json(sites);
 });
 
