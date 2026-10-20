@@ -4,7 +4,8 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 
 ## Runtime facts that shape every decision
 
-- **Deployed to Vercel serverless** (`api/index.ts`, `vercel.json`). Each instance is short-lived. In-memory state (caches, counters, queues) exists only per warm instance and can vanish at any time. Never depend on it for correctness. Scheduled work runs through `/api/cron` (Vercel Cron), not in-process timers. `src/index.ts` is only the local dev server.
+- **Deployed to Vercel serverless** (`api/index.ts`, `vercel.json`). Each instance is short-lived. In-memory state (caches, counters, queues) exists only per warm instance and can vanish at any time. Never depend on it for correctness. `src/index.ts` is only the local dev server; it also starts the in-process FX cron (`modules/billing/fx-cron.ts`), which never runs in production.
+- **Scheduled work** runs through `/api/cron/*` (`http/routes/cron.ts`), called by Cloudflare Workers in `workers/*-cron` with `Authorization: Bearer CRON_SECRET`, not by Vercel Cron. Routes: `fx-sync`, `reports`, `reviews`, `social-posts` (also runs Alerts), `alerts`, `social-stats`, `backlinks`, `plan-expiry`, `event-retention`, and `run` for a manual run of everything. The Cloudflare account is at its trigger limit, so new work goes inside an existing route rather than a new worker. `.github/workflows/social-posts-cron.yml` is a 25-minute backup for `social-posts`.
 - Responses are gzipped by `compression()` on `/api` and `/v1` (`src/app.ts`). Before adding any streaming or SSE response, exclude it from compression or flush explicitly.
 
 ## Structure
@@ -19,7 +20,57 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
   - `form-alert.ts`: da-forms alerts.
 
   Raw Bot API calls live in `infra/messaging/telegram.ts`. Reports and forms both send through `sendToChats`.
-- `src/shared/utils/*`: generic helpers (`ttl-cache.ts`, `crypto-box.ts`, ...). `src/infra/*`: DB, mail, payments, storage, outbound HTTP.
+- `src/shared/utils/*`: generic helpers (`ttl-cache.ts`, `crypto-box.ts`, `forms-workspace-token.ts`, ...). `src/infra/*`: DB, mail, payments, storage, outbound HTTP (`infra/http-client/forms-service.ts` calls da-forms).
+- `src/tracker/tracker.src.js` is the customer tracking script. `npm run build:tracker` (run by `dev` and `build`) writes `public/tracker.js`; never edit that file directly.
+- Public and partner surfaces, all with open CORS where needed: `/api/track`, `/api/collect`, `/api/ingest` (ingest), `/v1` (public API, `http/routes/v1.ts`), `/api/share`, `/api/embed`, `/api/popups`, `/api/public/*`.
+- `/api/internal/forms/*` (`http/routes/forms-internal.ts`) serves da-forms only, behind `Bearer FORMS_SERVICE_SECRET`: limits, branding, AI generate and edit (`modules/forms-ai`), bell notify, Telegram, WhatsApp, audit and submissions.
+- The remote MCP server for Claude and ChatGPT is `/mcp` (`modules/mcp`) with OAuth at `/oauth`, `/.well-known` and `/api/oauth` (`modules/mcp-oauth`). All of it is off unless `MCP_ENABLED=true` (`requireMcpEnabled`). Details, scopes and tools are in `../CLAUDE.md` under Apps.
+- Large JSON bodies get their own `express.json` limit in `app.ts` before the global parser (media, Orbit ask, social posts, avatar, form generate). Payment webhooks get `express.raw` so signatures verify.
+- `scripts/`: one-off `tsx` scripts. App backfills run as `npm run backfill:<app>-app -- --write` (dry run without `--write`).
+
+## Module map (`src/modules`)
+
+| Module | What it owns |
+|---|---|
+| `analytics` | `Event`, `Site`, `Segment`, `Marker`, `Funnel`, `HeatmapClick`; `stats.service.ts` (`computeStats`, `resolveWindow`), bot detection, enrichment, live audience, retention, share cards |
+| `workspace` | `Workspace`, `Membership`, `WorkspaceInvite`, `Project`; access checks, Quantalog app flags (`apps.service.ts`, `app-hooks.ts`), sidebar prefs, Home layout, workspace purge |
+| `identity` | `User`, `Session`, API keys and their usage, Google login, pending signups, password resets, account deletion |
+| `security` | Mongo-backed rate limits (`overRateLimit`, `RateCounter`), login attempt locks, identity re-confirmation |
+| `billing` | Plan catalog, quotas and usage months, counted features, add-on packs, coupons, FX pricing and price locks, invoices, plan expiry reminders |
+| `dashboards` | Custom dashboards (and the AI builder), public embeds, goal targets and their metrics, widget catalog |
+| `reports` | Scheduled reports (`ReportSchedule`): runner, digest, HTML email, XLSX, Telegram and WhatsApp delivery |
+| `alerts` | Quantalog Alerts: rules, checks, delivery, `AlertSettings`, `AlertEvent` |
+| `notifications` | The bell (`Notification`), preferences, web push; send with `emit`, `emitTo`, `emitToMany` |
+| `orbit`, `orbit-history` | Orbit AI (see below) and saved conversations |
+| `forms-ai`, `form-alerts` | AI generate and edit for da-forms forms; form alerts to the bell and WhatsApp |
+| `seo` | Site audits and crawls, Search Console, Compare (competitors, baselines, briefs), AI search checks, screenshots |
+| `backlinks` | Backlink discovery, verification, link gap against competitors |
+| `social` | Scheduled posts for `linkedin` and `instagram` (`POST_PROVIDERS`), post runner, stats refresh |
+| `reviews` | Google Business Profile sync, with a Places API fallback (`places.service.ts`) |
+| `telegram`, `whatsapp` | Messaging connections shared by reports, alerts and form alerts |
+| `popups`, `media`, `notes`, `branding`, `referrals`, `audit`, `admin`, `onboarding-ai` | As named |
+| `mcp`, `mcp-oauth` | The remote MCP connector for Claude and ChatGPT, see `../CLAUDE.md` |
+
+## Access, plans and audit
+
+- Workspace roles are `owner`, `admin`, `editor`, `viewer` (`ROLE_RANK` in `workspace/models/Membership.ts`). Pass the minimum role to `requireWorkspace(req, res, role)`. The role always comes from `Membership`, never from the token. App toggles need `admin`; minting the forms token needs `editor`.
+- Platform admins use `requireAdmin` / `requireSuperAdmin` (`/api/admin`, dashboard `/app/admin-tools`). Impersonation and demo sessions use their own signed tokens (`signImpersonationToken`, `signDemoToken`); demo is read-only through `blockDemoWrites`.
+- Plans are `free`, `starter` and `pro`, defined in `billing/plans.catalog.ts` (`getPlanCatalogEntry`). Each entry holds every limit and feature flag (forms, submissions, events, dashboards, embeds, goal targets, popups, report schedules, WhatsApp reports, alert interval, audit log days, ...). A new limit is a new field on every plan, never a hard-coded number in a route.
+- Counted limits (dashboards, embeds, goal targets, popups) go through `COUNTED_FEATURES` in `billing/feature-limits.ts`. Monthly allowances go through `quota.service.ts`. Refuse with `planLimit(...)` from `http/plan-limit.ts` (402, `code` `quota_exceeded` or `plan_required`), whose shape the upgrade dialog and da-forms both rely on.
+- Billing payments use Razorpay and Cashfree, with webhooks at `/api/webhooks/razorpay` and `/api/webhooks/cashfree` (raw bodies).
+- `auditTrail` on `/api/workspaces/:wid` records every mutating request. `modules/audit/route-registry.ts` gives routes a named action and a "before" snapshot; `action: null` skips one. Register new write routes there.
+- Rate limits that must hold across serverless instances use `overRateLimit` from `modules/security/rate-limit.service.ts`, not an in-memory counter.
+
+## Orbit AI
+
+- `modules/orbit` answers questions (`askOrbit`) from a docs corpus (`corpus.ts`, `retrieval.ts`) and workspace data (`orbit-data-*.ts` for traffic, forms, reviews and SEO). `prompt-public.ts` serves the public `/api/public/orbit` assistant on the landing page.
+- Models are listed in `orbit/models.ts` with a provider (`gemini`, `openrouter`, `nvidia`, `cloudflare`) and a tier (`basic`, `standard`, `advanced`). Only the Cloudflare Llama models are active now.
+- The core is meant to become a standalone package: plan and quota questions go through `OrbitHost` (`types.ts`), implemented by `orbit-host.ts`. Don't import billing or plan code anywhere else in the module.
+- Orbit routes accept a session or an API key (`requireApiKeyOrAuth`), which is how the Chrome extension calls them.
+
+## Public API (`/v1`)
+
+`http/routes/v1.ts`, authenticated with workspace API keys (`requireApiKey`, keys hashed and expiring, usage tracked in `ApiKeyUsage`). It covers projects, sites, stats, the tracking snippet, markers, app-user tracking and reviews. OpenAPI docs live in `http/openapi`. Treat it like any public API: never change an existing response shape.
 
 ## What every workspace request already pays
 
@@ -78,4 +129,6 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 - [ ] Nothing heavy was added to a polled or ingest endpoint, or to the middleware chain.
 - [ ] Any cache key covers every input. No auth or cross-tenant caching.
 - [ ] Nothing relies on in-memory state surviving between serverless invocations.
+- [ ] New scheduled work runs inside an existing `/api/cron` route, not a new worker.
+- [ ] Changes to `/api/internal/forms/*` or the forms token are matched in `da-forms`.
 - [ ] Response shape changes are coordinated with the frontend.
