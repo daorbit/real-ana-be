@@ -26,6 +26,7 @@ const siteSchema = new Schema(
      * which is exactly the case we want to prompt about.
      */
     trackerVersion: { type: Number, default: 1 },
+    firstEventAt: { type: Date, default: null },
     /**
      * The tracker options chosen when the snippet was built.
      *

@@ -58,6 +58,8 @@ const MAX_BATCH = 50;
 const VERSION_RECHECK_MS = 10 * 60 * 1000;
 
 const versionRecorded = createTtlCache<unknown>(VERSION_RECHECK_MS, 5_000);
+const FIRST_EVENT_RECHECK_MS = 6 * 60 * 60 * 1000;
+const firstEventRecorded = createTtlCache<unknown>(FIRST_EVENT_RECHECK_MS, 5_000);
 
 
 function buildEvent(
@@ -204,7 +206,14 @@ router.post("/", async (req, res) => {
 
 
     const writes: Promise<unknown>[] = [];
-    if (docs.length) writes.push(Event.insertMany(docs, { ordered: false }));
+    if (docs.length) {
+      writes.push(Event.insertMany(docs, { ordered: false }));
+      writes.push(
+        firstEventRecorded(String(siteId), () =>
+          Site.updateOne({ siteId, firstEventAt: null }, { firstEventAt: new Date() }).exec(),
+        ),
+      );
+    }
     if (heatmapDocs.length) writes.push(HeatmapClick.insertMany(heatmapDocs, { ordered: false }));
     if (reported > 1) {
       writes.push(
