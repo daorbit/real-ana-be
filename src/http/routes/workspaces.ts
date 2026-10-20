@@ -4,7 +4,8 @@ import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { fillMissingFirstEvents } from "../../modules/analytics/site-first-event.js";
-import { parseSiteLogoUrl } from "../../modules/analytics/site-logo.js";
+import { parseSiteLogoUrl, uploadSiteLogo } from "../../modules/analytics/site-logo.js";
+import { cloudinaryConfigured } from "../../infra/storage/cloudinary.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
 import { planLimit } from "../plan-limit.js";
@@ -279,6 +280,19 @@ router.post("/:wid/onboarding-ai/copy", async (req: AuthedRequest, res: Response
 
   if (!result.ok) return res.status(502).json({ error: "could not generate copy" });
   res.json({ readyHeadline: result.readyHeadline, readyDescription: result.readyDescription });
+});
+
+router.post("/:wid/site-logo", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "editor");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  if (!cloudinaryConfigured()) return res.status(503).json({ error: "image uploads are not configured" });
+
+  const dataUrl = String(req.body?.file ?? "");
+  if (!dataUrl) return res.status(400).json({ error: "file required" });
+
+  const result = await uploadSiteLogo(access.workspace.id, dataUrl);
+  if ("error" in result) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
 });
 
 // List sites in workspace

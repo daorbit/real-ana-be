@@ -94,6 +94,7 @@ app.use(["/api", "/v1"], compression());
 
 app.use("/api/auth/me/avatar", express.json({ limit: "6mb" }));
 app.use("/api/workspaces/:wid/nav/links", express.json({ limit: "2mb" }));
+app.use("/api/workspaces/:wid/site-logo", express.json({ limit: "3mb" }));
 
 app.use("/api/auth/linkedin/post", express.json({ limit: "12mb" }));
 // And for a scheduled post, whose image arrives the same way before being
