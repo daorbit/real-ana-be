@@ -235,7 +235,6 @@ export const schemas = {
       modelLabel: { type: "string" },
       imageUrl: { type: "string", description: "Present when `generateImage` produced a picture." },
       dataDigest: { type: "object", description: "The workspace figures the answer was based on." },
-      citations: { type: "array", items: { type: "object" } },
       conversationId: {
         type: ["string", "null"],
         description: "The thread this answer was saved to. Send it back to continue the conversation.",

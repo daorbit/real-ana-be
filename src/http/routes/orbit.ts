@@ -65,7 +65,7 @@ const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
 
 
 
-const SUPER_ADMIN_ONLY_MODELS = new Set(["claude", "flux-2-klein"]);
+const SUPER_ADMIN_ONLY_MODELS = new Set(["flux-2-klein"]);
 
 async function isSuperAdmin(req: OrbitRequest): Promise<boolean> {
   if (req.impersonatorId) return false;
@@ -373,7 +373,6 @@ router.post("/ask", async (req: OrbitRequest, res: Response) => {
       latencyMs: Date.now() - startedAt,
       imageUrl: generatedImageUrl,
       dataDigest: result.dataDigest,
-      citations: result.citations,
     },
   });
 
@@ -387,7 +386,6 @@ router.post("/ask", async (req: OrbitRequest, res: Response) => {
     imageUrl: generatedImageUrl,
 
     dataDigest: result.dataDigest,
-    citations: result.citations,
     /** The thread this landed in. Null when it could not be stored. */
     conversationId: savedId,
     // Sent back so the panel can count down without a second round trip. Read

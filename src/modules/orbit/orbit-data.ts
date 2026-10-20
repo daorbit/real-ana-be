@@ -1,63 +1,30 @@
-
 import { Site } from "../analytics/models/Site.js";
-import { computeStats, resolveWindow } from "../analytics/stats.service.js";
+import { resolveWindow } from "../analytics/stats.service.js";
 import { parseQuestionRange } from "./date-range.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
 import type { snapshotFromReport } from "../seo/competitor.js";
 import { competitorAnalysis } from "../seo/compare-analysis.service.js";
 import { reviewsSummaryFor } from "./orbit-data-reviews.js";
+import { siteTraffic, type OrbitDataDigestSite } from "./orbit-data-traffic.js";
+import { formsData, type OrbitLeadsDigest } from "./orbit-data-forms.js";
+import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 
-/** Rows per breakdown. Enough to spot a pattern, short enough to stay in budget. */
-const TOP_N = 5;
-
-/** How many of the workspace's sites to summarise. */
 const MAX_SITES = 2;
-
-type Row = { key: string; count: number };
-
-function topList(label: string, rows: Row[] | undefined): string {
-  const top = (rows ?? []).slice(0, TOP_N).filter((r) => r.key);
-  if (!top.length) return "";
-  return `${label}: ${top.map((r) => `${r.key} (${r.count})`).join(", ")}`;
-}
-
-
-export type OrbitDataDigestSite = {
-  domain: string;
-  visitors: number;
-  visitorsChangePct: number | null;
-  pageviews: number;
-  pageviewsChangePct: number | null;
-  sessions: number;
-  sessionsChangePct: number | null;
-  bounceRate: number;
-  bounceRateChangePct: number | null;
-  live: number;
-  topPages: Row[];
-  topReferrers: Row[];
-  countries: Row[];
-  devices: Row[];
-};
+const DATA_TTL_MS = 15_000;
 
 export type OrbitDataDigest = {
   sites: OrbitDataDigestSite[];
-  /** Human-readable range the figures cover, e.g. "the last 7 days" or "last
-   * month" — echoed so the table's caption matches what was actually asked. */
   rangeLabel?: string;
+  leads?: OrbitLeadsDigest;
 };
 
-/** A delta as a signed percentage, or nothing when there is no prior period to compare. */
-function change(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "";
-  const rounded = Math.round(value);
-  return ` (${rounded >= 0 ? "+" : ""}${rounded}% vs previous period)`;
-}
+type WorkspaceData = { summary: string; digest: OrbitDataDigest };
 
-/** Competitors summarised per site. More than this and the digest crowds out the rest. */
+const dataCache = createTtlCache<WorkspaceData>(DATA_TTL_MS, 500);
+
 const MAX_COMPETITORS_SUMMARISED = 3;
 
 const MAX_RECOMMENDATIONS = 3;
-
 
 async function seoSummary(siteId: string): Promise<string> {
   const report = await SeoReport.findOne({ siteId }).sort({ createdAt: -1 });
@@ -88,8 +55,6 @@ async function seoSummary(siteId: string): Promise<string> {
       }
       const { snapshot, gap } = entry;
 
-      // The sign is stated in words as well as arithmetic: "gap: -8" reads
-      // ambiguously to a model, and a wrong reading inverts the advice.
       const standing =
         gap.scoreGap > 0
           ? `they lead by ${gap.scoreGap}`
@@ -117,75 +82,72 @@ async function seoSummary(siteId: string): Promise<string> {
   return lines.join("\n");
 }
 
-
-export async function workspaceDataSummary(workspaceId: string, question?: string): Promise<string> {
-  const [sites, business] = await Promise.all([
-    Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES),
-    reviewsSummaryFor(workspaceId).catch(() => ""),
-  ]);
-  if (!sites.length) return business;
-
-  const { rangeKey, from, to, label } = parseQuestionRange(question ?? "");
-
-  const blocks: string[] = [];
-
-  for (const site of sites) {
-    const stats = await computeStats([site.siteId as string], rangeKey, undefined, resolveWindow(rangeKey, from, to));
-
-    const lines = [
-      `Site ${site.domain} — ${label}:`,
-      `Visitors: ${stats.visitors}${change(stats.deltas?.visitors)}`,
-      `Pageviews: ${stats.pageviews}${change(stats.deltas?.pageviews)}`,
-      `Sessions: ${stats.sessions}${change(stats.deltas?.sessions)}`,
-      `Bounce rate: ${stats.bounceRate}%${change(stats.deltas?.bounceRate)}`,
-      `Visitors online now: ${stats.live}`,
-      topList("Top pages", stats.topPages as Row[]),
-      topList("Top referrers", stats.topReferrers as Row[]),
-      topList("Top countries", stats.countries as Row[]),
-      topList("Devices", stats.devices as Row[]),
-      // Appended to the same site block rather than kept in a section of its
-      // own, so a model reading about acme.com sees its traffic and its
-      // competitive standing as one subject.
-      await seoSummary(site.siteId as string),
-    ].filter(Boolean);
-
-    blocks.push(lines.join("\n"));
-  }
-
-  if (business) blocks.push(business);
-
-  return blocks.join("\n\n");
+function conversionLine(visitors: number, leads: number): string {
+  if (!visitors) return "";
+  const pct = Math.round((leads / visitors) * 1000) / 10;
+  return `Lead conversion: ${leads} leads from ${visitors} website visitors (${pct}%) in the same window.`;
 }
 
+async function buildWorkspaceData(workspaceId: string, question: string): Promise<WorkspaceData> {
+  const range = parseQuestionRange(question);
+  const win = resolveWindow(range.rangeKey, range.from, range.to);
+
+  const [sites, business, forms] = await Promise.all([
+    Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES + 1).lean(),
+    reviewsSummaryFor(workspaceId).catch(() => ""),
+    formsData(
+      workspaceId,
+      { since: win.since, until: win.until },
+      { since: win.prevSince, until: win.prevUntil },
+      range.label,
+      range.rangeKey,
+    ).catch(() => null),
+  ]);
+
+  const shown = sites.slice(0, MAX_SITES).map((s) => ({ siteId: s.siteId as string, domain: s.domain as string }));
+  const perSite = await Promise.all(
+    shown.map(async (site) => {
+      const [traffic, seo] = await Promise.all([
+        siteTraffic(site, range, win),
+        seoSummary(site.siteId).catch(() => ""),
+      ]);
+      return { traffic, seo };
+    }),
+  );
+
+  const blocks = perSite.map(({ traffic, seo }) => [traffic.prose, seo].filter(Boolean).join("\n"));
+  if (sites.length > MAX_SITES) {
+    blocks.push(`This workspace tracks more than ${MAX_SITES} sites; only the first ${MAX_SITES} are summarised above.`);
+  }
+  if (forms) {
+    blocks.push(forms.prose);
+    if (sites.length && sites.length <= MAX_SITES) {
+      const visitors = perSite.reduce((sum, p) => sum + p.traffic.digest.visitors, 0);
+      const line = conversionLine(visitors, forms.digest.leads);
+      if (line) blocks.push(line);
+    }
+  }
+  if (business) blocks.push(business);
+
+  return {
+    summary: blocks.join("\n\n"),
+    digest: {
+      sites: perSite.map((p) => p.traffic.digest),
+      rangeLabel: range.label,
+      ...(forms ? { leads: forms.digest } : {}),
+    },
+  };
+}
+
+function workspaceData(workspaceId: string, question = ""): Promise<WorkspaceData> {
+  const range = parseQuestionRange(question);
+  return dataCache(`${workspaceId}:${range.rangeKey}:${range.label}`, () => buildWorkspaceData(workspaceId, question));
+}
+
+export async function workspaceDataSummary(workspaceId: string, question?: string): Promise<string> {
+  return (await workspaceData(workspaceId, question)).summary;
+}
 
 export async function workspaceDataDigest(workspaceId: string, question?: string): Promise<OrbitDataDigest> {
-  const sites = await Site.find({ workspaceId }).select("siteId domain").limit(MAX_SITES);
-  if (!sites.length) return { sites: [] };
-
-  const { rangeKey, from, to, label } = parseQuestionRange(question ?? "");
-
-  const digest: OrbitDataDigestSite[] = [];
-
-  for (const site of sites) {
-    const stats = await computeStats([site.siteId as string], rangeKey, undefined, resolveWindow(rangeKey, from, to));
-
-    digest.push({
-      domain: site.domain as string,
-      visitors: stats.visitors,
-      visitorsChangePct: stats.deltas?.visitors ?? null,
-      pageviews: stats.pageviews,
-      pageviewsChangePct: stats.deltas?.pageviews ?? null,
-      sessions: stats.sessions,
-      sessionsChangePct: stats.deltas?.sessions ?? null,
-      bounceRate: stats.bounceRate,
-      bounceRateChangePct: stats.deltas?.bounceRate ?? null,
-      live: stats.live,
-      topPages: ((stats.topPages as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
-      topReferrers: ((stats.topReferrers as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
-      countries: ((stats.countries as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
-      devices: ((stats.devices as Row[]) ?? []).slice(0, TOP_N).filter((r) => r.key),
-    });
-  }
-
-  return { sites: digest, rangeLabel: label };
+  return (await workspaceData(workspaceId, question)).digest;
 }

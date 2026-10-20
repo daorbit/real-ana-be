@@ -120,11 +120,21 @@ const TOPIC_MARKERS = [
   "competitor", "beat them", "beat our competitor",
   "performing", "performance",
   "reviews", "rating", "ratings", "unanswered reviews",
+  "visits", "visited", "bounce", "online now", "live visitors",
+  "analytics", "stats", "statistics", "channels", "referrals", "traffic sources",
+  "utm", "entry pages", "landing pages",
+  "leads", "new leads", "lead score", "lead sources", "pipeline",
+  "submissions", "form responses", "form views", "my forms", "which form",
+  "bookings", "booked", "appointments", "upcoming bookings",
+  "conversion", "conversions", "conversion rate", "signups", "sign-ups",
+  "enquiries", "inquiries",
 ];
 
 const COMPARISON_MARKERS = [
   "doing", "up", "down", "dropped", "drop", "fell", "spike", "increase",
   "decrease", "score", "rank", "ranking", "compare", "compared",
+  "growth", "growing", "trend", "trending", "best", "worst", "improve",
+  "how many", "how much", "summary", "summarise", "summarize", "overview",
 ];
 
 function wordRe(markers: string[]): RegExp {
@@ -178,9 +188,6 @@ export type OrbitAnswer = {
   modelLabel: string;
   imageBase64?: string;
   dataDigest?: unknown;
-  /** Pages a web search drew on, when the model used one. Only Claude's own
-   * search tool populates this today — see callAnthropic. */
-  citations?: OrbitCitation[];
 };
 
 export type OrbitResult =
@@ -379,7 +386,6 @@ export async function askOrbit(
           model: model.id,
           modelLabel: model.label,
           dataDigest,
-          citations: raw.citations,
         };
       }
       // A 200 whose body could not be read as an answer. Logged, or a model
@@ -651,10 +657,8 @@ async function describeGeneratedImage(
   }
 }
 
-export type OrbitCitation = { url: string; title: string };
-
 type CallResult =
-  | { ok: true; text: string; citations?: OrbitCitation[] }
+  | { ok: true; text: string }
   | { ok: false; status: number; detail: string };
 
 function callModel(
@@ -675,9 +679,6 @@ function callModel(
   }
   if (model.provider === "cloudflare") {
     return callCloudflare(model, question, history, prompt, timeout, signal);
-  }
-  if (model.provider === "anthropic") {
-    return callAnthropic(model, question, history, prompt, timeout, signal);
   }
   return callOpenAiCompatible(model, question, history, prompt, timeout, signal);
 }
@@ -843,128 +844,6 @@ async function callCloudflare(
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", relay);
-  }
-}
-
-function anthropicBaseUrl(): string {
-  return (process.env.CLAUDE_API_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
-}
-const MAX_WEB_SEARCHES = 3;
-
-/**
- * Reassembles an Anthropic Messages SSE stream into the same
- * `{ content, error }` shape the non-streaming endpoint returns, so the
- * caller can handle either without knowing which one it got. Some Anthropic
- * proxies stream even when a request never asked for it.
- */
-function parseAnthropicSse(body: string): {
-  content?: { type: string; text: string; citations?: { url?: string; title?: string }[] }[];
-  error?: { message?: string };
-} {
-  let text = "";
-  const citations: { url?: string; title?: string }[] = [];
-  let error: { message?: string } | undefined;
-
-  for (const chunk of body.split("\n\n")) {
-    const dataLine = chunk
-      .split("\n")
-      .find((line) => line.startsWith("data:"));
-    if (!dataLine) continue;
-
-    let event: {
-      type?: string;
-      delta?: { type?: string; text?: string; citation?: { url?: string; title?: string } };
-      error?: { message?: string };
-    };
-    try {
-      event = JSON.parse(dataLine.slice(5).trim());
-    } catch {
-      continue;
-    }
-
-    if (event.type === "error") {
-      error = event.error;
-    } else if (event.type === "content_block_delta") {
-      if (event.delta?.type === "text_delta" && event.delta.text) {
-        text += event.delta.text;
-      } else if (event.delta?.type === "citations_delta" && event.delta.citation) {
-        citations.push(event.delta.citation);
-      }
-    }
-  }
-
-  if (error) return { error };
-  return { content: [{ type: "text", text, citations }] };
-}
-
-async function callAnthropic(
-  model: OrbitModel,
-  question: string,
-  history: OrbitTurn[],
-  prompt: string,
-  timeoutMs: number = TIMEOUT_MS,
-  signal?: AbortSignal,
-): Promise<CallResult> {
-  const key = process.env.CLAUDE_API_KEY;
-  if (!key) return { ok: false, status: 503, detail: "no CLAUDE_API_KEY" };
-
-  const res = await post(
-    `${anthropicBaseUrl()}/v1/messages`,
-    { "x-api-key": key, "anthropic-version": "2023-06-01" },
-    {
-      model: model.model,
-      system: prompt,
-      messages: [
-        ...history.map((t) => ({ role: t.role, content: t.content })),
-        { role: "user", content: question },
-      ],
-      temperature: 0.3,
-      max_tokens: model.reasoning ? MAX_TOKENS * 4 : MAX_TOKENS,
-
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
-    },
-    timeoutMs,
-    signal,
-  );
-
-  if (!res.ok) return res;
-
-  try {
-    const data = res.text.trimStart().startsWith("event:")
-      ? parseAnthropicSse(res.text)
-      : (JSON.parse(res.text) as {
-          content?: {
-            type?: string;
-            text?: string;
-            citations?: { url?: string; title?: string }[];
-          }[];
-          error?: { message?: string };
-          stop_reason?: string;
-        });
-
-    if (data.error) {
-      console.error(`[orbit] claude upstream error; body: ${res.text.slice(0, 500)}`);
-      return { ok: false, status: 502, detail: data.error.message ?? "upstream error" };
-    }
-
-    const textBlocks = data.content?.filter((b) => b.type === "text") ?? [];
-    const text = textBlocks.map((b) => b.text ?? "").join("").trim();
-
-    const seen = new Set<string>();
-    const citations: OrbitCitation[] = [];
-    for (const block of textBlocks) {
-      for (const c of block.citations ?? []) {
-        if (!c.url || seen.has(c.url)) continue;
-        seen.add(c.url);
-        citations.push({ url: c.url, title: c.title?.trim() || c.url });
-      }
-    }
-
-    if (!text) return { ok: false, status: 502, detail: "empty completion" };
-    return citations.length ? { ok: true, text, citations } : { ok: true, text };
-  } catch {
-    console.error(`[orbit] claude envelope unparseable; body: ${res.text.slice(0, 500)}`);
-    return { ok: false, status: 502, detail: "unparseable envelope" };
   }
 }
 

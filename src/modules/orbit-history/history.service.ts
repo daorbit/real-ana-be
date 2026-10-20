@@ -30,8 +30,6 @@ export type RecordedTurn = {
   imageUrl?: string;
   /** The analytics snapshot this answer was based on, when it pulled one. */
   dataDigest?: unknown;
-  /** Pages a web search drew on, when the model used one. */
-  citations?: { url: string; title: string }[];
 };
 
 function titleFrom(question: string): string {
@@ -111,7 +109,6 @@ export async function recordExchange(args: {
         imageUrl: turn.imageUrl || undefined,
         suggestions: cleanSuggestions(turn.suggestions),
         dataDigest: turn.dataDigest ?? undefined,
-        citations: turn.citations?.length ? turn.citations : undefined,
         failed: Boolean(turn.failed),
         model: turn.model ?? "",
         modelLabel: turn.modelLabel ?? "",
@@ -205,7 +202,7 @@ export async function readConversation(
   const rows = await OrbitMessage.find(filter)
     .sort({ seq: -1 })
     .limit(limit)
-    .select("seq role content imageUrl suggestions dataDigest citations failed modelLabel createdAt")
+    .select("seq role content imageUrl suggestions dataDigest failed modelLabel createdAt")
     .lean();
 
   const nextBefore = rows.length === limit ? rows[rows.length - 1].seq : null;
@@ -227,7 +224,6 @@ export async function readConversation(
       imageUrl: m.imageUrl || undefined,
       suggestions: m.suggestions ?? [],
       dataDigest: m.dataDigest ?? undefined,
-      citations: m.citations ?? undefined,
       failed: Boolean(m.failed),
       modelLabel: m.modelLabel || undefined,
       createdAt: m.createdAt,
