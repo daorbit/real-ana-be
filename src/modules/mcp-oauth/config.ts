@@ -25,6 +25,59 @@ export function resourceUrl(): string {
   return `${issuerUrl()}/mcp`;
 }
 
+const WORKSPACE_ID = /^[a-f0-9]{24}$/i;
+
+export const MCP_CLIENTS = ["claude", "chatgpt"] as const;
+export type McpClient = (typeof MCP_CLIENTS)[number];
+
+export type McpEndpoint = { workspaceId?: string; client?: McpClient };
+
+function isWorkspaceId(value: unknown): value is string {
+  return typeof value === "string" && WORKSPACE_ID.test(value);
+}
+
+function isMcpClient(value: unknown): value is McpClient {
+  return typeof value === "string" && (MCP_CLIENTS as readonly string[]).includes(value.toLowerCase());
+}
+
+export function endpointFromParams(params: { workspaceId?: unknown; client?: unknown }): McpEndpoint | null {
+  const { workspaceId, client } = params;
+  if (workspaceId === undefined) return client === undefined ? {} : null;
+  if (!isWorkspaceId(workspaceId)) return null;
+  if (client !== undefined && !isMcpClient(client)) return null;
+  return {
+    workspaceId: workspaceId.toLowerCase(),
+    ...(client !== undefined ? { client: (client as string).toLowerCase() as McpClient } : {}),
+  };
+}
+
+export function endpointPath(endpoint: McpEndpoint = {}): string {
+  if (!endpoint.workspaceId) return "/mcp";
+  return `/mcp/${endpoint.workspaceId}${endpoint.client ? `/${endpoint.client}` : ""}`;
+}
+
+export function endpointResourceUrl(endpoint: McpEndpoint = {}): string {
+  return `${issuerUrl()}${endpointPath(endpoint)}`;
+}
+
+export function parseResource(resource: string): McpEndpoint | null {
+  const base = resourceUrl();
+  if (resource === base) return {};
+  if (!resource.startsWith(`${base}/`)) return null;
+  const [workspaceId, client, ...rest] = resource.slice(base.length + 1).split("/");
+  if (rest.length) return null;
+  return endpointFromParams({ workspaceId, client });
+}
+
+export function resourceWorkspaceId(resource: string): string | null {
+  return parseResource(resource)?.workspaceId ?? null;
+}
+
+export function normalizeResource(raw: string): string | null {
+  const endpoint = parseResource(trimSlash(raw));
+  return endpoint ? endpointResourceUrl(endpoint) : null;
+}
+
 export function consentPageUrl(): string {
   const base = process.env.MCP_CONSENT_URL || process.env.STUDIO_BASE_URL || "http://localhost:5173";
   return `${trimSlash(base)}/connect/authorize`;

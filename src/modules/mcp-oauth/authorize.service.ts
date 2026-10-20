@@ -11,7 +11,9 @@ import {
   AUTH_REQUEST_TTL_SECONDS,
   consentPageUrl,
   issuerUrl,
+  normalizeResource,
   resourceUrl,
+  resourceWorkspaceId,
 } from "./config.js";
 import { accessibleWorkspaces, isDenied, resolveAccessFor } from "../workspace/access.service.js";
 import { notFound } from "../../shared/errors/index.js";
@@ -60,8 +62,8 @@ export async function startAuthorization(query: Record<string, unknown>): Promis
   const scopes = parseScopes(query.scope);
   if (!scopes) return fail("invalid_scope", "unknown scope requested");
 
-  const resource = query.resource === undefined ? resourceUrl() : str(query.resource);
-  if (resource.replace(/\/+$/, "") !== resourceUrl()) fail("invalid_target", "resource must be this server's MCP endpoint");
+  const resource = normalizeResource(query.resource === undefined ? resourceUrl() : str(query.resource));
+  if (!resource) return fail("invalid_target", "resource must be this server's MCP endpoint");
 
   const raw = randomToken(TOKEN_PREFIX.request, 24);
   await OAuthAuthRequest.create({
@@ -71,7 +73,7 @@ export async function startAuthorization(query: Record<string, unknown>): Promis
     codeChallenge: query.code_challenge,
     state,
     scopes,
-    resource: resourceUrl(),
+    resource,
     expiresAt: new Date(Date.now() + AUTH_REQUEST_TTL_SECONDS * 1000),
   });
 
@@ -101,17 +103,22 @@ export async function describeRequest(raw: unknown, userId: string) {
   const [client, workspaces] = await Promise.all([findClient(request.clientId), accessibleWorkspaces(userId)]);
   if (!client) throw notFound("authorization request not found");
 
+  const locked = resourceWorkspaceId(request.resource);
+  const allowed = locked ? workspaces.filter(({ workspace }) => String(workspace.id) === locked) : workspaces;
+  if (locked && !allowed.length) throw notFound("you are not a member of the workspace in this connector URL");
+
   return {
     client: { name: client.clientName, redirectHost: redirectHost(request.redirectUri) },
     scopes: describeScopes(request.scopes.filter(isScope)),
-    workspaces: workspaces.map(({ workspace, role }) => ({ id: workspace.id as string, name: workspace.name as string, role })),
+    workspaces: allowed.map(({ workspace, role }) => ({ id: workspace.id as string, name: workspace.name as string, role })),
     expiresAt: request.expiresAt,
   };
 }
 
 export async function approveRequest(raw: string, userId: string, workspaceId: unknown) {
   const pending = await loadRequest(raw);
-  const access = await resolveAccessFor(userId, typeof workspaceId === "string" ? workspaceId : undefined, "viewer");
+  const chosen = resourceWorkspaceId(pending.resource) ?? (typeof workspaceId === "string" ? workspaceId : undefined);
+  const access = await resolveAccessFor(userId, chosen, "viewer");
   if (isDenied(access)) throw notFound("workspace not found");
 
   const [request, client] = await Promise.all([consumeRequest(raw), findClient(pending.clientId)]);

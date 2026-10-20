@@ -5,6 +5,7 @@ import { OAuthCode } from "./models/OAuthCode.js";
 import { OAuthClient } from "./models/OAuthClient.js";
 import { Workspace } from "../workspace/models/Workspace.js";
 import { redirectHost } from "./redirect-uri.js";
+import { parseResource } from "./config.js";
 import { describeScopes, isScope } from "./scopes.js";
 
 export async function revokeGrant(grantId: Types.ObjectId | string, reason: string): Promise<void> {
@@ -19,7 +20,7 @@ export async function listUserGrants(userId: string) {
   const grants = await OAuthGrant.find({ userId, revokedAt: null, activatedAt: { $ne: null } })
     .sort({ activatedAt: -1 })
     .limit(100)
-    .select("workspaceId clientId clientName scopes activatedAt lastUsedAt")
+    .select("workspaceId clientId clientName scopes resource activatedAt lastUsedAt")
     .lean();
 
   const workspaceIds = [...new Set(grants.map((g) => String(g.workspaceId)))];
@@ -35,6 +36,7 @@ export async function listUserGrants(userId: string) {
     id: String(g._id),
     clientName: g.clientName,
     clientHost: hostByClient.get(g.clientId) ?? "",
+    assistant: parseResource(g.resource ?? "")?.client ?? null,
     workspaceId: String(g.workspaceId),
     workspaceName: nameById.get(String(g.workspaceId)) ?? "",
     scopes: describeScopes(g.scopes.filter(isScope)),

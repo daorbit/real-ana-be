@@ -1,4 +1,4 @@
-import { issuerUrl, resourceUrl } from "./config.js";
+import { endpointPath, endpointResourceUrl, issuerUrl, type McpEndpoint } from "./config.js";
 import { ALL_SCOPES } from "./scopes.js";
 
 export function authorizationServerMetadata() {
@@ -20,9 +20,9 @@ export function authorizationServerMetadata() {
   };
 }
 
-export function protectedResourceMetadata() {
+export function protectedResourceMetadata(endpoint: McpEndpoint = {}) {
   return {
-    resource: resourceUrl(),
+    resource: endpointResourceUrl(endpoint),
     authorization_servers: [issuerUrl()],
     scopes_supported: ALL_SCOPES,
     bearer_methods_supported: ["header"],
@@ -30,6 +30,6 @@ export function protectedResourceMetadata() {
   };
 }
 
-export function protectedResourceMetadataUrl(): string {
-  return `${issuerUrl()}/.well-known/oauth-protected-resource/mcp`;
+export function protectedResourceMetadataUrl(endpoint: McpEndpoint = {}): string {
+  return `${issuerUrl()}/.well-known/oauth-protected-resource${endpointPath(endpoint)}`;
 }

@@ -7,7 +7,13 @@ import { hashToken, randomToken, TOKEN_PREFIX, verifyPkce } from "./crypto.js";
 import { isRegisteredRedirect } from "./redirect-uri.js";
 import { revokeGrant } from "./grant.service.js";
 import { isScope, parseScopes, type McpScope } from "./scopes.js";
-import { ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS, resourceUrl } from "./config.js";
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  endpointResourceUrl,
+  REFRESH_TOKEN_TTL_SECONDS,
+  resourceUrl,
+  type McpEndpoint,
+} from "./config.js";
 import { isDenied, resolveAccessFor } from "../workspace/access.service.js";
 
 const REUSE_GRACE_MS = 30_000;
@@ -148,7 +154,12 @@ export async function refreshAccessToken(body: Record<string, unknown>) {
   return issueTokens(grant, scopes);
 }
 
-export async function verifyAccessToken(raw: string): Promise<McpAuthContext | null> {
+function servesEndpoint(resource: string, tokenWorkspaceId: string, endpoint: McpEndpoint): boolean {
+  if (resource === endpointResourceUrl(endpoint)) return true;
+  return Boolean(endpoint.workspaceId) && resource === resourceUrl() && tokenWorkspaceId === endpoint.workspaceId;
+}
+
+export async function verifyAccessToken(raw: string, endpoint: McpEndpoint = {}): Promise<McpAuthContext | null> {
   if (!raw.startsWith(TOKEN_PREFIX.access) || raw.length > 200) return null;
   const token = await OAuthToken.findOne({
     tokenHash: hashToken(raw),
@@ -158,7 +169,7 @@ export async function verifyAccessToken(raw: string): Promise<McpAuthContext | n
     .select("grantId userId workspaceId clientId scopes resource")
     .lean();
 
-  if (!token || token.resource !== resourceUrl()) return null;
+  if (!token || !servesEndpoint(token.resource, String(token.workspaceId), endpoint)) return null;
 
   return {
     grantId: String(token.grantId),
