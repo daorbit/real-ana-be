@@ -1187,17 +1187,17 @@ export async function computeStats(
   };
 }
 
-const COMPARABLE_DIMENSIONS: Record<string, { field: string; type?: string }> = {
+const COMPARABLE_DIMENSIONS: Record<string, { field: string; type?: string; entry?: boolean }> = {
   path: { field: "path", type: "pageview" },
-  referrer: { field: "referrer" },
+  referrer: { field: "referrer", type: "pageview", entry: true },
   device: { field: "device", type: "pageview" },
   browser: { field: "browser", type: "pageview" },
   os: { field: "os", type: "pageview" },
   country: { field: "country", type: "pageview" },
   language: { field: "language", type: "pageview" },
-  utmSource: { field: "utm.source" },
-  utmMedium: { field: "utm.medium" },
-  utmCampaign: { field: "utm.campaign" },
+  utmSource: { field: "utm.source", type: "pageview", entry: true },
+  utmMedium: { field: "utm.medium", type: "pageview", entry: true },
+  utmCampaign: { field: "utm.campaign", type: "pageview", entry: true },
 };
 
 export const COMPARABLE_DIMENSION_KEYS = Object.keys(COMPARABLE_DIMENSIONS);
@@ -1221,7 +1221,7 @@ export async function compareBreakdown(
 
   const fMatch = filterMatch(filters);
   const inSites = { $in: siteIds };
-  const typeMatch = dim.type ? { type: dim.type } : {};
+  const typeMatch = { ...(dim.type ? { type: dim.type } : {}), ...(dim.entry ? { isEntry: true } : {}) };
 
 
   const [currentRows, previousRows] = await Promise.all([

@@ -7,6 +7,8 @@ import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
 import {
   classifyRequest, classifyTraffic, parseClientSignals, type TrafficVerdict,
 } from "../../modules/analytics/bot-detect.js";
+import { createTtlCache } from "../../shared/utils/ttl-cache.js";
+import { cleanProps } from "../../modules/analytics/event-props.js";
 
 const UNBILLED_TYPES = new Set(["interact", "popup"]);
 
@@ -53,6 +55,9 @@ const vitals = (raw: unknown) => {
 
 
 const MAX_BATCH = 50;
+const VERSION_RECHECK_MS = 10 * 60 * 1000;
+
+const versionRecorded = createTtlCache<unknown>(VERSION_RECHECK_MS, 5_000);
 
 
 function buildEvent(
@@ -64,7 +69,7 @@ function buildEvent(
   return {
     traffic: { kind: traffic.kind, name: traffic.name, signals: traffic.signals.length ? traffic.signals : undefined },
     siteId,
-    type: body.type ?? "pageview",
+    type: str(body.type, 40) || "pageview",
     name: str(body.name, 80),
     path: str(body.path, 300) || "/",
     hostname: str(body.hostname, 253),
@@ -112,7 +117,7 @@ function buildEvent(
       clickId: str(body.utm?.clickId, 200),
       landingReferrer: str(body.utm?.landingReferrer, 300),
     },
-    props: body.props,
+    props: cleanProps(body.props),
 
     ts: eventTime(body.t),
   };
@@ -176,14 +181,7 @@ router.post("/", async (req, res) => {
       return res.status(429).json({ error: "event quota exhausted" });
     }
 
- 
     const reported = num(body.v, 100);
-    if (reported > 1) {
-      await Site.updateOne(
-        { siteId, trackerVersion: { $lt: reported } },
-        { trackerVersion: reported },
-      );
-    }
 
     const ua = req.headers["user-agent"] ?? "";
     const ip = clientIp(req);
@@ -208,6 +206,13 @@ router.post("/", async (req, res) => {
     const writes: Promise<unknown>[] = [];
     if (docs.length) writes.push(Event.insertMany(docs, { ordered: false }));
     if (heatmapDocs.length) writes.push(HeatmapClick.insertMany(heatmapDocs, { ordered: false }));
+    if (reported > 1) {
+      writes.push(
+        versionRecorded(`${siteId}:${reported}`, () =>
+          Site.updateOne({ siteId, trackerVersion: { $lt: reported } }, { trackerVersion: reported }).exec(),
+        ),
+      );
+    }
     await Promise.all(writes);
 
 

@@ -35,6 +35,11 @@ notificationSchema.index(
   { partialFilterExpression: { seenAt: null } }
 );
 
+notificationSchema.index(
+  { userId: 1, readAt: 1 },
+  { partialFilterExpression: { readAt: null } }
+);
+
 
 notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
 

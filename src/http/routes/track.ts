@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
+import { cleanProps } from "../../modules/analytics/event-props.js";
 
 const router = Router();
 
@@ -40,7 +41,7 @@ router.post("/", async (req, res) => {
       destination: dest,
       path: dest || src || "/",
       sessionId: str(body.sessionId, 60) || str(appUserId, 60),
-      props: body.props,
+      props: cleanProps(body.props),
       ts: new Date(),
     });
 
