@@ -1,3 +1,5 @@
+import { alertServerError } from "./ops-alert.js";
+
 type SentryModule = typeof import("@sentry/node");
 
 const FLUSH_TIMEOUT_MS = 2000;
@@ -25,10 +27,13 @@ export function initMonitoring(): Promise<SentryModule | null> {
   return loading;
 }
 
-export async function captureServerError(
-  error: unknown,
-  context: { method: string; path: string; userId?: string },
-): Promise<void> {
+type ErrorContext = { method: string; path: string; userId?: string };
+
+export async function captureServerError(error: unknown, context: ErrorContext): Promise<void> {
+  await Promise.all([reportToSentry(error, context), alertServerError(error, context)]);
+}
+
+async function reportToSentry(error: unknown, context: ErrorContext): Promise<void> {
   const Sentry = await initMonitoring();
   if (!Sentry) return;
   Sentry.withScope((scope) => {

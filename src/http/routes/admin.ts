@@ -30,6 +30,9 @@ import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-a
 import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
+import { getOpsAlertSettings, setOpsAlertSettings } from "../../modules/admin/ops-alert-settings.js";
+import { sendOpsTestAlert } from "../../infra/monitoring/ops-alert.js";
+import { TelegramError } from "../../infra/messaging/telegram.js";
 
  
 const router = Router();
@@ -305,6 +308,27 @@ router.put("/demo/limit", async (req: AuthedRequest, res: Response) => {
   }
   const limit = await setDemoDailyLimit(requested);
   res.json({ limit });
+});
+
+router.get("/ops-alerts", async (_req: AuthedRequest, res: Response) => {
+  res.json(await getOpsAlertSettings());
+});
+
+router.put("/ops-alerts", async (req: AuthedRequest, res: Response) => {
+  const settings = await setOpsAlertSettings(req.body ?? {});
+  console.log(`[admin] ${req.userId} updated ops alert settings`);
+  res.json(settings);
+});
+
+router.post("/ops-alerts/test", async (_req: AuthedRequest, res: Response) => {
+  try {
+    const sent = await sendOpsTestAlert();
+    if (!sent) return res.status(400).json({ error: "Add a chat id and a bot token first" });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e instanceof TelegramError) return res.status(502).json({ error: e.message });
+    throw e;
+  }
 });
 
  

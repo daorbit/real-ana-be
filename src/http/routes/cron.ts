@@ -9,6 +9,7 @@ import { syncDue } from "../../modules/reviews/sync.service.js";
 import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
+import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -76,7 +77,7 @@ router.get("/fx-sync", async (req: Request, res: Response) => {
   } catch (e) {
     const message = (e as Error).message;
     console.error("[cron] fx reprice failed, prices unchanged:", message);
-    await sendFxFailureReport(message, "Vercel Cron");
+    await Promise.all([sendFxFailureReport(message, "Vercel Cron"), alertCronFailure("fx-sync", message)]);
     res.status(502).json({ ok: false, error: message });
   }
 });
@@ -102,8 +103,10 @@ router.get("/reports", async (req: Request, res: Response) => {
     if (summary.errors.length) console.error("[cron] report errors:", summary.errors.join(" | "));
     res.json({ ok: true, ...summary });
   } catch (e) {
-    console.error("[cron] report run failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] report run failed:", message);
+    await alertCronFailure("reports", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -127,8 +130,10 @@ router.get("/reviews", async (req: Request, res: Response) => {
     console.log(`[cron] reviews: ${summary.ran} synced, ${summary.failed} failed`);
     res.json({ ok: true, ...summary });
   } catch (e) {
-    console.error("[cron] review sync failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] review sync failed:", message);
+    await alertCronFailure("reviews", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -146,11 +151,15 @@ router.get("/social-posts", async (req: Request, res: Response) => {
   const [posts, alerts] = await Promise.allSettled([runDuePosts(), runAlerts()]);
   const alertResult =
     alerts.status === "fulfilled" ? alerts.value : { error: (alerts.reason as Error)?.message ?? "alerts failed" };
-  if (alerts.status === "rejected") console.error("[cron] alert run failed:", alertResult);
+  if (alerts.status === "rejected") {
+    console.error("[cron] alert run failed:", alertResult);
+    await alertCronFailure("alerts", (alerts.reason as Error)?.message ?? "alerts failed");
+  }
 
   if (posts.status === "rejected") {
     const message = (posts.reason as Error)?.message ?? "social posts failed";
     console.error("[cron] social post run failed:", message);
+    await alertCronFailure("social-posts", message);
     return res.status(500).json({ ok: false, error: message, alerts: alertResult });
   }
 
@@ -168,8 +177,10 @@ router.get("/alerts", async (req: Request, res: Response) => {
   try {
     res.json({ ok: true, ...(await runAlerts()) });
   } catch (e) {
-    console.error("[cron] alert run failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] alert run failed:", message);
+    await alertCronFailure("alerts", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -195,8 +206,10 @@ router.get("/social-stats", async (req: Request, res: Response) => {
     if (summary.errors.length) console.error("[cron] social stats errors:", summary.errors.join(" | "));
     res.json({ ok: true, ...summary });
   } catch (e) {
-    console.error("[cron] social stats refresh failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] social stats refresh failed:", message);
+    await alertCronFailure("social-stats", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -210,8 +223,10 @@ router.get("/backlinks", async (req: Request, res: Response) => {
     }
     res.json({ ok: true, ...summary });
   } catch (e) {
-    console.error("[cron] backlink re-check failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] backlink re-check failed:", message);
+    await alertCronFailure("backlinks", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -230,8 +245,10 @@ router.get("/plan-expiry", async (req: Request, res: Response) => {
   try {
     retention = await runEventRetention();
   } catch (e) {
-    console.error("[cron] event retention failed:", (e as Error).message);
-    retention = { error: (e as Error).message };
+    const message = (e as Error).message;
+    console.error("[cron] event retention failed:", message);
+    await alertCronFailure("event-retention", message);
+    retention = { error: message };
   }
 
   try {
@@ -242,9 +259,19 @@ router.get("/plan-expiry", async (req: Request, res: Response) => {
     if (summary.errors.length) console.error("[cron] plan expiry errors:", summary.errors.join(" | "));
     res.json({ ok: true, ...summary, retention });
   } catch (e) {
-    console.error("[cron] plan expiry run failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message, retention });
+    const message = (e as Error).message;
+    console.error("[cron] plan expiry run failed:", message);
+    await alertCronFailure("plan-expiry", message);
+    res.status(500).json({ ok: false, error: message, retention });
   }
+});
+
+router.post("/ops-alert", async (req: Request, res: Response) => {
+  if (!authorizeCron(req, res)) return;
+  const alert = parseRelayedAlert(req.body, "Watchdog");
+  if (!alert) return res.status(400).json({ error: "title, where and detail are required" });
+  await sendOpsAlert(alert);
+  res.status(204).end();
 });
 
 router.get("/event-retention", async (req: Request, res: Response) => {
@@ -253,8 +280,10 @@ router.get("/event-retention", async (req: Request, res: Response) => {
   try {
     res.json({ ok: true, ...(await runEventRetention()) });
   } catch (e) {
-    console.error("[cron] event retention failed:", (e as Error).message);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    const message = (e as Error).message;
+    console.error("[cron] event retention failed:", message);
+    await alertCronFailure("event-retention", message);
+    res.status(500).json({ ok: false, error: message });
   }
 });
 
@@ -354,7 +383,10 @@ router.get("/run", async (req: Request, res: Response) => {
     errors.push(`event-retention: ${message}`);
   }
 
-  if (errors.length) console.error("[cron] dispatcher errors:", errors.join(" | "));
+  if (errors.length) {
+    console.error("[cron] dispatcher errors:", errors.join(" | "));
+    await alertCronFailure("run", errors.join(" | "));
+  }
   res.json({ ok: true, ran, errors });
 });
 

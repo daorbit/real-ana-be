@@ -1,7 +1,7 @@
-export interface Env {
-  FORMS_API_BASE: string;
-  CRON_SECRET: string;
-}
+import { failingServices, QUANTALOG_API, type DownService, type HealthEnv } from "./health";
+import { sendOpsAlert, type AlertEnv, type OpsAlert } from "./telegram";
+
+export type Env = HealthEnv & AlertEnv;
 
 interface Task {
   path: string;
@@ -15,6 +15,7 @@ const EVERY_TICK: Task[] = [
 
 const DAILY: Task = { path: "sweep-partials", quietWhen: '"deletedCount":0' };
 const DAILY_HOUR_UTC = 3;
+const HEALTH_EVERY_MINUTES = 5;
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 10_000;
@@ -62,12 +63,44 @@ function tasksFor(scheduledTime: number): Task[] {
   return daily ? [...EVERY_TICK, DAILY] : EVERY_TICK;
 }
 
-async function runAll(env: Env, tasks: Task[]): Promise<void> {
+function isHealthTick(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % HEALTH_EVERY_MINUTES === 0;
+}
+
+async function runSweeps(env: Env, tasks: Task[]): Promise<string[]> {
   const results = await Promise.allSettled(tasks.map((task) => callCronRoute(env, task)));
-  const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-  if (failed.length) {
-    throw new Error(failed.map((r) => (r.reason as Error).message).join(" | "));
+  return results
+    .filter((r): r is PromiseRejectedResult => r.status === "rejected")
+    .map((r) => (r.reason as Error).message);
+}
+
+function alertsFor(down: DownService[], sweepErrors: string[]): OpsAlert[] {
+  const alerts: OpsAlert[] = [];
+  if (down.length) {
+    alerts.push({
+      title: "Service down",
+      where: down.map((d) => d.name).join(", "),
+      detail: down.map((d) => `${d.name}: ${d.reason}`).join("\n"),
+    });
   }
+  if (sweepErrors.length) {
+    alerts.push({ title: "Forms cron failed", where: "cron sweep", detail: sweepErrors.join("\n") });
+  }
+  return alerts;
+}
+
+async function runTick(env: Env, scheduledTime: number): Promise<void> {
+  const healthTick = isHealthTick(scheduledTime);
+  const [sweepErrors, down] = await Promise.all([
+    runSweeps(env, tasksFor(scheduledTime)),
+    healthTick ? failingServices(env) : Promise.resolve([]),
+  ]);
+
+  if (healthTick) {
+    const quantalogUp = !down.some((d) => d.name === QUANTALOG_API);
+    await Promise.all(alertsFor(down, sweepErrors).map((alert) => sendOpsAlert(env, alert, quantalogUp)));
+  }
+  if (sweepErrors.length) throw new Error(sweepErrors.join(" | "));
 }
 
 export default {
@@ -76,6 +109,6 @@ export default {
       throw new Error("CRON_SECRET is not set — refusing to run");
     }
 
-    ctx.waitUntil(runAll(env, tasksFor(controller.scheduledTime)));
+    ctx.waitUntil(runTick(env, controller.scheduledTime));
   },
 } satisfies ExportedHandler<Env>;

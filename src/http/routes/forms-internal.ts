@@ -19,6 +19,7 @@ import { sendWhatsAppAlert, whatsappAlertSummary } from "../../modules/form-aler
 import { sendFormAlert } from "../../modules/telegram/form-alert.js";
 import { TelegramError, importOwnBot, telegramSummary } from "../../modules/telegram/telegram.service.js";
 import { Types } from "mongoose";
+import { parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 
 
 const router = Router();
@@ -337,6 +338,17 @@ router.post(
       userAgent: str(body.userAgent, 400),
     });
 
+    res.status(204).end();
+  }),
+);
+
+router.post(
+  "/ops-alert",
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!authorize(req, res)) return;
+    const alert = parseRelayedAlert(req.body, "Forms API");
+    if (!alert) return res.status(400).json({ error: "title, where and detail are required" });
+    await sendOpsAlert(alert);
     res.status(204).end();
   }),
 );
