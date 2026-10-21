@@ -7,6 +7,7 @@ import { exchangeAuthorizationCode, refreshAccessToken, revokeToken } from "../.
 import { isOAuthError, OAuthError } from "../../modules/mcp-oauth/errors.js";
 import { renderOAuthErrorPage } from "../views/oauth-error-page.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
+import { runAfterResponse } from "../../shared/utils/after-response.js";
 
 const MINUTE = 60_000;
 const router = Router();
@@ -21,8 +22,8 @@ function noStore(res: Response) {
 async function sendOAuthFailure(req: Request, res: Response, err: unknown) {
   noStore(res);
   if (isOAuthError(err)) return res.status(err.status).json(err.toJSON());
-  await captureServerError(err, { method: req.method, path: req.path });
   res.status(500).json({ error: "server_error", error_description: "unexpected error" });
+  runAfterResponse("oauth error report", () => captureServerError(err, { method: req.method, path: req.path }));
 }
 
 router.post(
@@ -51,8 +52,8 @@ router.get(
       if (err instanceof UnredirectableError) {
         return res.status(400).type("html").send(renderOAuthErrorPage(err.message));
       }
-      await captureServerError(err, { method: req.method, path: req.path });
       res.status(500).type("html").send(renderOAuthErrorPage("Something went wrong. Try connecting again."));
+      runAfterResponse("oauth error report", () => captureServerError(err, { method: req.method, path: req.path }));
     }
   }),
 );

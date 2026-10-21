@@ -35,6 +35,10 @@ API_BASE = "https://quantalog-be.daorbit.in"
 DASHBOARD_URL = "https://studio-quantalog.daorbit.in"
 SITE_URL = "https://quantalog.daorbit.in"
 
+[[kv_namespaces]]
+binding = "OPS_STATE"
+id = "ae9dde7ec8694ebd9ae39e60493cdabb"
+
 [observability]
 # Keeps logs queryable in the dashboard rather than only live via `wrangler tail`.
 enabled = true

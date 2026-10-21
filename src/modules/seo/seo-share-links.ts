@@ -66,13 +66,18 @@ export async function ensureSeoShareLinks(workspaceId: string, siteId: string): 
         token = donor.shareToken as string;
         views = donor.shareViews ?? 0;
         lastViewedAt = donor.shareLastViewedAt ?? null;
-        ops.push({ updateOne: { filter: { _id: donor._id }, update: { $set: { shareToken: null, shareEnabled: false } } } });
+        ops.push({
+          updateOne: {
+            filter: { _id: donor._id, shareToken: token },
+            update: { $set: { shareToken: null, shareEnabled: false } },
+          },
+        });
       } else {
         token = newSeoShareToken();
       }
       ops.push({
         updateOne: {
-          filter: { _id: latest._id },
+          filter: { _id: latest._id, shareToken: { $in: [null, ""] } },
           update: { $set: { shareToken: token, shareEnabled: true, shareViews: views, shareLastViewedAt: lastViewedAt } },
         },
       });
@@ -83,6 +88,19 @@ export async function ensureSeoShareLinks(workspaceId: string, siteId: string): 
     links.push({ reportId: String(latest._id), url, score: latest.score ?? 0, createdAt: latest.createdAt, token, views, lastViewedAt });
   }
 
-  if (ops.length) await SeoReport.bulkWrite(ops, { ordered: true });
-  return links;
+  if (!ops.length) return links;
+  await SeoReport.bulkWrite(ops, { ordered: true });
+  return withStoredTokens(links);
+}
+
+async function withStoredTokens(links: SeoShareLink[]): Promise<SeoShareLink[]> {
+  const stored = await SeoReport.find({ _id: { $in: links.map((l) => l.reportId) } })
+    .select("shareToken shareViews shareLastViewedAt")
+    .lean<Pick<ReportRow, "_id" | "shareToken" | "shareViews" | "shareLastViewedAt">[]>();
+  const byId = new Map(stored.map((r) => [String(r._id), r]));
+  return links.map((link) => {
+    const row = byId.get(link.reportId);
+    if (!row?.shareToken || row.shareToken === link.token) return link;
+    return { ...link, token: row.shareToken, views: row.shareViews ?? 0, lastViewedAt: row.shareLastViewedAt ?? null };
+  });
 }

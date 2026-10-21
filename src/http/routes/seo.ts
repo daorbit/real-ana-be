@@ -475,8 +475,9 @@ router.get("/:wid/sites/:siteId/seo/share-links", async (req: AuthedRequest, res
 });
 
 router.delete("/:wid/sites/:siteId/seo/share-links/:id", async (req: AuthedRequest, res: Response) => {
-  const found = await resolveSite(req, "editor");
+  const found = await resolveSite(req, "admin");
   if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+  if (!appEnabled(found.ws, "seoReports")) return res.status(403).json({ error: APP_DISABLED_MESSAGE.seoReports });
   const report = await SeoReport.findOne({ _id: req.params.id, workspaceId: found.ws.id, siteId: found.site.siteId })
     .select("url")
     .lean();
