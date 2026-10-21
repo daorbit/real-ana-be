@@ -8,7 +8,6 @@ import { planLimit } from "../plan-limit.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js";
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
 import { resolveSite, siteRefused, type SiteRefused } from "./resolve-site.js";
-import { searchTrafficFor } from "../../modules/analytics/search-traffic.js";
 import { computeFieldVitals } from "../../modules/seo/field-vitals.js";
 import { crawlSite } from "../../modules/seo/crawl.js";
 import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
@@ -212,24 +211,6 @@ router.delete(
     });
     if (!deleted) return res.status(404).json({ error: "report not found" });
     res.status(204).end();
-  }
-);
-
-/**
- * Organic search arrivals for this site.
- *
- * Reads the analytics already collected rather than calling any external API,
- * so it costs one database query and needs no OAuth.
- */
-router.get(
-  "/:wid/sites/:siteId/seo/search-traffic",
-  async (req: AuthedRequest, res: Response) => {
-    const found = await resolveSite(req);
-    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
-
-    const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
-    const traffic = await searchTrafficFor(String(found.site.siteId), days);
-    res.json({ ...traffic, days });
   }
 );
 

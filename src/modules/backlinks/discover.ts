@@ -1,5 +1,5 @@
 import { Event } from "../analytics/models/Event.js";
-import { engineOf } from "../analytics/search-traffic.js";
+import { engineOf } from "../analytics/search-engines.js";
 import { urlMatchesDomain } from "../seo/seo.service.js";
 import { cleanSourceUrl, hostOf } from "./domains.js";
 
