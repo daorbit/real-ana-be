@@ -474,6 +474,17 @@ router.get("/:wid/sites/:siteId/seo/share-links", async (req: AuthedRequest, res
   res.json({ links: await ensureSeoShareLinks(found.ws.id, found.site.siteId as string) });
 });
 
+router.delete("/:wid/sites/:siteId/seo/share-links/:id", async (req: AuthedRequest, res: Response) => {
+  const found = await resolveSite(req, "editor");
+  if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+  const report = await SeoReport.findOne({ _id: req.params.id, workspaceId: found.ws.id, siteId: found.site.siteId })
+    .select("url")
+    .lean();
+  if (!report) return res.status(404).json({ error: "report not found" });
+  await SeoReport.deleteMany({ workspaceId: found.ws.id, siteId: found.site.siteId, url: report.url });
+  res.status(204).end();
+});
+
 router.get("/:wid/seo/share-panels", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
