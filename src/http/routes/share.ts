@@ -4,6 +4,7 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
 import { renderShareCardPng } from "../../modules/analytics/share-card.js";
 import { publicBrand } from "../../modules/branding/public-brand.js";
+import { appEnabledFilter } from "../../modules/workspace/apps.service.js";
 
 
 const router = Router();
@@ -26,7 +27,7 @@ function appOrigin(): string {
 async function loadShared(token: string) {
   if (!token.startsWith("pk_") || token.length > 64) return null;
 
-  const ws = await Workspace.findOne({ shareToken: token, shareEnabled: true })
+  const ws = await Workspace.findOne({ shareToken: token, shareEnabled: true, ...appEnabledFilter("publicDashboard") })
     .select("name sharePanels");
   if (!ws) return null;
 
@@ -223,7 +224,7 @@ router.get("/:token", async (req: Request, res: Response) => {
     return res.status(404).json({ error: "not found" });
   }
 
-  const ws = await Workspace.findOne({ shareToken: token, shareEnabled: true })
+  const ws = await Workspace.findOne({ shareToken: token, shareEnabled: true, ...appEnabledFilter("publicDashboard") })
     .select("name createdAt sharePanels");
   // A disabled or unknown token gets the same 404 — distinguishing them would
   // confirm that a token exists, which is information a guesser can use.

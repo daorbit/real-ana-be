@@ -37,6 +37,7 @@ import { canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary }
 import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
@@ -438,6 +439,9 @@ router.get("/:wid/share", async (req: AuthedRequest, res: Response) => {
   // reading it is equivalent to being handed one.
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  if (!appEnabled(access.workspace, "publicDashboard")) {
+    return res.status(403).json({ error: APP_DISABLED_MESSAGE.publicDashboard });
+  }
   res.json(shareState(access.workspace));
 });
 
@@ -454,6 +458,9 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   const access = await resolveAccess(req, "admin");
   if (isDenied(access)) return res.status(access.status).json({ error: access.error });
   const ws = access.workspace;
+  if (!appEnabled(ws, "publicDashboard")) {
+    return res.status(403).json({ error: APP_DISABLED_MESSAGE.publicDashboard });
+  }
 
   const enabled = Boolean(req.body?.enabled);
   const rotate = Boolean(req.body?.rotate);

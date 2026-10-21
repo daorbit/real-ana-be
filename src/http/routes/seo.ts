@@ -17,6 +17,7 @@ import { hasQuota, spendQuota } from "../../modules/billing/quota.service.js";
 import { resolveAccess, isDenied, type Access } from "../../modules/workspace/access.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -399,6 +400,7 @@ async function resolveReport(req: AuthedRequest): Promise<ReportResult> {
   const found = await resolveSite(req);
   // Status carried through, so a role refusal stays a 403 here too.
   if (siteRefused(found)) return { error: found.error, status: found.status };
+  if (!appEnabled(found.ws, "seoReports")) return { error: APP_DISABLED_MESSAGE.seoReports, status: 403 };
   const report = await SeoReport.findOne({
     _id: req.params.id,
     workspaceId: found.ws.id,

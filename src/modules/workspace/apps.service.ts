@@ -1,6 +1,17 @@
 import { Workspace } from "./models/Workspace.js";
 
-export const WORKSPACE_APPS = ["compare", "goals", "notes", "reviews", "links", "media", "alerts", "popups"] as const;
+export const WORKSPACE_APPS = [
+  "compare",
+  "goals",
+  "notes",
+  "reviews",
+  "links",
+  "media",
+  "alerts",
+  "popups",
+  "publicDashboard",
+  "seoReports",
+] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
 export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
@@ -12,7 +23,13 @@ export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
   media: "Quantalog Media is off for this workspace. Turn it on in Apps.",
   alerts: "Quantalog Alerts is off for this workspace. Turn it on in Apps.",
   popups: "Quantalog Popups is off for this workspace. Turn it on in Apps.",
+  publicDashboard: "Quantalog Public Dashboard is off for this workspace. Turn it on in Apps.",
+  seoReports: "Quantalog SEO Reports is off for this workspace. Turn it on in Apps.",
 };
+
+export function appEnabledFilter(app: WorkspaceApp): Record<string, true> {
+  return { [`apps.${app}.enabled`]: true };
+}
 
 type AppsCarrier = { get: (path: string) => unknown };
 

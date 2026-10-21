@@ -1,6 +1,8 @@
 import { Router, Request, Response } from "express";
 import { SeoReport } from "../../modules/seo/models/SeoReport.js";
 import { publicSeoReport } from "../../modules/seo/seo-share.js";
+import { Workspace } from "../../modules/workspace/models/Workspace.js";
+import { appEnabledFilter } from "../../modules/workspace/apps.service.js";
 
 /**
  * Public, unauthenticated read-only SEO audit reports.
@@ -29,6 +31,8 @@ router.get("/:token", async (req: Request, res: Response) => {
   // A disabled or unknown token gets the same 404 — distinguishing them would
   // confirm a token exists, which a guesser can use.
   if (!report) return res.status(404).json({ error: "not found" });
+  const appOn = await Workspace.exists({ _id: report.get("workspaceId"), ...appEnabledFilter("seoReports") });
+  if (!appOn) return res.status(404).json({ error: "not found" });
 
   // Count the open, fire-and-forget: a failed counter must never stop the page
   // rendering. Only the first load counts — panel/range switches re-fetch, and

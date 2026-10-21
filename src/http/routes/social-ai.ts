@@ -13,6 +13,7 @@
 import { Router, Response } from "express";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
 import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
@@ -108,6 +109,9 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
     return res.json({ caption: result.reply.trim().slice(0, MAX_CAPTION_CHARS) });
   }
 
+  if (!appEnabled(ws, "publicDashboard")) {
+    return res.status(403).json({ error: APP_DISABLED_MESSAGE.publicDashboard });
+  }
   if (!ws.get("shareEnabled") || !ws.get("shareToken")) {
     return res.status(400).json({ error: "Turn the public dashboard on first." });
   }

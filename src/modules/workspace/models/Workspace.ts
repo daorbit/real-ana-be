@@ -65,6 +65,14 @@ const workspaceSchema = new Schema(
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
       },
+      publicDashboard: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
+      seoReports: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
     },
 
     /**
