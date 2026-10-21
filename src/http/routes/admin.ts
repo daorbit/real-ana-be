@@ -31,6 +31,7 @@ import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest }
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
 import { getOpsAlertSettings, setOpsAlertSettings } from "../../modules/admin/ops-alert-settings.js";
+import { changeUserRole, isRole } from "../../modules/admin/user-role.service.js";
 import { sendOpsTestAlert } from "../../infra/monitoring/ops-alert.js";
 import { TelegramError } from "../../infra/messaging/telegram.js";
 
@@ -251,6 +252,24 @@ router.post("/users/:userId/screen-lock/reset", async (req: AuthedRequest, res: 
   ).catch((e) => console.error("[admin] screen-lock-reset notice failed:", (e as Error)?.message));
 
   res.json({ ok: true });
+});
+
+router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
+  const role = req.body?.role;
+  if (!isRole(role)) return res.status(400).json({ error: "role must be user, admin or super_admin" });
+
+  const change = await changeUserRole(req.userId as string, String(req.params.userId), role);
+  if (change.previousRole !== change.role) {
+    await recordAudit(req, {
+      action: "account.role_changed",
+      actorId: change.id,
+      impersonatorId: req.userId,
+      meta: { from: change.previousRole, to: change.role },
+    });
+    console.log(`[admin] ${req.userId} changed ${change.id} (${change.email}) from ${change.previousRole} to ${change.role}`);
+  }
+
+  res.json({ id: change.id, role: change.role });
 });
 
 router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, res: Response) => {

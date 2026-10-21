@@ -22,6 +22,7 @@ export const AUDIT_ACTIONS = {
   "account.screen_lock_enabled": "account",
   "account.screen_lock_disabled": "account",
   "account.impersonated": "account",
+  "account.role_changed": "account",
 
   "member.invited": "members",
   "member.invite_withdrawn": "members",
