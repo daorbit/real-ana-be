@@ -38,6 +38,7 @@ import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
+import { newShareToken } from "../../modules/analytics/public-dashboard.service.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
@@ -468,7 +469,7 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   // 32 nanoid chars: the token is the whole credential for an unauthenticated
   // view, so it has to be long enough that guessing is hopeless.
   if (rotate || (enabled && !ws.get("shareToken"))) {
-    ws.set("shareToken", `pk_${nanoid(32)}`);
+    ws.set("shareToken", newShareToken());
     // A new link is a new audience — carrying the old count over would make
     // the number meaningless.
     if (rotate) {
