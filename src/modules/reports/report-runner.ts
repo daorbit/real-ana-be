@@ -13,6 +13,7 @@ import { activeNumbers, sendToNumbers } from "../whatsapp/whatsapp.service.js";
 import { emit } from "../notifications/notify.service.js";
 import { buildTelegramReport, type TelegramReportInput } from "./report-telegram.js";
 import { deliveryFor, sendToChats } from "../telegram/telegram.service.js";
+import { appEnabled } from "../workspace/apps.service.js";
 
 
 const BATCH_LIMIT = 25;
@@ -31,6 +32,15 @@ function appUrl(): string {
 
 function apiUrl(): string {
   return process.env.API_URL || "https://quantalog-be.daorbit.in";
+}
+
+function publicDashboardUrl(
+  workspace: { get: (path: string) => unknown },
+  include: Pick<ReportInclude, "dashboardLink">,
+): string | undefined {
+  const shareToken = workspace.get("shareToken") as string | undefined;
+  const live = Boolean(workspace.get("shareEnabled")) && appEnabled(workspace, "publicDashboard");
+  return include.dashboardLink && live && shareToken ? `${appUrl()}/share/${shareToken}` : undefined;
 }
 
 /** "1–7 Jan 2026" style label for the window a report covers. */
@@ -114,7 +124,6 @@ export async function buildReportView(schedule: InstanceType<typeof ReportSchedu
 
   const stats = include.analytics && siteIds.length ? await computeStats(siteIds, range) : null;
   const seo = include.seo ? await latestSeoRows(siteIds) : [];
-  const shareToken = workspace.get("shareToken") as string | undefined;
 
   return {
     workspace,
@@ -125,10 +134,7 @@ export async function buildReportView(schedule: InstanceType<typeof ReportSchedu
     stats,
     seo,
     metrics: buildMetrics(stats),
-    dashboardUrl:
-      include.dashboardLink && workspace.get("shareEnabled") && shareToken
-        ? `${appUrl()}/share/${shareToken}`
-        : undefined,
+    dashboardUrl: publicDashboardUrl(workspace, include),
     /** The hosted view of this report — always current, safe to forward. */
     reportUrl: `${apiUrl()}/api/public/reports/view/${schedule.get("viewToken")}`,
   };
@@ -267,11 +273,7 @@ export async function runSchedule(
 
   // Only linked when sharing is actually on. A schedule created while sharing
   // was enabled must not keep mailing a link that now 404s.
-  const shareToken = workspace.get("shareToken") as string | undefined;
-  const dashboardUrl =
-    include.dashboardLink && workspace.get("shareEnabled") && shareToken
-      ? `${appUrl()}/share/${shareToken}`
-      : undefined;
+  const dashboardUrl = publicDashboardUrl(workspace, include);
 
   // Written once per schedule, not per recipient: everyone on the list is
   // reading the same period, so a second call would spend a second model
