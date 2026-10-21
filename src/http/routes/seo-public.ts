@@ -31,8 +31,10 @@ router.get("/:token", async (req: Request, res: Response) => {
   // A disabled or unknown token gets the same 404 — distinguishing them would
   // confirm a token exists, which a guesser can use.
   if (!report) return res.status(404).json({ error: "not found" });
-  const appOn = await Workspace.exists({ _id: report.get("workspaceId"), ...appEnabledFilter("seoReports") });
-  if (!appOn) return res.status(404).json({ error: "not found" });
+  const ws = await Workspace.findOne({ _id: report.get("workspaceId"), ...appEnabledFilter("seoReports") })
+    .select("seoSharePanels")
+    .lean();
+  if (!ws) return res.status(404).json({ error: "not found" });
 
   // Count the open, fire-and-forget: a failed counter must never stop the page
   // rendering. Only the first load counts — panel/range switches re-fetch, and
@@ -44,7 +46,7 @@ router.get("/:token", async (req: Request, res: Response) => {
     ).catch(() => {});
   }
 
-  res.json(publicSeoReport(report));
+  res.json(publicSeoReport(report, ws.seoSharePanels));
 });
 
 export default router;

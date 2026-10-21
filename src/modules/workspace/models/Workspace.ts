@@ -104,6 +104,7 @@ const workspaceSchema = new Schema(
      * deliberate act that invalidates old links.
      */
     shareEnabled: { type: Boolean, default: false },
+    seoSharePanels: { type: Schema.Types.Mixed, default: undefined },
     /**
      * How many times the public link has been opened, and when it was last
      * seen. Counted server-side on the share route rather than by the tracker

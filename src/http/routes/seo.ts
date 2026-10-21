@@ -18,6 +18,7 @@ import { resolveAccess, isDenied, type Access } from "../../modules/workspace/ac
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { emitTo } from "../../modules/notifications/notify.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
+import { ensureSeoShareLinks } from "../../modules/seo/seo-share-links.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -465,5 +466,30 @@ router.put(
     res.json(shareState(report));
   }
 );
+
+router.get("/:wid/sites/:siteId/seo/share-links", async (req: AuthedRequest, res: Response) => {
+  const found = await resolveSite(req, "admin");
+  if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+  if (!appEnabled(found.ws, "seoReports")) return res.status(403).json({ error: APP_DISABLED_MESSAGE.seoReports });
+  res.json({ links: await ensureSeoShareLinks(found.ws.id, found.site.siteId as string) });
+});
+
+router.get("/:wid/seo/share-panels", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  if (!appEnabled(access.workspace, "seoReports")) return res.status(403).json({ error: APP_DISABLED_MESSAGE.seoReports });
+  res.json({ panels: readSeoPanels(access.workspace.get("seoSharePanels")) });
+});
+
+router.put("/:wid/seo/share-panels", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req, "admin");
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+  if (!appEnabled(ws, "seoReports")) return res.status(403).json({ error: APP_DISABLED_MESSAGE.seoReports });
+  const panels = readSeoPanels(req.body?.panels);
+  ws.set("seoSharePanels", panels);
+  await ws.save();
+  res.json({ panels });
+});
 
 export default router;

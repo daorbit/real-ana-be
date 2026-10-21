@@ -13,9 +13,10 @@ import { readSeoPanels } from "../../http/routes/seo.js";
  * owner identity, or the raw stored report.
  */
 export function publicSeoReport(
-  report: NonNullable<{ get: (k: string) => unknown }>
+  report: NonNullable<{ get: (k: string) => unknown }>,
+  workspacePanels: unknown,
 ) {
-  const panels = readSeoPanels(report.get("sharePanels"));
+  const panels = readSeoPanels(workspacePanels);
   const data = (report.get("data") ?? {}) as Record<string, any>;
 
   return {
