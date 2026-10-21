@@ -53,9 +53,15 @@ export async function ensureSeoShareLinks(workspaceId: string, siteId: string): 
     let token = latest.shareToken ?? null;
     let views = latest.shareViews ?? 0;
     let lastViewedAt = latest.shareLastViewedAt ?? null;
+    const donor = token ? undefined : runs.slice(1).find((r) => r.shareToken);
+
+    for (const old of runs.slice(1)) {
+      if (old !== donor && old.shareEnabled) {
+        ops.push({ updateOne: { filter: { _id: old._id }, update: { $set: { shareEnabled: false } } } });
+      }
+    }
 
     if (!token) {
-      const donor = runs.slice(1).find((r) => r.shareToken);
       if (donor) {
         token = donor.shareToken as string;
         views = donor.shareViews ?? 0;

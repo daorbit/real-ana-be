@@ -1,4 +1,4 @@
-import { Router, Response } from "express";
+import { Router, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { User } from "../../modules/identity/models/User.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
@@ -27,17 +27,33 @@ import { emitToMany } from "../../modules/notifications/notify.service.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
-import { requireAuth, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
+import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
 import { getOpsAlertSettings, setOpsAlertSettings } from "../../modules/admin/ops-alert-settings.js";
 import { changeUserRole, isRole } from "../../modules/admin/user-role.service.js";
+import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
 import { sendOpsTestAlert } from "../../infra/monitoring/ops-alert.js";
 import { TelegramError } from "../../infra/messaging/telegram.js";
 
  
 const router = Router();
-router.use(requireAuth, requireSuperAdmin);
+
+const ADMIN_ROLE_ROUTES: { method: string; path: RegExp }[] = [
+  { method: "GET", path: /^\/users$/ },
+  { method: "GET", path: /^\/users\/[^/]+\/(overview|billing)$/ },
+  { method: "POST", path: /^\/impersonate\/[^/]+$/ },
+  { method: "GET", path: /^\/email\/(status|templates|segments|recipients)$/ },
+  { method: "POST", path: /^\/email\/(preview|send|test)$/ },
+];
+
+function openToAdminRole(req: AuthedRequest): boolean {
+  return ADMIN_ROLE_ROUTES.some((r) => r.method === req.method && r.path.test(req.path));
+}
+
+router.use(requireAuth, requireAdmin, (req: AuthedRequest, res: Response, next: NextFunction) =>
+  openToAdminRole(req) ? next() : requireSuperAdmin(req, res, next),
+);
 
 const PAGE_SIZE = 20;
 
@@ -257,6 +273,15 @@ router.post("/users/:userId/screen-lock/reset", async (req: AuthedRequest, res: 
 router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
   const role = req.body?.role;
   if (!isRole(role)) return res.status(400).json({ error: "role must be user, admin or super_admin" });
+
+  if (role === "super_admin") {
+    const requester = await User.findById(req.userId);
+    if (!requester) return res.status(404).json({ error: "user not found" });
+    if (!hasOwnershipFactor(requester)) {
+      return res.status(400).json({ error: "Set a password or PIN in Security settings before granting super admin" });
+    }
+    if (await rejectUnconfirmed(requester, req.body ?? {}, res)) return;
+  }
 
   const change = await changeUserRole(req.userId as string, String(req.params.userId), role);
   if (change.previousRole !== change.role) {

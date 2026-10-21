@@ -1,7 +1,8 @@
-import { failingServices, QUANTALOG_API, type DownService, type HealthEnv } from "./health";
+import { failingServices, QUANTALOG_API, type HealthEnv } from "./health";
 import { sendOpsAlert, type AlertEnv, type OpsAlert } from "./telegram";
+import { diffDownState, type DownChange, type StateEnv } from "./downState";
 
-export type Env = HealthEnv & AlertEnv;
+export type Env = HealthEnv & AlertEnv & StateEnv;
 
 interface Task {
   path: string;
@@ -74,13 +75,20 @@ async function runSweeps(env: Env, tasks: Task[]): Promise<string[]> {
     .map((r) => (r.reason as Error).message);
 }
 
-function alertsFor(down: DownService[], sweepErrors: string[]): OpsAlert[] {
+function alertsFor(change: DownChange, sweepErrors: string[]): OpsAlert[] {
   const alerts: OpsAlert[] = [];
-  if (down.length) {
+  if (change.newlyDown.length) {
     alerts.push({
       title: "Service down",
-      where: down.map((d) => d.name).join(", "),
-      detail: down.map((d) => `${d.name}: ${d.reason}`).join("\n"),
+      where: change.newlyDown.map((d) => d.name).join(", "),
+      detail: change.newlyDown.map((d) => `${d.name}: ${d.reason}`).join("\n"),
+    });
+  }
+  if (change.recovered.length) {
+    alerts.push({
+      title: "Service recovered",
+      where: change.recovered.join(", "),
+      detail: `${change.recovered.join(", ")} answering normally again.`,
     });
   }
   if (sweepErrors.length) {
@@ -98,7 +106,8 @@ async function runTick(env: Env, scheduledTime: number): Promise<void> {
 
   if (healthTick) {
     const quantalogUp = !down.some((d) => d.name === QUANTALOG_API);
-    await Promise.all(alertsFor(down, sweepErrors).map((alert) => sendOpsAlert(env, alert, quantalogUp)));
+    const change = await diffDownState(env, down);
+    await Promise.all(alertsFor(change, sweepErrors).map((alert) => sendOpsAlert(env, alert, quantalogUp)));
   }
   if (sweepErrors.length) throw new Error(sweepErrors.join(" | "));
 }

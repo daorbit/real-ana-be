@@ -39,6 +39,7 @@ import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { newShareToken } from "../../modules/analytics/public-dashboard.service.js";
+import { readSharePanels } from "../../modules/analytics/share-panels.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
@@ -386,49 +387,12 @@ router.patch(
 
 /* ---------------------------- public sharing ---------------------------- */
 
-/**
- * The panels a public dashboard can show, and their defaults.
- *
- * The originals default to true — that is what every existing shared link
- * already publishes. Everything added later defaults to false: a workspace
- * that was already sharing must not start exposing new breakdowns because we
- * shipped a release. Turning one on is the owner's decision.
- */
-const SHARE_PANEL_DEFAULTS: Record<string, boolean> = {
-  totals: true,
-  trend: true,
-  pages: true,
-  sources: true,
-  countries: true,
-  devices: true,
-
-  browsers: false,
-  operatingSystems: false,
-  entryPages: false,
-  exitPages: false,
-  languages: false,
-  channels: false,
-  engagement: false,
-  visitorSplit: false,
-};
-
-function readPanels(raw: unknown): Record<string, boolean> {
-  const o = (raw ?? {}) as Record<string, unknown>;
-  const out: Record<string, boolean> = {};
-  // Unknown keys are dropped rather than stored — the public route reads this
-  // to decide what to publish, so it must only ever contain fields we know.
-  for (const [key, fallback] of Object.entries(SHARE_PANEL_DEFAULTS)) {
-    out[key] = o[key] === undefined ? fallback : Boolean(o[key]);
-  }
-  return out;
-}
-
 /** The owner-facing share state, assembled the same way from GET and PUT. */
 function shareState(ws: NonNullable<Awaited<ReturnType<typeof Workspace.findOne>>>) {
   return {
     enabled: Boolean(ws.get("shareEnabled")),
     token: ws.get("shareToken") ?? null,
-    panels: readPanels(ws.get("sharePanels")),
+    panels: readSharePanels(ws.get("sharePanels")),
     views: ws.get("shareViews") ?? 0,
     lastViewedAt: ws.get("shareLastViewedAt") ?? null,
   };
@@ -481,7 +445,7 @@ router.put("/:wid/share", async (req: AuthedRequest, res: Response) => {
   // Only touch panels when the client sends them, so toggling sharing on and
   // off does not silently reset a customised selection.
   if (req.body?.panels !== undefined) {
-    ws.set("sharePanels", readPanels(req.body.panels));
+    ws.set("sharePanels", readSharePanels(req.body.panels));
   }
   await Promise.all([
     ws.save(),

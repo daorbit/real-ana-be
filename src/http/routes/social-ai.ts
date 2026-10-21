@@ -19,7 +19,7 @@ import { computeStats, resolveWindow } from "../../modules/analytics/stats.servi
 import { askOrbit, orbitConfigured } from "../../modules/orbit/index.js";
 import { quantalogOrbitHost, effectiveOrbitPlan } from "../../modules/orbit/orbit-host.js";
 import { parsePlan } from "../../modules/social/plan-parse.js";
-import { readSeoPanels } from "./seo.js";
+import { readSharePanels } from "../../modules/analytics/share-panels.js";
 import { cloudinaryConfigured, uploadImage } from "../../infra/storage/cloudinary.js";
 import { resolveBranding } from "../../modules/branding/branding.service.js";
 import { watermarkTransformation } from "./orbit.js";
@@ -128,7 +128,7 @@ router.post("/:wid/share/caption", async (req: AuthedRequest, res: Response) => 
 
   // Only panels the owner published may be described. Mentioning a breakdown
   // that is switched off would send people to a page missing what was promised.
-  const panels = readSeoPanels(ws.get("sharePanels"));
+  const panels = readSharePanels(ws.get("sharePanels"));
   const visible = Object.entries(panels)
     .filter(([, on]) => on)
     .map(([key]) => key)
