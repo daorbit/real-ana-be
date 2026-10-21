@@ -14,7 +14,7 @@ import { explainSearchConsoleError } from "../../modules/seo/search-console.serv
 import { currentPlan } from "../../modules/billing/quota.service.js";
 import { encryptSecret } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
-import { AuthedRequest, jwtSecret } from "../middleware/auth.js";
+import { AuthedRequest, jwtSecret, verifySessionToken } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
 import { renderOAuthPopup, studioBase } from "../oauth-popup.js";
 import { handleGoogleLoginCallback, isGoogleLoginState } from "./google-login.js";
@@ -89,14 +89,10 @@ router.get(
     if (!token) return closePopup(res, "error", "not_signed_in");
     if (!workspaceId) return closePopup(res, "error", "no_access");
 
-    let userId: string;
-    try {
-      const payload = jwt.verify(token, jwtSecret()) as { userId: string; demo?: boolean };
-      if (payload.demo) return closePopup(res, "error", "demo");
-      userId = payload.userId;
-    } catch {
-      return closePopup(res, "error", "not_signed_in");
-    }
+    const session = await verifySessionToken(token);
+    if (!session) return closePopup(res, "error", "not_signed_in");
+    if (session.demo) return closePopup(res, "error", "demo");
+    const userId = session.userId;
 
     const access = await resolveAccess({ userId } as AuthedRequest, "admin", workspaceId);
     if (isDenied(access)) return closePopup(res, "error", "no_access");

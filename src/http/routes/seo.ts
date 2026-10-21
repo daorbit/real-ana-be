@@ -8,7 +8,7 @@ import { planLimit } from "../plan-limit.js";
 import { analyzeUrl, normalizeUrl, urlMatchesDomain } from "../../modules/seo/seo.service.js";
 import { rateLimit, BlockedUrlError } from "../../infra/http-client/safe-fetch.js";
 import { resolveSite, siteRefused, type SiteRefused } from "./resolve-site.js";
-import { computeSearchTraffic } from "../../modules/analytics/search-traffic.js";
+import { searchTrafficFor } from "../../modules/analytics/search-traffic.js";
 import { computeFieldVitals } from "../../modules/seo/field-vitals.js";
 import { crawlSite } from "../../modules/seo/crawl.js";
 import { CrawlReport } from "../../modules/seo/models/CrawlReport.js";
@@ -228,9 +228,7 @@ router.get(
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
 
     const days = Math.min(Math.max(Number(req.query.days ?? 30) || 30, 1), 365);
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-    const traffic = await computeSearchTraffic([found.site.siteId], since);
+    const traffic = await searchTrafficFor(String(found.site.siteId), days);
     res.json({ ...traffic, days });
   }
 );

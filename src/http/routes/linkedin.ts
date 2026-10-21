@@ -25,7 +25,7 @@ import { decryptSecret, encryptSecret, safeEqual } from "../../shared/utils/cryp
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
 import {
-  requireAuth, blockDemoWrites, signToken, signPending2faToken, jwtSecret, AuthedRequest,
+  requireAuth, blockDemoWrites, signToken, signPending2faToken, jwtSecret, verifySessionToken, AuthedRequest,
 } from "../middleware/auth.js";
 import { badRequest, forbidden } from "../../shared/errors/index.js";
 
@@ -378,15 +378,12 @@ router.get(
       const token = String(req.query.token ?? "");
       if (!token) return closePopup(res, "error", "not_signed_in");
 
-      try {
-        const payload = jwt.verify(token, jwtSecret()) as { userId: string; demo?: boolean };
-        // A demo session is read-only and has no real user row to attach a
-        // connection to, so it is refused here rather than failing at the upsert.
-        if (payload.demo) return closePopup(res, "error", "demo");
-        userId = payload.userId;
-      } catch {
-        return closePopup(res, "error", "not_signed_in");
-      }
+      const session = await verifySessionToken(token);
+      if (!session) return closePopup(res, "error", "not_signed_in");
+      // A demo session is read-only and has no real user row to attach a
+      // connection to, so it is refused here rather than failing at the upsert.
+      if (session.demo) return closePopup(res, "error", "demo");
+      userId = session.userId;
     }
 
     const state = jwt.sign(

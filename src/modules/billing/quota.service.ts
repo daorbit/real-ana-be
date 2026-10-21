@@ -602,14 +602,14 @@ export async function quotaSummary(workspaceId: string) {
 
   // Only what is still queued: a sent post is history and holds no slot, which
   // is the same rule `canCreateScheduledPost` counts by.
-  const [siteCount, scheduledPostCount, features] = await Promise.all([
+  // Lazy for the same cycle reason as `planAllowance` above.
+  const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
+  const [siteCount, scheduledPostCount, features, orbitPlan] = await Promise.all([
     Site.countDocuments({ workspaceId }),
     ScheduledPost.countDocuments({ workspaceId, status: { $ne: "sent" } }),
     featureUsage(plan, workspaceId),
+    effectiveOrbitPlan(workspaceId),
   ]);
-  // Lazy for the same cycle reason as `planAllowance` above.
-  const { effectiveOrbitPlan } = await import("../orbit/orbit-host.js");
-  const orbitPlan = await effectiveOrbitPlan(workspaceId);
 
   return {
     orbit: {

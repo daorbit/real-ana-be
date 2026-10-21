@@ -116,43 +116,46 @@ async function publicUser(user: InstanceType<typeof User>) {
             ? "github"
             : "email",
 
-    ...(await accessSummary(user.id)),
+    ...(await accessSummary(user.id, user.email ? String(user.email) : undefined)),
   };
 }
 
 
-async function accessSummary(userId: string) {
+async function memberWorkspaces(userId: string) {
   const memberships = await Membership.find({ userId }).select("workspaceId role").lean();
-
   const workspaces = await Workspace.find({
     _id: { $in: memberships.map((m) => m.workspaceId) },
   })
     .select("name slug")
     .sort({ createdAt: -1 })
     .lean();
+  return { workspaces, roleByWorkspace: new Map(memberships.map((m) => [String(m.workspaceId), m.role])) };
+}
 
-  const roleByWorkspace = new Map(memberships.map((m) => [String(m.workspaceId), m.role]));
-
-  // Invitations addressed to this account's email that are still live. Expired
-  // ones are omitted rather than shown as actionable — the link behind them is
-  // already refused at accept time.
-  const user = await User.findById(userId).select("email").lean();
-  const pending = user?.email
+// Invitations addressed to this account's email that are still live. Expired
+// ones are omitted rather than shown as actionable — the link behind them is
+// already refused at accept time.
+async function liveInvites(email: string | undefined) {
+  const pending = email
     ? await WorkspaceInvite.find({
-        email: String(user.email).toLowerCase(),
+        email: email.toLowerCase(),
         acceptedAt: null,
         expiresAt: { $gt: new Date() },
       })
         .select("workspaceId role token expiresAt")
         .lean()
     : [];
+  const invitedWorkspaces = pending.length
+    ? await Workspace.find({ _id: { $in: pending.map((i) => i.workspaceId) } }).select("name").lean()
+    : [];
+  return { pending, nameByWorkspace: new Map(invitedWorkspaces.map((w) => [String(w._id), w.name])) };
+}
 
-  const invitedWorkspaces = await Workspace.find({
-    _id: { $in: pending.map((i) => i.workspaceId) },
-  })
-    .select("name")
-    .lean();
-  const nameByWorkspace = new Map(invitedWorkspaces.map((w) => [String(w._id), w.name]));
+async function accessSummary(userId: string, email: string | undefined) {
+  const [{ workspaces, roleByWorkspace }, { pending, nameByWorkspace }] = await Promise.all([
+    memberWorkspaces(userId),
+    liveInvites(email),
+  ]);
 
   return {
     /** Workspaces this account is a member of — accepted access, usable now. */

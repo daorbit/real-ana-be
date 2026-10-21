@@ -1,4 +1,5 @@
 import { Event } from "./models/Event.js";
+import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 
 /**
  * Organic search traffic, derived from stored referrers.
@@ -38,6 +39,11 @@ const ENGINES: { match: string; name: string }[] = [
   { match: "copilot.microsoft", name: "Copilot" },
   { match: "gemini.google", name: "Gemini" },
 ];
+
+const ENGINE_REFERRER = new RegExp(
+  `^[a-z][a-z0-9+.-]*://[^/?#]*(?:${ENGINES.map((e) => e.match.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`,
+  "i",
+);
 
 /** Query-string keys engines have historically used for the search term. */
 const QUERY_KEYS = ["q", "query", "p", "text", "wd", "kw", "search"];
@@ -120,7 +126,7 @@ export async function computeSearchTraffic(
 
   const [totalVisits, rows] = await Promise.all([
     Event.countDocuments(match),
-    Event.find({ ...match, referrer: { $nin: ["", null] } })
+    Event.find({ ...match, referrer: ENGINE_REFERRER })
       .select("referrer path visitorHash")
       .lean(),
   ]);
@@ -172,4 +178,11 @@ export async function computeSearchTraffic(
       .slice(0, 25),
     hasTerms: terms.size > 0,
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const trafficCache = createTtlCache<SearchTraffic>(5 * 60 * 1000, 500);
+
+export function searchTrafficFor(siteId: string, days: number): Promise<SearchTraffic> {
+  return trafficCache(`${siteId}:${days}`, () => computeSearchTraffic([siteId], new Date(Date.now() - days * DAY_MS)));
 }

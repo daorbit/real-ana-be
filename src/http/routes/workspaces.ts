@@ -40,6 +40,7 @@ import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from 
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { newShareToken } from "../../modules/analytics/public-dashboard.service.js";
 import { readSharePanels } from "../../modules/analytics/share-panels.js";
+import { siteEventSummary } from "../../modules/analytics/site-event-summary.js";
 import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
@@ -475,16 +476,13 @@ router.get(
     if (!site) return res.status(404).json({ error: "site not found" });
 
     const siteId = site.siteId as string;
-    const [eventCount, last] = await Promise.all([
-      Event.countDocuments({ siteId }),
-      Event.findOne({ siteId }).sort({ ts: -1 }).select("ts"),
-    ]);
+    const { eventCount, lastEventAt } = await siteEventSummary(siteId);
 
     res.json({
       siteId,
       installed: eventCount > 0,
       eventCount,
-      lastEventAt: last?.ts ?? null,
+      lastEventAt,
       trackerVersion: site.trackerVersion ?? 1,
       latestTrackerVersion: TRACKER_VERSION,
     });

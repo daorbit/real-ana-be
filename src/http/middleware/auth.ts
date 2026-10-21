@@ -25,9 +25,30 @@ export interface AuthedRequest extends Request {
   impersonatorId?: string;
   isDemo?: boolean;
   sessionJti?: string;
+  unlockRequired?: boolean;
 }
 
-type Payload = { userId: string; impersonatorId?: string; demo?: boolean; jti?: string };
+async function isScreenLocked(userId: string): Promise<boolean> {
+  const user = await User.findById(userId).select("lockedAt").lean();
+  return Boolean(user?.lockedAt);
+}
+
+function sendLocked(res: Response) {
+  return res.status(423).json({ error: "screen is locked", locked: true });
+}
+
+type Payload = {
+  userId: string;
+  impersonatorId?: string;
+  demo?: boolean;
+  jti?: string;
+  pending2fa?: boolean;
+  kind?: string;
+};
+
+function isSessionPayload(payload: Payload): boolean {
+  return Boolean(payload.userId) && payload.pending2fa === undefined && payload.kind === undefined;
+}
 type Pending2faPayload = { userId: string; pending2fa: true };
 
 export async function signToken(userId: string, req?: Request): Promise<string> {
@@ -70,6 +91,21 @@ export function signImpersonationToken(userId: string, impersonatorId: string): 
 
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
 
+export async function verifySessionToken(token: string): Promise<{ userId: string; demo: boolean } | null> {
+  let payload: Payload;
+  try {
+    payload = jwt.verify(token, jwtSecret()) as Payload;
+  } catch {
+    return null;
+  }
+  if (!isSessionPayload(payload)) return null;
+  if (payload.jti) {
+    const session = await Session.findOne({ jti: payload.jti }).select("revokedAt").lean();
+    if (!session || session.revokedAt) return null;
+  }
+  return { userId: payload.userId, demo: payload.demo === true };
+}
+
 export const requireAuth = asyncHandler<AuthedRequest>(async (req, res, next) => {
   const header = req.headers.authorization ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -81,15 +117,22 @@ export const requireAuth = asyncHandler<AuthedRequest>(async (req, res, next) =>
   } catch {
     return res.status(401).json({ error: "invalid token" });
   }
+  if (!isSessionPayload(payload)) return res.status(401).json({ error: "invalid token" });
+
+  const checkLock = req.unlockRequired === true && payload.demo !== true;
+  const [session, locked] = await Promise.all([
+    payload.jti ? Session.findOne({ jti: payload.jti }).select("revokedAt lastSeenAt") : null,
+    checkLock ? isScreenLocked(payload.userId) : false,
+  ]);
 
   if (payload.jti) {
-    const session = await Session.findOne({ jti: payload.jti }).select("revokedAt lastSeenAt");
     if (!session || session.revokedAt) return res.status(401).json({ error: "session revoked" });
 
     if (Date.now() - session.lastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
       void Session.updateOne({ _id: session._id }, { lastSeenAt: new Date() }).catch(() => {});
     }
   }
+  if (locked) return sendLocked(res);
 
   req.userId = payload.userId;
   req.impersonatorId = payload.impersonatorId;
@@ -102,8 +145,11 @@ export const requireUnlocked = asyncHandler<AuthedRequest & { apiKeyId?: string 
   if (req.isDemo) return next();
 
   if (req.apiKeyId) return next();
-  const user = await User.findById(req.userId).select("lockedAt");
-  if (user?.lockedAt) return res.status(423).json({ error: "screen is locked", locked: true });
+  if (!req.userId) {
+    req.unlockRequired = true;
+    return next();
+  }
+  if (await isScreenLocked(req.userId)) return sendLocked(res);
   next();
 });
 

@@ -145,7 +145,7 @@ app.get(
   compression(),
   (_req, res) => {
     res.type("application/javascript");
-    res.set("Cache-Control", "public, no-cache");
+    res.set("Cache-Control", "public, max-age=0, s-maxage=300, stale-while-revalidate=86400");
     res.set("X-Tracker-Version", String(TRACKER_VERSION));
     res.sendFile(path.join(publicDir, "tracker.js"));
   },

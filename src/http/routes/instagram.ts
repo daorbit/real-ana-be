@@ -14,7 +14,7 @@ import {
 import { encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
-import { requireAuth, blockDemoWrites, jwtSecret, AuthedRequest } from "../middleware/auth.js";
+import { requireAuth, blockDemoWrites, jwtSecret, verifySessionToken, AuthedRequest } from "../middleware/auth.js";
 
 /**
  * Connecting an Instagram professional account.
@@ -218,16 +218,12 @@ router.get(
     const token = String(req.query.token ?? "");
     if (!token) return closePopup(res, "error", "not_signed_in");
 
-    let userId: string;
-    try {
-      const payload = jwt.verify(token, jwtSecret()) as { userId: string; demo?: boolean };
-      // A demo session is read-only and has no real user row to attach a
-      // connection to, so it is refused here rather than failing at the upsert.
-      if (payload.demo) return closePopup(res, "error", "demo");
-      userId = payload.userId;
-    } catch {
-      return closePopup(res, "error", "not_signed_in");
-    }
+    const session = await verifySessionToken(token);
+    if (!session) return closePopup(res, "error", "not_signed_in");
+    // A demo session is read-only and has no real user row to attach a
+    // connection to, so it is refused here rather than failing at the upsert.
+    if (session.demo) return closePopup(res, "error", "demo");
+    const userId = session.userId;
 
     const state = jwt.sign(
       {

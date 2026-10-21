@@ -36,6 +36,7 @@ import {
   blockDemoWrites,
   jwtSecret,
   requireAuth,
+  verifySessionToken,
 } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
@@ -152,16 +153,12 @@ router.get(
     if (!token) return closePopup(res, "error", "not_signed_in");
     if (!workspaceId) return closePopup(res, "error", "no_access");
 
-    let userId: string;
-    try {
-      const payload = jwt.verify(token, jwtSecret()) as { userId: string; demo?: boolean };
-      // A demo session is read-only and has no real workspace to attach a
-      // connection to, so it is refused here rather than failing at the upsert.
-      if (payload.demo) return closePopup(res, "error", "demo");
-      userId = payload.userId;
-    } catch {
-      return closePopup(res, "error", "not_signed_in");
-    }
+    const session = await verifySessionToken(token);
+    if (!session) return closePopup(res, "error", "not_signed_in");
+    // A demo session is read-only and has no real workspace to attach a
+    // connection to, so it is refused here rather than failing at the upsert.
+    if (session.demo) return closePopup(res, "error", "demo");
+    const userId = session.userId;
 
     // Connecting a third-party account is an administrative act, not a
     // viewer's: it spends the workspace's Google quota and exposes the

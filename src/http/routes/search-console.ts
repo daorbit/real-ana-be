@@ -76,8 +76,10 @@ router.get(
     const workspaceId = access.workspace.id;
 
     const configured = missingSearchConsoleConfig().length === 0;
-    const connection = await SearchConsoleConnection.findOne({ workspaceId });
-    const links = await SearchConsoleProperty.find({ workspaceId }).select("siteId propertyUrl");
+    const [connection, links] = await Promise.all([
+      SearchConsoleConnection.findOne({ workspaceId }),
+      SearchConsoleProperty.find({ workspaceId }).select("siteId propertyUrl"),
+    ]);
 
     res.json({
       configured,

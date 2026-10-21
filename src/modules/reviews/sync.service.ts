@@ -152,38 +152,36 @@ export async function syncLocation(locationRowId: string): Promise<SyncResult> {
   try {
     const page = await fetchReviewPage(location);
 
-    let added = 0;
-    let updated = 0;
-
-    // Upserts one at a time rather than a bulk write: the collections are small
-    // per location, and a per-review result is what makes `added`/`updated`
-    // reportable to the user who pressed Sync.
-    for (const review of page.reviews) {
-      const result = await GoogleReview.updateOne(
-        { workspaceId, googleReviewId: review.reviewId },
-        {
-          $set: {
-            googleLocationId: location._id,
-            reviewerName: review.reviewerName,
-            reviewerPhoto: review.reviewerPhoto,
-            rating: review.rating,
-            comment: review.comment,
-            reviewCreatedAt: review.createTime,
-            reviewUpdatedAt: review.updateTime,
-            replyComment: review.reply?.comment ?? "",
-            replyUpdatedAt: review.reply?.updateTime ?? null,
-            raw: review.raw,
-            // A review that reappears was not deleted after all.
-            deletedAt: null,
-          },
-          $setOnInsert: { workspaceId },
-        },
-        { upsert: true },
-      );
-
-      if (result.upsertedCount) added += 1;
-      else if (result.modifiedCount) updated += 1;
-    }
+    const written = page.reviews.length
+      ? await GoogleReview.bulkWrite(
+          page.reviews.map((review) => ({
+            updateOne: {
+              filter: { workspaceId, googleReviewId: review.reviewId },
+              update: {
+                $set: {
+                  googleLocationId: location._id,
+                  reviewerName: review.reviewerName,
+                  reviewerPhoto: review.reviewerPhoto,
+                  rating: review.rating,
+                  comment: review.comment,
+                  reviewCreatedAt: review.createTime,
+                  reviewUpdatedAt: review.updateTime,
+                  replyComment: review.reply?.comment ?? "",
+                  replyUpdatedAt: review.reply?.updateTime ?? null,
+                  raw: review.raw,
+                  // A review that reappears was not deleted after all.
+                  deletedAt: null,
+                },
+                $setOnInsert: { workspaceId },
+              },
+              upsert: true,
+            },
+          })),
+          { ordered: false },
+        )
+      : null;
+    const added = written?.upsertedCount ?? 0;
+    const updated = written?.modifiedCount ?? 0;
 
     const completeRead =
       source === "places" || page.reviews.length >= page.totalReviewCount;

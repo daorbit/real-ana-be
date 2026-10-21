@@ -8,6 +8,7 @@ import {
   classifyRequest, classifyTraffic, parseClientSignals, type TrafficVerdict,
 } from "../../modules/analytics/bot-detect.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
+import { runAfterResponse } from "../../shared/utils/after-response.js";
 import { cleanProps } from "../../modules/analytics/event-props.js";
 
 const UNBILLED_TYPES = new Set(["interact", "popup"]);
@@ -225,10 +226,11 @@ router.post("/", async (req, res) => {
     await Promise.all(writes);
 
 
-    await countEvents(workspaceId, docs.filter((d) => !UNBILLED_TYPES.has(d.type)).length + heatmapDocs.length);
+    const billed = docs.filter((d) => !UNBILLED_TYPES.has(d.type)).length + heatmapDocs.length;
 
     // 204 keeps the beacon lightweight
     res.status(204).end();
+    runAfterResponse("usage count", () => countEvents(workspaceId, billed));
   } catch (e) {
     console.error("[collect] ingest failed:", (e as Error).message);
     res.status(500).json({ error: "collect failed" });
