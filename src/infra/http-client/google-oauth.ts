@@ -18,6 +18,7 @@ export type GoogleErrorKind =
   | "forbidden"
   | "not_found"
   | "unavailable"
+  | "unreadable"
   | "unknown";
 
 export class GoogleApiError extends Error {

@@ -9,6 +9,7 @@ import {
 } from "../../infra/http-client/google-business.js";
 import { getPlaceReviews } from "../../infra/http-client/google-places.js";
 import { decryptSecret, encryptSecret, readStoredSecret } from "../../shared/utils/crypto-box.js";
+import { isProductionDeployment } from "../../shared/utils/deployment.js";
 
  
 const STALE_AFTER_MS = 6 * 60 * 60 * 1000;
@@ -51,10 +52,20 @@ export async function usableAccessToken(connectionId: string): Promise<string> {
     throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
   if (!storedRefresh.ok) {
+    if (isProductionDeployment()) {
+      console.error(
+        `[reviews] connection ${connectionId} refresh token cannot be decrypted with the production key — marking signed out so an admin reconnects`,
+      );
+      await markConnectionRevoked(
+        connectionId,
+        "The saved Google sign-in can no longer be read. Reconnect Google to continue syncing.",
+      );
+      throw new GoogleApiError("revoked", 409, "stored Google credentials cannot be read");
+    }
     console.error(
       `[reviews] connection ${connectionId} refresh token cannot be decrypted here — TOKEN_ENCRYPTION_KEY differs from the server that connected it; leaving the connection untouched`,
     );
-    throw new GoogleApiError("unavailable", 503, "stored Google credentials cannot be read by this server");
+    throw new GoogleApiError("unreadable", 503, "stored Google credentials cannot be read by this server");
   }
 
   try {
@@ -115,6 +126,8 @@ export function explainGoogleError(err: unknown): string {
       return "That business location is no longer available on Google.";
     case "unavailable":
       return "Google is temporarily unavailable. The next scheduled sync will retry automatically.";
+    case "unreadable":
+      return "This server can't read the saved Google sign-in because its encryption key differs from production.";
     default:
       return "Reviews could not be synced. Please try again.";
   }

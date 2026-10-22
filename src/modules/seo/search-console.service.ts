@@ -15,6 +15,7 @@ import {
   type SearchUrlInspection,
 } from "../../infra/http-client/search-console.js";
 import { decryptSecret, encryptSecret, readStoredSecret } from "../../shared/utils/crypto-box.js";
+import { isProductionDeployment } from "../../shared/utils/deployment.js";
 import { pageViewSeries, pageViewsByPath, pathOf, type PageViewSeries } from "./search-page-views.js";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -22,6 +23,8 @@ const TOP_ROWS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SIGNED_OUT_MESSAGE =
   "The Google sign-in for Search visibility has expired. A workspace admin needs to sign in again.";
+const UNREADABLE_MESSAGE =
+  "The saved Google sign-in for Search visibility can no longer be read. A workspace admin needs to reconnect it.";
 
 export const PERFORMANCE_RANGES = [7, 28, 90, 180, 365, 480] as const;
 
@@ -49,10 +52,17 @@ export async function usableSearchConsoleToken(connectionId: string): Promise<st
     throw new GoogleApiError("revoked", 409, "no refresh token stored");
   }
   if (!storedRefresh.ok) {
+    if (isProductionDeployment()) {
+      console.error(
+        `[search-console] connection ${connectionId} refresh token cannot be decrypted with the production key — marking signed out so an admin reconnects`,
+      );
+      await markRevoked(connectionId, UNREADABLE_MESSAGE);
+      throw new GoogleApiError("revoked", 409, "stored Google credentials cannot be read");
+    }
     console.error(
       `[search-console] connection ${connectionId} refresh token cannot be decrypted here — TOKEN_ENCRYPTION_KEY differs from the server that connected it; leaving the connection untouched`,
     );
-    throw new GoogleApiError("unavailable", 503, "stored Google credentials cannot be read by this server");
+    throw new GoogleApiError("unreadable", 503, "stored Google credentials cannot be read by this server");
   }
 
   try {
@@ -124,6 +134,8 @@ export function explainSearchConsoleError(err: unknown): string {
       return "That Search Console property is no longer available.";
     case "unavailable":
       return "Google is temporarily unavailable. Please try again shortly.";
+    case "unreadable":
+      return "This server can't read the saved Google sign-in because its encryption key differs. Reconnect Search Console here or use the production key.";
     default:
       return "Search Console data could not be loaded. Please try again.";
   }
