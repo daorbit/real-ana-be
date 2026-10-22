@@ -52,6 +52,7 @@ export type PlanCatalogEntry = {
   maxEmbeds: number;
   maxGoalTargets: number;
   maxPopups: number;
+  maxBioPages: number;
   alertCheckHours: number;
   auditLogDays: number;
 };
@@ -111,6 +112,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxEmbeds: 0,
     maxGoalTargets: 2,
     maxPopups: 1,
+    maxBioPages: 1,
     alertCheckHours: 6,
     auditLogDays: 7,
   },
@@ -132,6 +134,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "10 custom dashboards & 5 embedded widgets",
       "10 goal targets",
       "5 website popups",
+      "3 link-in-bio pages",
       "Hourly traffic, goal and form alerts",
       "Audit log with 30 days of history",
     ],
@@ -159,6 +162,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxEmbeds: 5,
     maxGoalTargets: 10,
     maxPopups: 5,
+    maxBioPages: 3,
     alertCheckHours: 1,
     auditLogDays: 30,
   },
@@ -181,6 +185,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
       "50 custom dashboards & 100 embedded widgets",
       "30 goal targets",
       "25 website popups",
+      "20 link-in-bio pages",
       "Audit log with 1 year of history",
     ],
     sortOrder: 2,
@@ -207,6 +212,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxEmbeds: 100,
     maxGoalTargets: 30,
     maxPopups: 25,
+    maxBioPages: 20,
     alertCheckHours: 1,
     auditLogDays: 365,
   },
@@ -244,6 +250,7 @@ const SUPERSEDES: Record<string, string[]> = {
   "30 goal targets": ["10 goal targets", "2 goal targets"],
   "5 website popups": ["1 website popup"],
   "25 website popups": ["5 website popups", "1 website popup"],
+  "20 link-in-bio pages": ["3 link-in-bio pages"],
   "Hourly traffic, goal and form alerts": ["Traffic alerts, checked every 6 hours"],
   "Audit log with 1 year of history": ["Audit log with 30 days of history"],
 };

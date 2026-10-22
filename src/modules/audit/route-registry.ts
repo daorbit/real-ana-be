@@ -11,6 +11,7 @@ import { Media } from "../media/models/Media.js";
 import { Competitor } from "../seo/models/Competitor.js";
 import { Backlink } from "../backlinks/models/Backlink.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
+import { BioPage } from "../bio/models/BioPage.js";
 
 type Params = Record<string, string>;
 type Snapshot = (workspaceId: string, params: Params) => Promise<string | undefined>;
@@ -53,6 +54,10 @@ const SITE = "/sites/(?<siteId>[^/]+)";
 const route = (path: string) => new RegExp(`^${path}/?$`);
 
 export const ROUTE_RULES: RouteRule[] = [
+  { method: "POST", pattern: route("/bio"), action: "bio.created", kind: "bio_page" },
+  { method: "PUT", pattern: route(`/bio/${ID}`), action: "bio.updated", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
+  { method: "DELETE", pattern: route(`/bio/${ID}`), action: "bio.deleted", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
+
   { method: "POST", pattern: route("/targets"), action: "goal.created", kind: "goal" },
   { method: "PUT", pattern: route(`/targets/${ID}`), action: "goal.updated", kind: "goal" },
   { method: "DELETE", pattern: route(`/targets/${ID}`), action: "goal.deleted", kind: "goal", snapshot: byWorkspace(GoalTarget, "name") },

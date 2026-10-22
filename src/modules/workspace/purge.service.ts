@@ -30,6 +30,8 @@ import { Notification } from "../notifications/models/Notification.js";
 import { OrbitConversation } from "../orbit-history/models/OrbitConversation.js";
 import { OrbitMessage } from "../orbit-history/models/OrbitMessage.js";
 import { AuditLog } from "../audit/models/AuditLog.js";
+import { BioPage } from "../bio/models/BioPage.js";
+import { BioStat } from "../bio/models/BioStat.js";
 import { invalidateSite } from "../billing/event-quota.js";
 import { deleteWorkspaceDashboards } from "../dashboards/cleanup.js";
 import { deleteWorkspaceMedia } from "../media/cleanup.js";
@@ -103,6 +105,8 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
     CompetitorBacklink.deleteMany(byWorkspace),
     WorkspaceInvite.deleteMany(byWorkspace),
     AuditLog.deleteMany(byWorkspace),
+    BioPage.deleteMany(byWorkspace),
+    BioStat.deleteMany(byWorkspace),
   ]);
 
   await Site.deleteMany(byWorkspace);

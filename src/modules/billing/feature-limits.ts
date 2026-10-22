@@ -2,9 +2,10 @@ import { Dashboard } from "../dashboards/models/Dashboard.js";
 import { Embed } from "../dashboards/models/Embed.js";
 import { GoalTarget, TARGET_METRICS } from "../dashboards/models/GoalTarget.js";
 import { Popup } from "../popups/models/Popup.js";
+import { BioPage } from "../bio/models/BioPage.js";
 import type { PlanCatalogEntry } from "./plans.catalog.js";
 
-export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups";
+export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups" | "bioPages";
 
 type FeatureSpec = {
   kind: string;
@@ -47,6 +48,14 @@ export const COUNTED_FEATURES: Record<CountedFeature, FeatureSpec> = {
     plural: "website popups",
     limit: (p) => p.maxPopups,
     count: (workspaceId) => Popup.countDocuments({ workspaceId }),
+  },
+  bioPages: {
+    kind: "bio_pages",
+    label: "Link-in-bio pages",
+    noun: "link-in-bio page",
+    plural: "link-in-bio pages",
+    limit: (p) => p.maxBioPages,
+    count: (workspaceId) => BioPage.countDocuments({ workspaceId }),
   },
 };
 

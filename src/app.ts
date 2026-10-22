@@ -59,6 +59,8 @@ import goalTargetRoutes from "./http/routes/goal-targets.js";
 import alertRoutes from "./http/routes/alerts.js";
 import popupRoutes from "./http/routes/popups.js";
 import popupPublicRoutes from "./http/routes/popups-public.js";
+import bioRoutes from "./http/routes/bio.js";
+import bioPublicRoutes from "./http/routes/bio-public.js";
 import embedRoutes from "./http/routes/embeds.js";
 import embedPublicRoutes from "./http/routes/embed-public.js";
 import oauthRoutes from "./http/routes/oauth.js";
@@ -135,6 +137,7 @@ app.get("/", openCors, (_req: Request, res: Response) => {
 app.use(["/api/collect", "/api/ingest"], openCors, collectRoutes);
 app.use("/api/track", openCors, trackRoutes);
 app.use("/api/popups", openCors, popupPublicRoutes);
+app.use("/api/public/bio", openCors, bioPublicRoutes);
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -253,6 +256,7 @@ app.use("/api/workspaces/:wid/dashboards", dashboardCors, requireUnlocked, dashb
 app.use("/api/workspaces/:wid/targets", dashboardCors, requireUnlocked, goalTargetRoutes);
 app.use("/api/workspaces/:wid/alerts", dashboardCors, requireUnlocked, alertRoutes);
 app.use("/api/workspaces/:wid/popups", dashboardCors, requireUnlocked, popupRoutes);
+app.use("/api/workspaces/:wid/bio", dashboardCors, requireUnlocked, bioRoutes);
 app.use("/api/workspaces/:wid/embeds", dashboardCors, requireUnlocked, embedRoutes);
 // Who else can reach this workspace, and pending invitations to it.
 app.use("/api/workspaces/:wid/members", dashboardCors, requireUnlocked, memberRoutes);

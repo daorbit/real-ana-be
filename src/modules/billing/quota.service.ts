@@ -692,6 +692,7 @@ export async function quotaSummary(workspaceId: string) {
     embeds: features.embeds,
     goalTargets: features.goalTargets,
     popups: features.popups,
+    bioPages: features.bioPages,
     alertCheckHours: plan.alertCheckHours,
     allowedRanges: plan.allowedRanges,
     compareModes: plan.compareModes,

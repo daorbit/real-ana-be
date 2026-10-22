@@ -73,6 +73,10 @@ const workspaceSchema = new Schema(
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
       },
+      bio: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
     },
 
     /**
