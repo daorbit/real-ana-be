@@ -45,11 +45,18 @@ import { parseLayout } from "../../modules/workspace/layout.js";
 import { toPublicNavPrefs } from "../../modules/workspace/nav-prefs.service.js";
 import { purgeSite, purgeWorkspaces } from "../../modules/workspace/purge.service.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
+import {
+  computeHeatmapPages,
+  computePageHeatmap,
+  parseHeatmapDevice,
+} from "../../modules/analytics/heatmap.service.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { bareDomain } from "../../modules/backlinks/domains.js";
 
 const STATS_CACHE_MS = 10_000;
 const statsCache = createTtlCache<Record<string, unknown>>(STATS_CACHE_MS, 500);
+const HEATMAP_CACHE_MS = 60_000;
+const heatmapCache = createTtlCache<unknown>(HEATMAP_CACHE_MS, 300);
 
 const router = Router();
 router.use(requireAuth);
@@ -819,6 +826,52 @@ router.get("/:wid/user-flow", async (req: AuthedRequest, res: Response) => {
   const win = resolveWindow(rangeKey, req.query.from, req.query.to);
   const result = await computeUserFlow(ids, rangeKey, win);
   res.json(result);
+});
+
+router.get("/:wid/heatmap/pages", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId trackerOptions.heatmap");
+  const ids = selectSiteIds(sites, req.query.sites);
+  if (ids.length === 0) return res.json({ enabled: false, pages: [] });
+  const enabled = sites.some((s) => ids.includes(String(s.siteId)) && Boolean(s.get("trackerOptions.heatmap")));
+
+  const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(ws.id, rangeKey);
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
+
+  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
+  const device = parseHeatmapDevice(req.query.device);
+  const key = ["pages", ids.join(","), rangeKey, req.query.from ?? "", req.query.to ?? "", device].join(":");
+  const pages = await heatmapCache(key, () => computeHeatmapPages(ids, win, device));
+  res.json({ enabled, pages });
+});
+
+router.get("/:wid/heatmap", async (req: AuthedRequest, res: Response) => {
+  const access = await resolveAccess(req);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  const ws = access.workspace;
+
+  const path = String(req.query.path ?? "").slice(0, 300);
+  if (!path) return res.status(400).json({ error: "path required" });
+
+  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const ids = selectSiteIds(sites, req.query.sites);
+  const device = parseHeatmapDevice(req.query.device);
+  if (ids.length === 0) {
+    return res.json({ path, device, grid: { x: 0, y: 0 }, clicks: 0, cells: [], scroll: { sessions: 0, reach: [] } });
+  }
+
+  const rangeKey = String(req.query.range ?? "24h");
+  const allowed = await canUseRange(ws.id, rangeKey);
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
+
+  const win = resolveWindow(rangeKey, req.query.from, req.query.to);
+  const key = ["page", ids.join(","), path, rangeKey, req.query.from ?? "", req.query.to ?? "", device].join(":");
+  const heatmap = await heatmapCache(key, () => computePageHeatmap(ids, path, win, device));
+  res.json(heatmap);
 });
 
 // Weekly retention cohorts for the workspace.
