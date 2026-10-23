@@ -5,10 +5,17 @@ import {
   FONT_FAMILIES,
   CARD_SHADOWS,
   MAX_FIELDS,
+  defaultTheme,
   parseGeneratedForm,
   type GeneratedForm,
 } from "./form-schema.js";
+import { paletteMenu } from "./palettes.js";
 import { reconcileRevision } from "./reconcile.js";
+
+function withTheme(form: GeneratedForm, previous?: GeneratedForm): GeneratedForm {
+  if (form.theme) return form;
+  return { ...form, theme: previous?.theme ?? defaultTheme() };
+}
 
 /**
  * Turn a sentence into a starting-point form.
@@ -74,7 +81,7 @@ function systemPrompt(): string {
     '  "formDescription": string,',
     '  "submitLabel": string,',
     '  "fields": [ { "type": string, "label": string, "required": boolean, "placeholder": string, "helpText": string, "options": string[], "rows": string[], "content": string, "maxRating": number, "min": number, "max": number } ],',
-    '  "theme": { "pageBg": string, "cardBg": string, "cardBorder": string, "accentColor": string, "labelColor": string, "inputBg": string, "inputBorder": string, "inputTextColor": string, "textMode": string, "fontFamily": string, "cardRadius": number, "cardShadow": string }',
+    '  "theme": { "palette": string, "accentColor": string, "fontFamily": string, "cardRadius": number, "cardShadow": string }',
     "}",
     "",
     `"type" must be one of: ${GENERATABLE_FIELD_TYPES.join(", ")}.`,
@@ -89,12 +96,13 @@ function systemPrompt(): string {
     '- "name", "email", "phone", "address", "country", "date", "rating", "signature" already know what they collect. Use them rather than a "text" field named after them.',
     "",
     "Theme:",
-    "- Every colour is a 6-digit hex string like \"#0f172a\". Anything else is dropped.",
-    "- Pick one coherent palette that suits the subject, not a set of unrelated colours. A medical intake form is calm and light; a party RSVP can be bold.",
-    '- "textMode" is "light" on a dark card and "dark" on a light one — this is what keeps the text readable, so match it to "cardBg".',
-    `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}.`,
-    `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}.`,
-    '- "cardRadius" is a number of pixels, 0 to 40.',
+    '- "palette" is the name of one designed palette. Pick the one whose mood fits the subject:',
+    paletteMenu(),
+    "- Prefer a light palette. Use a dark one (midnight, graphite, coffee) only when the subject is clearly nightlife, gaming, music or a tech launch, or the request asks for dark.",
+    '- Leave "accentColor" out unless the request names a brand or colour. When set, it is a 6-digit hex string like "#2563eb".',
+    `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}. Use "inter" unless the subject calls for "serif" (weddings, legal, editorial) or "mono" (developer events).`,
+    `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}. Prefer "sm" or "md".`,
+    '- "cardRadius" is a number of pixels, 8 to 20.',
   ].join("\n");
 }
 
@@ -122,18 +130,10 @@ const EXAMPLE_REPLY = JSON.stringify({
     { type: "decisionBox", label: "Send me occasional updates" },
   ],
   theme: {
-    pageBg: "#f8fafc",
-    cardBg: "#ffffff",
-    cardBorder: "#e2e8f0",
-    accentColor: "#0f172a",
-    labelColor: "#0f172a",
-    inputBg: "#ffffff",
-    inputBorder: "#cbd5e1",
-    inputTextColor: "#0f172a",
-    textMode: "dark",
+    palette: "mono",
     fontFamily: "inter",
     cardRadius: 14,
-    cardShadow: "lg",
+    cardShadow: "sm",
   },
 });
 
@@ -367,7 +367,7 @@ export async function generateForm(
         previous && mode === "edit"
           ? reconcileRevision(previous, parsed.form, asked)
           : parsed.form;
-      return { ok: true, form, model };
+      return { ok: true, form: withTheme(form, previous), model };
     }
 
     // A model that answered but not usably. Worth trying the next one: the
@@ -449,5 +449,5 @@ async function generateFormFromImage(
       ? reconcileRevision(previous, parsed.form, instruction)
       : parsed.form;
 
-  return { ok: true, form, model: VISION_MODEL };
+  return { ok: true, form: withTheme(form, previous), model: VISION_MODEL };
 }

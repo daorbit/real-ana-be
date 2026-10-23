@@ -7,6 +7,7 @@ import {
   type GeneratedTheme,
 } from "./form-schema.js";
 import { MAX_OPS, parseEditOps, type EditOp } from "./edit-ops.js";
+import { paletteMenu } from "./palettes.js";
 
 /**
  * Change a form that already exists, without rewriting it.
@@ -47,7 +48,7 @@ function systemPrompt(): string {
     '{ "op": "addField", "after": "<id>", "field": { "type": string, "label": string, "required": boolean, "placeholder": string, "options": string[] } }',
     '{ "op": "moveField", "id": "<id>", "after": "<id>" }',
     '{ "op": "setForm", "patch": { "title": string, "formDescription": string, "submitLabel": string } }',
-    '{ "op": "setTheme", "patch": { "pageBg": string, "cardBg": string, "cardBorder": string, "accentColor": string, "labelColor": string, "inputBg": string, "inputBorder": string, "inputTextColor": string, "textMode": string, "fontFamily": string, "cardRadius": number, "cardShadow": string } }',
+    '{ "op": "setTheme", "patch": { "palette": string, "pageBg": string, "cardBg": string, "cardBorder": string, "accentColor": string, "labelColor": string, "inputBg": string, "inputBorder": string, "inputTextColor": string, "fontFamily": string, "cardRadius": number, "cardShadow": string } }',
     "",
     "Rules:",
     `- At most ${MAX_OPS} operations. Emit only the changes the request actually asks for.`,
@@ -61,7 +62,9 @@ function systemPrompt(): string {
     "Theme:",
     '- Colours are 6-digit hex strings like "#0f172a". Anything else is dropped.',
     '- Emit "setTheme" only when the request is about appearance. Send only the keys the request is actually about — a request about one colour should patch that one key, not the whole palette.',
-    '- "textMode" is "light" on a dark card and "dark" on a light one.',
+    '- For a whole new look ("make it dark", "warmer", "more professional"), send only "palette", set to one of:',
+    paletteMenu(),
+    '- For one colour ("make the button green"), patch that one key. Text colours are corrected for readability automatically.',
     `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}.`,
     `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}.`,
     "",
@@ -247,6 +250,7 @@ function describeThemeChange(patch: GeneratedTheme): string {
     .filter((n): n is string => Boolean(n));
 
   if (!names.length) return "updated the theme";
+  if (names.length > 4) return "restyled the form";
   if (names.length === 1) return `updated the ${names[0]}`;
   if (names.length === 2) return `updated the ${names[0]} and ${names[1]}`;
   return `updated the ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;

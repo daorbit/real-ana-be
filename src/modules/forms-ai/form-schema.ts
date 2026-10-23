@@ -1,3 +1,6 @@
+import { DEFAULT_PALETTE, isPaletteId, paletteColors } from "./palettes.js";
+import { harmonizeTheme } from "./theme-harmony.js";
+
 export const GENERATABLE_FIELD_TYPES = [
   "name",
   "email",
@@ -172,62 +175,35 @@ function readField(raw: unknown): GeneratedField | null {
   return field;
 }
 
-function luminance(hex: string): number {
-  const channel = (h: string) => {
-    const v = parseInt(h, 16) / 255;
-    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  const r = channel(hex.slice(1, 3));
-  const g = channel(hex.slice(3, 5));
-  const b = channel(hex.slice(5, 7));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
+function readColors(r: Record<string, unknown>): GeneratedTheme {
+  const palette = r.palette;
+  if (isPaletteId(palette)) {
+    const theme: GeneratedTheme = paletteColors(palette);
+    const accent = typeof r.accentColor === "string" ? r.accentColor.trim() : "";
+    if (HEX.test(accent)) theme.accentColor = accent;
+    return theme;
+  }
 
-function contrast(a: string, b: string): number {
-  const la = luminance(a);
-  const lb = luminance(b);
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-function readable(
-  color: string | undefined,
-  background: string | undefined,
-): string | undefined {
-  if (!color || !background) return color;
-  if (contrast(color, background) >= 4.5) return color;
-  return luminance(background) > 0.4 ? "#1f2937" : "#f8fafc";
-}
-
-/**
- * `theme`, with `base` filled in wherever a key is missing — the palette a
- * partial patch would actually produce once merged onto what is live now.
- * Contrast only means something against that effective result: checking a
- * patch in isolation would wave through an `accentColor` that reads fine on
- * paper but disappears against a `cardBg` the request never touched.
- */
-function withBase(theme: GeneratedTheme, base?: GeneratedTheme): GeneratedTheme {
-  if (!base) return theme;
-  return { ...base, ...theme };
-}
-
-function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const r = raw as Record<string, unknown>;
   const theme: GeneratedTheme = {};
-
   for (const key of THEME_COLOR_KEYS) {
     const value = r[key];
     if (typeof value === "string" && HEX.test(value.trim())) {
       theme[key] = value.trim();
     }
   }
-
   if (
     typeof r.textMode === "string" &&
     (TEXT_MODES as readonly string[]).includes(r.textMode)
   ) {
     theme.textMode = r.textMode as GeneratedTheme["textMode"];
   }
+  return theme;
+}
+
+function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const theme = readColors(r);
   if (
     typeof r.fontFamily === "string" &&
     (FONT_FAMILIES as readonly string[]).includes(r.fontFamily)
@@ -246,35 +222,12 @@ function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefi
 
   if (!Object.keys(theme).length) return undefined;
 
-  // Corrections run against the effective (patch-over-base) palette, but only
-  // the keys the patch itself set are written back — a partial edit should
-  // still come back partial, not silently grow into a full restyle.
-  const effective = withBase(theme, base);
+  const harmonized = harmonizeTheme(theme, base);
+  return Object.keys(harmonized).length ? harmonized : undefined;
+}
 
-  if ("labelColor" in theme || (!base && theme.labelColor === undefined)) {
-    const corrected = readable(effective.labelColor, effective.cardBg);
-    if (corrected !== undefined) theme.labelColor = corrected;
-  }
-  if ("inputTextColor" in theme || (!base && theme.inputTextColor === undefined)) {
-    const corrected = readable(effective.inputTextColor, effective.inputBg);
-    if (corrected !== undefined) theme.inputTextColor = corrected;
-  }
-  if ("accentColor" in theme && effective.cardBg) {
-    theme.accentColor = readable(effective.accentColor, effective.cardBg);
-  }
-  if ("cardBg" in theme || "pageBg" in theme) {
-    if (effective.cardBg && effective.pageBg && contrast(effective.cardBg, effective.pageBg) < 1.15) {
-      // The card and the page it sits on are close enough to the same shade
-      // that the card edge would be invisible. Nudge the card toward the
-      // opposite end of the lightness scale rather than leaving it to blend in.
-      theme.cardBg = luminance(effective.pageBg) > 0.4 ? "#1f2937" : "#ffffff";
-    }
-  }
-  if (theme.cardBg) {
-    theme.textMode = luminance(theme.cardBg) > 0.4 ? "dark" : "light";
-  }
-
-  return Object.keys(theme).length ? theme : undefined;
+export function defaultTheme(): GeneratedTheme {
+  return harmonizeTheme(paletteColors(DEFAULT_PALETTE));
 }
 
 export type ParseResult =
