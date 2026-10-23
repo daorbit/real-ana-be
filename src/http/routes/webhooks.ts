@@ -3,7 +3,8 @@ import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { verifyWebhookSignature } from "../../infra/payments/razorpay.js";
 import { verifyCashfreeWebhook } from "../../infra/payments/cashfree.js";
-import { creditAddonPurchase, creditPlanPurchase, creditSubscriptionPayment } from "./billing.js";
+import { creditAddonPurchase, creditAppPurchase, creditPlanPurchase, creditSubscriptionPayment } from "./billing.js";
+import { AppPurchase } from "../../modules/billing/models/AppPurchase.js";
 import {
   adoptSubscription,
   paidUpfrontPayment,
@@ -107,6 +108,9 @@ router.post("/razorpay", async (req: Request, res: Response) => {
 
       const planPurchase = await PlanPurchase.findOne({ razorpayOrderId: payload.id });
       if (planPurchase) await creditPlanPurchase(planPurchase.id, payment?.id ?? "");
+
+      const appPurchase = await AppPurchase.findOne({ razorpayOrderId: payload.id });
+      if (appPurchase) await creditAppPurchase(appPurchase.id, payment?.id ?? "");
     } else if (String(event.event).startsWith("subscription.")) {
       await handleSubscriptionEvent(event);
     }
@@ -159,6 +163,9 @@ router.post("/cashfree", async (req: Request, res: Response) => {
 
         const planPurchase = await PlanPurchase.findOne({ cashfreeOrderId: orderId });
         if (planPurchase) await creditPlanPurchase(planPurchase.id, paymentId);
+
+        const appPurchase = await AppPurchase.findOne({ cashfreeOrderId: orderId });
+        if (appPurchase) await creditAppPurchase(appPurchase.id, paymentId);
       }
     }
     res.json({ ok: true });

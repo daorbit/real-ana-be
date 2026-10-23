@@ -2,6 +2,8 @@ import axios from "axios";
 import { AppSetting } from "../../config/AppSetting.js";
 import { Plan } from "./models/Plan.js";
 import { AddonPack } from "./models/AddonPack.js";
+import { AppPrice } from "./models/AppPrice.js";
+import { DEFAULT_APP_PRICE_INR, PAID_APP_NAMES, PAID_APPS } from "./paid-apps.catalog.js";
 import { listResolvedPlans, asPriceMap } from "./plan-pricing.js";
 import { CURRENCIES, type Currency } from "./currency.js";
 
@@ -91,6 +93,12 @@ export type RepricedAddon = {
   price: Record<string, number>;
 };
 
+export type RepricedApp = {
+  appId: string;
+  name: string;
+  price: Record<string, number>;
+};
+
 export type RepriceResult = {
   snapshot: FxSnapshot;
   base: Currency;
@@ -98,6 +106,7 @@ export type RepriceResult = {
   derived: Currency[];
   plans: RepricedPlan[];
   addons: RepricedAddon[];
+  apps: RepricedApp[];
 };
 
 
@@ -143,5 +152,18 @@ export async function repriceAllPlans(): Promise<RepriceResult> {
     });
   }
 
-  return { snapshot, base: FX_BASE, derived, plans: repriced, addons: repricedAddons };
+  const appRows = await AppPrice.find({ appId: { $in: PAID_APPS } }).lean();
+  const storedAppPrices = new Map(appRows.map((row) => [row.appId as string, asPriceMap(row.price) ?? {}]));
+  const repricedApps: RepricedApp[] = [];
+
+  for (const appId of PAID_APPS) {
+    const price: Record<string, number> = { [FX_BASE]: storedAppPrices.get(appId)?.[FX_BASE] || DEFAULT_APP_PRICE_INR };
+    for (const currency of derived) {
+      price[currency] = convertMinor(price[FX_BASE], currency, snapshot);
+    }
+    await AppPrice.updateOne({ appId }, { $set: { price } }, { upsert: true });
+    repricedApps.push({ appId, name: PAID_APP_NAMES[appId], price });
+  }
+
+  return { snapshot, base: FX_BASE, derived, plans: repriced, addons: repricedAddons, apps: repricedApps };
 }

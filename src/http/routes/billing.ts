@@ -4,6 +4,9 @@ import { AddonPack, type AddonType } from "../../modules/billing/models/AddonPac
 import { Subscription, type BillingCycle, type RenewalStatus } from "../../modules/billing/models/Subscription.js";
 import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
+import { AppPurchase } from "../../modules/billing/models/AppPurchase.js";
+import { appPrice, appUnlocked, listAppPrices, unlockApp } from "../../modules/billing/paid-apps.js";
+import { PAID_APP_NAMES, isPaidApp } from "../../modules/billing/paid-apps.catalog.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import {
   razorpay,
@@ -45,6 +48,7 @@ import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency, type Currency } from "../../modules/billing/currency.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
+  appPurchaseDescription,
   buildInvoice,
   nextInvoiceNumber,
   renderInvoicePdf,
@@ -535,17 +539,21 @@ async function resolveAddonSelection(
   return { items, total };
 }
 
-/** Find a purchase by whichever gateway order id it carries, in either collection. */
+/** Find a purchase by whichever gateway order id it carries, in any purchase collection. */
 async function findPurchaseByOrder(field: "razorpayOrderId" | "cashfreeOrderId", orderId: string) {
   const plan = await PlanPurchase.findOne({ [field]: orderId });
   if (plan) return { kind: "plan" as const, id: String(plan._id) };
   const addon = await AddonPurchase.findOne({ [field]: orderId });
   if (addon) return { kind: "addon" as const, id: String(addon._id) };
+  const app = await AppPurchase.findOne({ [field]: orderId });
+  if (app) return { kind: "app" as const, id: String(app._id) };
   return null;
 }
 
-function creditFor(kind: "plan" | "addon") {
-  return kind === "plan" ? creditPlanPurchase : creditAddonPurchase;
+function creditFor(kind: InvoiceKind) {
+  if (kind === "plan") return creditPlanPurchase;
+  if (kind === "app") return creditAppPurchase;
+  return creditAddonPurchase;
 }
 
  
@@ -721,6 +729,91 @@ router.post("/addons/:slug/purchase", async (req: AuthedRequest, res: Response) 
     },
   });
 });
+
+router.get("/apps", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listAppPrices());
+});
+
+router.post("/apps/:appId/purchase", async (req: AuthedRequest, res: Response) => {
+  const appId = String(req.params.appId);
+  if (!isPaidApp(appId)) return res.status(404).json({ error: "this app is not sold separately" });
+
+  const workspaceId = String(req.body?.workspaceId ?? "").trim();
+  if (!mongoose.isValidObjectId(workspaceId)) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "admin", workspaceId);
+  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
+  if (appUnlocked(access.workspace, appId)) {
+    return res.status(409).json({ error: `${PAID_APP_NAMES[appId]} is already unlocked for this workspace`, code: "app_already_unlocked" });
+  }
+
+  const gateway = resolveGateway(req.body?.gateway);
+  if (!gatewayConfigured(gateway))
+    return res.status(503).json({ error: `${gateway} payments are not configured` });
+
+  const currency = resolveCurrency(req.body?.currency);
+  if (!gatewaySupportsCurrency(gateway, currency))
+    return res
+      .status(400)
+      .json({ error: `${gateway} cannot take ${currency} payments yet`, code: "gateway_currency_unsupported" });
+
+  const price = await appPrice(appId, currency);
+  if (price <= 0) return res.status(503).json({ error: `${PAID_APP_NAMES[appId]} has no ${currency} price yet` });
+
+  const discounted = await applyCoupon(price, req.body?.couponCode, req.userId);
+  if (discounted.error) return res.status(400).json({ error: discounted.error });
+  const amount = Math.max(discounted.amount, 100);
+
+  const buyer = await User.findById(req.userId).select("name email");
+  if (!buyer?.email) return res.status(400).json({ error: "your account has no email on file" });
+
+  let phone: string | undefined;
+  if (gateway === "cashfree") {
+    const resolved = await resolveCashfreePhone(req.body?.phone, req.userId);
+    if ("error" in resolved) return res.status(400).json({ error: resolved.error, code: "phone_required" });
+    phone = resolved.phone;
+  }
+
+  const opened = await openOrder({
+    gateway,
+    amountMinor: amount,
+    currency,
+    notes: { userId: String(req.userId), workspaceId: access.workspace.id, appId },
+    buyer: { id: String(req.userId), email: String(buyer.email), name: String(buyer.name ?? ""), phone },
+  });
+  if (!opened.ok) return res.status(502).json({ error: opened.error });
+
+  await AppPurchase.create({
+    userId: req.userId,
+    workspaceId: access.workspace.id,
+    appId,
+    gateway,
+    [opened.orderIdField]: opened.orderId,
+    amount,
+    currency,
+    couponCode: discounted.coupon?.code ?? "",
+    status: "created",
+  });
+
+  res.json({ ...opened.client, app: { id: appId, name: PAID_APP_NAMES[appId] } });
+});
+
+export async function creditAppPurchase(purchaseId: string, paymentId: string) {
+  const purchase = await AppPurchase.findOneAndUpdate(
+    { _id: purchaseId, status: { $ne: "paid" } },
+    { $set: { status: "paid", razorpayPaymentId: paymentId } },
+  );
+  if (!purchase) return;
+
+  const appId = purchase.appId as string;
+  if (!isPaidApp(appId)) return;
+  await unlockApp(String(purchase.workspaceId), appId);
+
+  await Promise.all([
+    redeemCoupon(purchase.couponCode, PAID_APP_NAMES[appId]),
+    qualifyReferralOnPayment(String(purchase.userId)),
+  ]);
+  await issueReceipt("app", purchase.id, String(purchase.userId));
+}
 
 async function purchaseWorkspaceId(stored: unknown, userId: unknown): Promise<string | null> {
   if (stored) return String(stored);
@@ -912,7 +1005,9 @@ async function issueReceipt(kind: InvoiceKind, purchaseId: string, userId: strin
     const claimed =
       kind === "plan"
         ? await PlanPurchase.findOneAndUpdate(filter, update)
-        : await AddonPurchase.findOneAndUpdate(filter, update);
+        : kind === "app"
+          ? await AppPurchase.findOneAndUpdate(filter, update)
+          : await AddonPurchase.findOneAndUpdate(filter, update);
     if (!claimed) return;
 
     // Raised before the receipt, and outside the `mailConfigured` guard below:
@@ -991,9 +1086,10 @@ router.get("/invoices", async (req: AuthedRequest, res: Response) => {
     ...workspaceFilter,
   };
 
-  const [plans, addons] = await Promise.all([
+  const [plans, addons, apps] = await Promise.all([
     PlanPurchase.find(query).sort({ invoicedAt: -1 }).limit(100).lean(),
     AddonPurchase.find(query).sort({ invoicedAt: -1 }).limit(100).lean(),
+    AppPurchase.find(query).sort({ invoicedAt: -1 }).limit(100).lean(),
   ]);
 
   const packs = await AddonPack.find({
@@ -1034,13 +1130,24 @@ router.get("/invoices", async (req: AuthedRequest, res: Response) => {
         paymentId: a.razorpayPaymentId ?? "",
       };
     }),
+    ...apps.map((a) => ({
+      id: String(a._id),
+      kind: "app" as const,
+      number: a.invoiceNumber as string,
+      issuedAt: a.invoicedAt,
+      description: appPurchaseDescription(a.appId as string),
+      amount: a.amount,
+      currency: a.currency,
+      paymentId: a.razorpayPaymentId ?? "",
+    })),
   ].sort((a, b) => Number(new Date(b.issuedAt as Date)) - Number(new Date(a.issuedAt as Date)));
 
   res.json(items);
 });
  
 router.get("/invoices/:kind/:id/pdf", async (req: AuthedRequest, res: Response) => {
-  const kind = req.params.kind === "plan" ? "plan" : req.params.kind === "addon" ? "addon" : null;
+  const kind: InvoiceKind | null =
+    req.params.kind === "plan" || req.params.kind === "addon" || req.params.kind === "app" ? req.params.kind : null;
   if (!kind) return res.status(400).json({ error: "unknown receipt type" });
 
   const user = await User.findById(req.userId).select("name email");

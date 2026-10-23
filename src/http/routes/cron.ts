@@ -63,7 +63,9 @@ function authorizeCron(req: Request, res: Response): boolean {
  */
 async function runFxSync(source: string) {
   const result = await repriceAllPlans();
-  console.log(`[cron] repriced ${result.plans.length} plans at 1 ${result.base} = ${result.snapshot.rates.USD} USD`);
+  console.log(
+    `[cron] repriced ${result.plans.length} plans, ${result.addons.length} addons and ${result.apps.length} apps at 1 ${result.base} = ${result.snapshot.rates.USD} USD`,
+  );
   // Awaited, not fired and forgotten: a serverless function is frozen the
   // instant the response goes out, which would kill the send mid-flight.
   await sendFxSuccessReport(result, source);

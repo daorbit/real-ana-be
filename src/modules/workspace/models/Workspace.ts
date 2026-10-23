@@ -44,14 +44,17 @@ const workspaceSchema = new Schema(
       notes: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       reviews: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       links: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       media: {
         enabled: { type: Boolean, default: false },
@@ -60,6 +63,7 @@ const workspaceSchema = new Schema(
       alerts: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       popups: {
         enabled: { type: Boolean, default: false },
@@ -76,6 +80,7 @@ const workspaceSchema = new Schema(
       bio: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
     },
 

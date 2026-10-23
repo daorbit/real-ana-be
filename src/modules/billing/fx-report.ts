@@ -15,6 +15,45 @@ function inverseRate(rate: number): string {
   return (1 / rate).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+type PriceRow = { name: string; price: Record<string, number> };
+
+function priceTable(result: RepriceResult, firstLabel: string, suffix: string, items: PriceRow[]): string {
+  if (!items.length) return "";
+  const header = [firstLabel, `${result.base}${suffix}`]
+    .concat(result.derived.map((c) => `${c}${suffix}`))
+    .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
+    .join("");
+  const rows = items
+    .map((item) => {
+      const cells = [item.name, `${result.base} ${money(item.price[result.base] ?? 0)}`]
+        .concat(result.derived.map((c) => `${c} ${money(item.price[c] ?? 0)}`));
+      return `<tr>${cells
+        .map(
+          (cell, i) =>
+            `<td style="padding:9px 12px;border-top:1px solid ${C.line};color:${i === 0 ? C.text : C.dim};font-weight:${i === 0 ? 600 : 400};font-size:14px">${cell}</td>`
+        )
+        .join("")}</tr>`;
+    })
+    .join("");
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse"><tr>${header}</tr>${rows}</table>`;
+}
+
+function sectionTitle(title: string): string {
+  return `<p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:${C.faint};text-transform:uppercase;letter-spacing:0.6px">${title}</p>`;
+}
+
+function textLines(result: RepriceResult, items: PriceRow[], suffix: string): string[] {
+  return items.map(
+    (item) =>
+      `${item.name}: ${result.base} ${money(item.price[result.base] ?? 0)}${suffix}` +
+      result.derived.map((c) => ` -> ${c} ${money(item.price[c] ?? 0)}`).join("")
+  );
+}
+
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
 export async function sendFxSuccessReport(result: RepriceResult, source: string): Promise<void> {
   const to = reportRecipient();
   if (!mailConfigured() || !to) return;
@@ -26,85 +65,40 @@ export async function sendFxSuccessReport(result: RepriceResult, source: string)
   });
   const rates = rateLines.join(" · ");
 
-  const rows = result.plans
-    .map((plan) => {
-      const cells = [plan.name, `${result.base} ${money(plan.priceMonthly[result.base] ?? 0)}`]
-        .concat(result.derived.map((c) => `${c} ${money(plan.priceMonthly[c] ?? 0)}`));
-      return `<tr>${cells
-        .map(
-          (cell, i) =>
-            `<td style="padding:9px 12px;border-top:1px solid ${C.line};color:${i === 0 ? C.text : C.dim};font-weight:${i === 0 ? 600 : 400};font-size:14px">${cell}</td>`
-        )
-        .join("")}</tr>`;
-    })
-    .join("");
+  const plans: PriceRow[] = result.plans.map((p) => ({ name: p.name, price: p.priceMonthly }));
+  const addons: PriceRow[] = result.addons.map((a) => ({ name: a.name, price: a.price }));
+  const apps: PriceRow[] = result.apps.map((a) => ({ name: a.name, price: a.price }));
 
-  const header = ["Plan", `${result.base} / month`]
-    .concat(result.derived.map((c) => `${c} / month`))
-    .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
-    .join("");
-
-  const addonRows = result.addons
-    .map((addon) => {
-      const cells = [addon.name, `${result.base} ${money(addon.price[result.base] ?? 0)}`]
-        .concat(result.derived.map((c) => `${c} ${money(addon.price[c] ?? 0)}`));
-      return `<tr>${cells
-        .map(
-          (cell, i) =>
-            `<td style="padding:9px 12px;border-top:1px solid ${C.line};color:${i === 0 ? C.text : C.dim};font-weight:${i === 0 ? 600 : 400};font-size:14px">${cell}</td>`
-        )
-        .join("")}</tr>`;
-    })
-    .join("");
-
-  const addonHeader = ["Add-on pack", result.base]
-    .concat(result.derived.map((c) => `${c}`))
-    .map((h) => `<th style="padding:8px 12px;text-align:left;color:${C.faint};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px">${h}</th>`)
-    .join("");
+  const summary = `${plural(result.plans.length, "plan")}, ${plural(result.addons.length, "add-on pack")} and ${plural(result.apps.length, "paid app")}`;
 
   const text = [
-    `Plan prices repriced successfully (${source}).`,
+    `Prices repriced successfully (${source}).`,
     ``,
     `Rate: ${rates}`,
     `Plans updated: ${result.plans.length}`,
     `Add-on packs updated: ${result.addons.length}`,
+    `Paid apps updated: ${result.apps.length}`,
     ``,
-    ...result.plans.map(
-      (p) =>
-        `${p.name}: ${result.base} ${money(p.priceMonthly[result.base] ?? 0)}/mo` +
-        result.derived.map((c) => ` -> ${c} ${money(p.priceMonthly[c] ?? 0)}`).join("")
-    ),
+    ...textLines(result, plans, "/mo"),
     ``,
-    ...result.addons.map(
-      (a) =>
-        `${a.name}: ${result.base} ${money(a.price[result.base] ?? 0)}` +
-        result.derived.map((c) => ` -> ${c} ${money(a.price[c] ?? 0)}`).join("")
-    ),
+    ...textLines(result, addons, ""),
+    ``,
+    ...textLines(result, apps, " one-time"),
   ].join("\n");
 
   const html = shell(
-    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan prices repriced</p>
+    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Prices repriced</p>
      <p style="margin:0 0 20px;font-size:14.5px;line-height:1.7;color:${C.dim}">
-       ${result.plans.length} plan${result.plans.length === 1 ? "" : "s"} and ${result.addons.length} add-on pack${result.addons.length === 1 ? "" : "s"} updated from the ${result.base} price at today's rate.
+       ${summary} updated from the ${result.base} price at today's rate.
        ${rateLines.map((line) => `<br><span style="color:${C.accent};font-weight:600">${line}</span>`).join("")}
      </p>
-     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
-       <tr>${header}</tr>
-       ${rows}
-     </table>
-     ${
-       addonRows
-         ? `<p style="margin:22px 0 8px;font-size:13px;font-weight:700;color:${C.faint};text-transform:uppercase;letter-spacing:0.6px">Add-on packs</p>
-     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse">
-       <tr>${addonHeader}</tr>
-       ${addonRows}
-     </table>`
-         : ""
-     }
+     ${priceTable(result, "Plan", " / month", plans)}
+     ${addons.length ? sectionTitle("Add-on packs") + priceTable(result, "Add-on pack", "", addons) : ""}
+     ${apps.length ? sectionTitle("Paid apps · one-time") + priceTable(result, "App", "", apps) : ""}
     `,
   );
 
-  await deliver(to, `Plan prices repriced — ${rates}`, text, html);
+  await deliver(to, `Prices repriced — ${rates}`, text, html);
 }
 
 export async function sendFxFailureReport(error: string, source: string): Promise<void> {
@@ -112,7 +106,7 @@ export async function sendFxFailureReport(error: string, source: string): Promis
   if (!mailConfigured() || !to) return;
 
   const text = [
-    `Plan repricing FAILED (${source}).`,
+    `Repricing FAILED (${source}).`,
     ``,
     `Error: ${error}`,
     ``,
@@ -121,9 +115,9 @@ export async function sendFxFailureReport(error: string, source: string): Promis
   ].join("\n");
 
   const html = shell(
-    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Plan repricing failed</p>
+    `<p style="margin:0 0 8px;font-size:18px;font-weight:700;color:${C.text};letter-spacing:-0.3px">Repricing failed</p>
      <p style="margin:0 0 16px;font-size:14.5px;line-height:1.7;color:${C.dim}">
-       The exchange rate could not be fetched, so no plan was changed.
+       The exchange rate could not be fetched, so no plan, add-on pack or app price was changed.
        Prices are still yesterday's — nothing is broken for customers.
      </p>
      <!-- The error keeps its own tinted block: this mail is read by whoever has
@@ -133,7 +127,7 @@ export async function sendFxFailureReport(error: string, source: string): Promis
      <p style="margin:20px 0 0;font-size:12.5px;color:${C.faint}">Triggered by ${source}.</p>`,
   );
 
-  await deliver(to, "Plan repricing failed — prices unchanged", text, html);
+  await deliver(to, "Repricing failed — prices unchanged", text, html);
 }
 
 /**

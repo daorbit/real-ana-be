@@ -17,6 +17,8 @@ import { Types } from "mongoose";
 import { LOGO_DATA_URI } from "../seo/logo.js";
 import { PlanPurchase } from "./models/PlanPurchase.js";
 import { AddonPurchase } from "./models/AddonPurchase.js";
+import { AppPurchase } from "./models/AppPurchase.js";
+import { PAID_APP_NAMES, isPaidApp } from "./paid-apps.catalog.js";
 import { AddonPack } from "./models/AddonPack.js";
 import { getResolvedPlan } from "./plan-pricing.js";
 import type { Currency } from "./currency.js";
@@ -37,7 +39,12 @@ export function seller() {
   };
 }
 
-export type InvoiceKind = "plan" | "addon";
+export type InvoiceKind = "plan" | "addon" | "app";
+
+export function appPurchaseDescription(appId: string): string {
+  const name = isPaidApp(appId) ? PAID_APP_NAMES[appId] : appId;
+  return `${name} — one-time unlock`;
+}
 
 /** Everything a rendered receipt needs, resolved from a paid purchase row. */
 export type InvoiceData = {
@@ -85,13 +92,14 @@ export async function nextInvoiceNumber(at: Date = new Date()): Promise<string> 
   const end = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1));
   const window = { invoiceNumber: { $ne: "" }, invoicedAt: { $gte: start, $lt: end } };
 
-  const [plans, addons] = await Promise.all([
+  const [plans, addons, apps] = await Promise.all([
     PlanPurchase.countDocuments(window),
     AddonPurchase.countDocuments(window),
+    AppPurchase.countDocuments(window),
   ]);
 
   const stamp = `${at.getUTCFullYear()}${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
-  return `QTL-${stamp}-${String(plans + addons + 1).padStart(4, "0")}`;
+  return `QTL-${stamp}-${String(plans + addons + apps + 1).padStart(4, "0")}`;
 }
 
 /* ------------------------------- formatting ------------------------------- */
@@ -229,6 +237,27 @@ export async function buildInvoice(
       orderId: (p.razorpayOrderId as string) || (p.cashfreeOrderId as string) || "",
       description: addons.length ? `${planLine}, plus ${addons.length} add-on pack${addons.length === 1 ? "" : "s"}` : planLine,
       lines,
+      buyer,
+    };
+  }
+
+  if (kind === "app") {
+    const a = await AppPurchase.findOne({ _id: purchaseId, userId, status: "paid" });
+    if (!a || !a.invoiceNumber) return null;
+    const description = appPurchaseDescription(a.appId as string);
+    return {
+      id: a.id,
+      kind,
+      number: a.invoiceNumber as string,
+      issuedAt: (a.invoicedAt as Date) ?? a.get("createdAt"),
+      amount: a.amount as number,
+      currency: a.currency as Currency,
+      couponCode: (a.couponCode as string) ?? "",
+      gateway: (a.gateway as string) ?? "razorpay",
+      paymentId: (a.razorpayPaymentId as string) ?? "",
+      orderId: (a.razorpayOrderId as string) || (a.cashfreeOrderId as string) || "",
+      description,
+      lines: [{ description, amount: a.amount as number }],
       buyer,
     };
   }
