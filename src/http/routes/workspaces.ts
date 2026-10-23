@@ -38,6 +38,7 @@ import { usageHistory } from "../../modules/billing/usage-history.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
+import { EMPTY_WORKSPACE_ICON, workspaceIcons } from "../../modules/workspace/workspace-icons.service.js";
 import { newShareToken } from "../../modules/analytics/public-dashboard.service.js";
 import { readSharePanels } from "../../modules/analytics/share-panels.js";
 import { siteEventSummary } from "../../modules/analytics/site-event-summary.js";
@@ -154,6 +155,7 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
       ...ws.toObject(),
       role: "owner",
       billing: await quotaSummary(ws.id),
+      icon: EMPTY_WORKSPACE_ICON,
     });
   } catch (err) {
     console.error("createWorkspace failed:", err);
@@ -174,9 +176,11 @@ router.post("/", async (req: AuthedRequest, res: Response) => {
  */
 router.get("/", async (req: AuthedRequest, res: Response) => {
   const accessible = await accessibleWorkspaces(req.userId as string);
+  const ids = accessible.map(({ workspace }) => workspace.id as string);
 
-  res.json(
-    await Promise.all(
+  const [icons, rows] = await Promise.all([
+    workspaceIcons(ids),
+    Promise.all(
       accessible.map(async ({ workspace, role }) => ({
         ...workspace.toObject(),
         navPrefs: toPublicNavPrefs(workspace.get("navPrefs")),
@@ -184,7 +188,9 @@ router.get("/", async (req: AuthedRequest, res: Response) => {
         billing: await quotaSummary(workspace.id),
       })),
     ),
-  );
+  ]);
+
+  res.json(rows.map((row, i) => ({ ...row, icon: icons.get(ids[i]) ?? EMPTY_WORKSPACE_ICON })));
 });
 
 /**
