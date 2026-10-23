@@ -290,12 +290,13 @@ export async function buildInvoice(
 
 /* --------------------------------- render --------------------------------- */
 
-const INK = "#111827";
-const MUTED = "#6b7280";
-const LINE = "#e5e7eb";
-const ACCENT = "#047857";
-/** The tint behind the header band and the totals block. */
-const WASH = "#f8fafc";
+const INK = "#111114";
+const MUTED = "#6e6e73";
+const FAINT = "#8e8e93";
+const LINE = "#e5e5ea";
+const RULE = "#d1d1d6";
+const PAID = "#1f7a3d";
+const PAID_WASH = "#e8f5ec";
 
 /**
  * The mark, decoded once at module load.
@@ -315,6 +316,12 @@ const LOGO: Buffer | null = (() => {
   }
 })();
 
+function gatewayLabel(gateway: string): string {
+  if (gateway === "coupon") return "Coupon";
+  if (gateway === "cashfree") return "Cashfree";
+  return "Razorpay";
+}
+
 /**
  * The receipt as a PDF, buffered rather than streamed.
  *
@@ -330,212 +337,166 @@ const LOGO: Buffer | null = (() => {
  */
 export function renderInvoicePdf(inv: InvoiceData): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const s = seller();
+    const doc = new PDFDocument({
+      size: "A4",
+      margin: 56,
+      info: { Title: `Receipt ${inv.number}`, Author: s.name },
+    });
     const chunks: Buffer[] = [];
 
     doc.on("data", (c: Buffer) => chunks.push(c));
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const s = seller();
     const left = doc.page.margins.left;
     const right = doc.page.width - doc.page.margins.right;
     const width = right - left;
 
-    // A tinted band behind the header, bled to the page edges. Gives the
-    // document a masthead rather than starting cold on white, which is most of
-    // what separates a receipt that looks issued from one that looks printed.
-    const bandHeight = 118;
-    doc.rect(0, 0, doc.page.width, bandHeight).fill(WASH);
-    doc.moveTo(0, bandHeight).lineTo(doc.page.width, bandHeight)
-      .strokeColor(LINE).lineWidth(1).stroke();
+    const hairline = (atY: number, from = left, to = right, color = LINE) => {
+      doc.moveTo(from, atY).lineTo(to, atY).strokeColor(color).lineWidth(0.75).stroke();
+    };
 
-    // Header left: the mark, then the seller's details beneath it.
-    const logoSize = 30;
+    let y = doc.page.margins.top;
+
+    const logoSize = 26;
     let nameX = left;
-
     if (LOGO) {
-      doc.image(LOGO, left, 38, { width: logoSize, height: logoSize });
+      doc.image(LOGO, left, y, { width: logoSize, height: logoSize });
       nameX = left + logoSize + 10;
     }
+    doc.font("Helvetica-Bold").fontSize(13).fillColor(INK)
+      .text(pdfSafe(s.name), nameX, y + 7, { width: width * 0.6, lineBreak: false });
 
-    doc.fillColor(INK).fontSize(17).font("Helvetica-Bold")
-      .text(pdfSafe(s.name), nameX, 45, { width: width * 0.55, lineBreak: false });
+    const pillText = "PAID";
+    doc.font("Helvetica-Bold").fontSize(7.5);
+    const pillW = doc.widthOfString(pillText, { characterSpacing: 1 }) + 22;
+    doc.roundedRect(right - pillW, y + 3, pillW, 20, 10).fill(PAID_WASH);
+    doc.fillColor(PAID)
+      .text(pillText, right - pillW, y + 9.5, { width: pillW, align: "center", characterSpacing: 1 });
 
-    let sellerY = 38 + logoSize + 8;
-    if (s.address) {
-      doc.fontSize(8.5).font("Helvetica").fillColor(MUTED)
-        .text(pdfSafe(s.address), left, sellerY, { width: width * 0.5 });
-      sellerY = doc.y;
-    }
-    if (s.email) {
-      doc.fontSize(8.5).font("Helvetica").fillColor(MUTED)
-        .text(pdfSafe(s.email), left, sellerY + 1, { width: width * 0.5 });
-    }
+    y += 70;
 
-    // Header right: what this document is, then its identifiers as a small
-    // label/value pair — the number is what someone quotes over support, so it
-    // gets a label rather than sitting as a bare string.
-    doc.fontSize(19).font("Helvetica-Bold").fillColor(ACCENT)
-      .text("PAYMENT RECEIPT", left, 42, { width, align: "right" });
+    doc.font("Helvetica").fontSize(11).fillColor(MUTED).text("Receipt", left, y);
+    y += 18;
+    doc.font("Helvetica-Bold").fontSize(32).fillColor(INK)
+      .text(pdfSafe(formatAmount(inv.amount, inv.currency)), left, y);
+    y = doc.y + 2;
+    doc.font("Helvetica").fontSize(11).fillColor(MUTED)
+      .text(`Paid on ${formatDate(inv.issuedAt)}`, left, y);
+    y = doc.y + 30;
 
-    const metaLabel = (label: string, value: string, atY: number) => {
-      doc.fontSize(7.5).font("Helvetica-Bold").fillColor(MUTED)
-        .text(label.toUpperCase(), left, atY, { width, align: "right", characterSpacing: 0.5 });
-      doc.fontSize(10).font("Helvetica-Bold").fillColor(INK)
-        .text(value, left, atY + 10, { width, align: "right" });
-    };
+    const meta: [string, string][] = [
+      ["Receipt number", inv.number],
+      ["Date paid", formatDate(inv.issuedAt)],
+      ["Payment method", gatewayLabel(inv.gateway)],
+    ];
+    const metaW = width / meta.length;
+    meta.forEach(([label, value], i) => {
+      const x = left + metaW * i;
+      doc.font("Helvetica").fontSize(8.5).fillColor(FAINT).text(label, x, y, { width: metaW - 12 });
+      doc.font("Helvetica-Bold").fontSize(10.5).fillColor(INK).text(pdfSafe(value), x, y + 14, { width: metaW - 12 });
+    });
+    y += 46;
 
-    metaLabel("Receipt no.", inv.number, 70);
-    metaLabel("Date", formatDate(inv.issuedAt), 94);
-
-    let y = bandHeight + 28;
-
-    // Billed-to, and the payment's identifiers beside it. The Razorpay ids are
-    // on the document because they are what a support conversation about a
-    // disputed charge actually turns on.
-    doc.fontSize(7.5).font("Helvetica-Bold").fillColor(MUTED)
-      .text("BILLED TO", left, y, { characterSpacing: 0.5 });
-    doc.fontSize(11.5).font("Helvetica-Bold").fillColor(INK)
-      .text(pdfSafe(inv.buyer.name || inv.buyer.email), left, y + 13, { width: width * 0.5 });
-    doc.fontSize(9).font("Helvetica").fillColor(MUTED)
-      .text(pdfSafe(inv.buyer.email), left, doc.y + 2, { width: width * 0.5 });
-
-    const buyerBottom = doc.y;
-
-    // The Razorpay identifiers. On the document because they are what a
-    // support conversation about a disputed charge actually turns on — set in
-    // a monospaced face so a long id can be read back character by character.
-    const metaX = left + width * 0.55;
-    const metaW = width * 0.45;
-    doc.fontSize(7.5).font("Helvetica-Bold").fillColor(MUTED)
-      .text("PAYMENT REFERENCE", metaX, y, { width: metaW, align: "right", characterSpacing: 0.5 });
-    doc.fontSize(9).font("Courier-Bold").fillColor(INK)
-      .text(inv.paymentId || "—", metaX, y + 13, { width: metaW, align: "right" });
-    doc.fontSize(8).font("Courier").fillColor(MUTED)
-      .text(inv.orderId, metaX, doc.y + 2, { width: metaW, align: "right" });
-
-    y = Math.max(buyerBottom, doc.y) + 30;
-
-    // Line items. A plan bought together with addon packs is several rows on
-    // one receipt — one summary line for a payment that covered both would be
-    // an incomplete record of where the money went.
-    const AMOUNT_COL = 140;
-    const descWidth = width - AMOUNT_COL - 24;
-
-    doc.rect(left, y, width, 24).fill(INK);
-    doc.fillColor("#ffffff").fontSize(7.5).font("Helvetica-Bold")
-      .text("DESCRIPTION", left + 12, y + 8.5, { characterSpacing: 0.5 })
-      .text("AMOUNT", left, y + 8.5, { width: width - 12, align: "right", characterSpacing: 0.5 });
-
+    hairline(y);
     y += 24;
 
-    inv.lines.forEach((line, i) => {
-      const rowTop = y;
-
-      doc.fillColor(INK).fontSize(10).font("Helvetica")
-        .text(pdfSafe(line.description), left + 12, rowTop + 11, { width: descWidth });
-
-      // Drawn from the row's own top rather than after the description, so a
-      // description that wraps to two lines keeps its price on the first.
-      doc.font("Helvetica-Bold")
-        .text(formatAmount(line.amount, inv.currency), left, rowTop + 11, {
-          width: width - 12,
-          align: "right",
-        });
-
-      y = Math.max(doc.y, rowTop + 26) + 6;
-
-      // Hairline between rows, but not after the last — that edge is the
-      // table's own boundary and gets a heavier rule below.
-      if (i < inv.lines.length - 1) {
-        doc.moveTo(left + 12, y).lineTo(right - 12, y).strokeColor(LINE).lineWidth(0.5).stroke();
-        y += 6;
-      }
-    });
-
-    y += 4;
-    doc.moveTo(left, y).lineTo(right, y).strokeColor(LINE).lineWidth(1).stroke();
-    y += 16;
-
-    // Totals, right-aligned in their own column so the figures line up under
-    // the amounts above rather than floating in the middle of the page.
-    const totalsX = right - 240;
-    const labelW = 130;
-    const valueW = 110;
-
-    const totalRow = (label: string, value: string, opts: { bold?: boolean; color?: string } = {}) => {
-      doc.fontSize(9.5).font(opts.bold ? "Helvetica-Bold" : "Helvetica").fillColor(MUTED)
-        .text(pdfSafe(label), totalsX, y, { width: labelW, align: "right" });
-      doc.font("Helvetica-Bold").fillColor(opts.color ?? INK)
-        .text(pdfSafe(value), totalsX + labelW + 10, y, { width: valueW, align: "right" });
-      y += 17;
+    const half = width / 2;
+    const party = (label: string, title: string, rows: string[], x: number) => {
+      doc.font("Helvetica").fontSize(8.5).fillColor(FAINT).text(label, x, y, { width: half - 16 });
+      doc.font("Helvetica-Bold").fontSize(10.5).fillColor(INK)
+        .text(pdfSafe(title), x, y + 14, { width: half - 16 });
+      rows.filter(Boolean).forEach((row) => {
+        doc.font("Helvetica").fontSize(9.5).fillColor(MUTED)
+          .text(pdfSafe(row), x, doc.y + 2, { width: half - 16, lineGap: 1 });
+      });
+      return doc.y;
     };
 
-    // Subtotal and discount only appear when a coupon actually moved the
-    // figure. On a receipt with no coupon they would be two rows of noise
-    // restating the total.
+    const fromBottom = party("From", s.name, [s.address, s.email], left);
+    const toBottom = party("Billed to", inv.buyer.name || inv.buyer.email, inv.buyer.name ? [inv.buyer.email] : [], left + half);
+    y = Math.max(fromBottom, toBottom) + 34;
+
+    doc.font("Helvetica").fontSize(8.5).fillColor(FAINT)
+      .text("Description", left, y)
+      .text("Amount", left, y, { width, align: "right" });
+    y += 16;
+    hairline(y, left, right, RULE);
+
+    const amountW = 130;
+    inv.lines.forEach((line) => {
+      const rowTop = y + 13;
+      doc.font("Helvetica").fontSize(10.5).fillColor(INK)
+        .text(pdfSafe(line.description), left, rowTop, { width: width - amountW - 16 });
+      const descBottom = doc.y;
+      doc.font("Helvetica").fontSize(10.5).fillColor(INK)
+        .text(pdfSafe(formatAmount(line.amount, inv.currency)), right - amountW, rowTop, { width: amountW, align: "right" });
+      y = Math.max(descBottom, doc.y) + 13;
+      hairline(y);
+    });
+
+    y += 16;
+
+    const totalsX = left + width * 0.5;
+    const totalsW = width * 0.5;
+    const totalRow = (label: string, value: string, strong = false) => {
+      const size = strong ? 11.5 : 10;
+      doc.font(strong ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(strong ? INK : MUTED)
+        .text(pdfSafe(label), totalsX, y, { width: totalsW * 0.6 });
+      doc.font(strong ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(INK)
+        .text(pdfSafe(value), totalsX, y, { width: totalsW, align: "right" });
+      y += strong ? 22 : 19;
+    };
+
     const subtotal = inv.lines.reduce((sum, line) => sum + line.amount, 0);
     const discount = subtotal - inv.amount;
 
+    totalRow("Subtotal", formatAmount(subtotal, inv.currency));
     if (inv.couponCode && discount > 0) {
-      totalRow("Subtotal", formatAmount(subtotal, inv.currency));
-      // A hyphen, not a minus sign (U+2212): the built-in PDF fonts have no
-      // glyph for the latter and substitute a quote mark, which on a discount
-      // line reads as nonsense.
-      totalRow(`Coupon ${inv.couponCode}`, `- ${formatAmount(discount, inv.currency)}`, {
-        color: ACCENT,
-      });
-      y += 2;
+      totalRow(`Discount (${inv.couponCode})`, `- ${formatAmount(discount, inv.currency)}`);
     }
+    totalRow("Total", formatAmount(inv.amount, inv.currency));
 
-    // The total sits in a filled panel — on a page of plain rows it is the one
-    // figure anyone scans for, and it should be findable without reading.
-    const panelH = 38;
-    doc.rect(totalsX, y - 4, 240, panelH).fill(WASH);
-    doc.rect(totalsX, y - 4, 3, panelH).fill(ACCENT);
+    y += 2;
+    hairline(y, totalsX, right, RULE);
+    y += 12;
+    totalRow("Amount paid", formatAmount(inv.amount, inv.currency), true);
 
-    doc.fontSize(9).font("Helvetica-Bold").fillColor(MUTED)
-      .text("TOTAL PAID", totalsX + 14, y + 8, { width: labelW - 14, align: "left", characterSpacing: 0.3 });
-    doc.fontSize(16).font("Helvetica-Bold").fillColor(ACCENT)
-      .text(formatAmount(inv.amount, inv.currency), totalsX + labelW, y + 4, {
-        width: valueW + 10,
-        align: "right",
-      });
+    y += 22;
 
-    y += panelH + 10;
+    doc.font("Helvetica").fontSize(9.5).fillColor(MUTED).text(
+      inv.gateway === "coupon"
+        ? `Covered in full by coupon ${inv.couponCode} on ${formatDate(inv.issuedAt)}. Nothing was charged and nothing is outstanding.`
+        : `Paid in full on ${formatDate(inv.issuedAt)} via ${gatewayLabel(inv.gateway)}. Nothing is outstanding.`,
+      left,
+      y,
+      { width },
+    );
+    y = doc.y + 18;
 
-    // A plain-language settlement line. The status is the reason the document
-    // exists — "paid" said once, in words, beats leaving the reader to infer it
-    // from the heading.
-    doc.fontSize(9).font("Helvetica").fillColor(MUTED)
-      .text(
-        inv.gateway === "coupon"
-          ? `Covered in full by coupon ${inv.couponCode} on ${formatDate(inv.issuedAt)}. No amount was charged and none is outstanding.`
-          : `Paid in full on ${formatDate(inv.issuedAt)} via ${inv.gateway === "cashfree" ? "Cashfree" : "Razorpay"}. No amount is outstanding.`,
-        left,
-        y,
-        { width },
-      );
+    const references: [string, string][] = [
+      ["Payment ID", inv.paymentId],
+      ["Order ID", inv.orderId],
+    ].filter(([, value]) => Boolean(value)) as [string, string][];
 
-    // The footer is where the no-GST position is stated outright. Silence would
-    // read as an omission; saying it plainly is what makes the document
-    // complete for its own kind.
-    const footY = doc.page.height - doc.page.margins.bottom - 58;
-    doc.moveTo(left, footY).lineTo(right, footY).strokeColor(LINE).lineWidth(1).stroke();
+    references.forEach(([label, value]) => {
+      doc.font("Helvetica").fontSize(8.5).fillColor(FAINT).text(label, left, y, { width: 80 });
+      doc.font("Courier").fontSize(8.5).fillColor(MUTED).text(value, left + 80, y, { width: width - 80 });
+      y = doc.y + 4;
+    });
 
-    doc.fontSize(7.5).font("Helvetica").fillColor(MUTED).text(
-      "This is a payment receipt, not a tax invoice. No GST has been charged or collected — " +
-        `${s.name} is not registered for GST. Paid online via Razorpay; no signature is required.`,
+    const footY = doc.page.height - doc.page.margins.bottom - 40;
+    hairline(footY);
+
+    doc.font("Helvetica").fontSize(8).fillColor(FAINT).text(
+      `This is a payment receipt, not a tax invoice. No GST has been charged or collected; ${pdfSafe(s.name)} is not registered for GST.`,
       left,
       footY + 12,
-      { width: width * 0.68, align: "left", lineGap: 1.5 },
+      { width: width * 0.68, lineGap: 1.5 },
     );
-
-    // The receipt number repeated at the foot, so a page separated from its
-    // email is still identifiable on its own.
-    doc.fontSize(7.5).font("Helvetica-Bold").fillColor(MUTED)
-      .text(inv.number, left + width * 0.7, footY + 12, { width: width * 0.3, align: "right" });
+    doc.font("Helvetica").fontSize(8).fillColor(FAINT)
+      .text(`${inv.number}  ·  Page 1 of 1`, left + width * 0.7, footY + 12, { width: width * 0.3, align: "right" });
 
     doc.end();
   });
