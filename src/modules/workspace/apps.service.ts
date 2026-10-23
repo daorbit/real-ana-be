@@ -1,4 +1,5 @@
 import { Workspace } from "./models/Workspace.js";
+import { paidAppUnlocked } from "../billing/paid-apps.catalog.js";
 
 export const WORKSPACE_APPS = [
   "compare",
@@ -40,7 +41,7 @@ export function isWorkspaceApp(value: unknown): value is WorkspaceApp {
 }
 
 export function appEnabled(workspace: AppsCarrier, app: WorkspaceApp): boolean {
-  return workspace.get(`apps.${app}.enabled`) === true;
+  return workspace.get(`apps.${app}.enabled`) === true && paidAppUnlocked(workspace, app);
 }
 
 export async function setAppEnabled(workspaceId: string, app: WorkspaceApp, enabled: boolean) {

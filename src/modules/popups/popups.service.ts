@@ -1,6 +1,7 @@
 import { Event } from "../analytics/models/Event.js";
 import { Site } from "../analytics/models/Site.js";
 import { Workspace } from "../workspace/models/Workspace.js";
+import { appEnabled } from "../workspace/apps.service.js";
 import { currentPlan } from "../billing/quota.service.js";
 import { getPlanCatalogEntry } from "../billing/plans.catalog.js";
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
@@ -90,14 +91,14 @@ export function publicPopups(siteId: string): Promise<PublicPopup[]> {
 
     const workspaceId = String(site.workspaceId);
     const [workspace, plan, popups] = await Promise.all([
-      Workspace.findById(workspaceId).select("apps.popups.enabled").lean<{ apps?: { popups?: { enabled?: boolean } } }>(),
+      Workspace.findById(workspaceId).select("apps.popups.enabled apps.popups.paidAt"),
       currentPlan(workspaceId),
       Popup.find({ siteId, enabled: true })
         .sort({ createdAt: 1 })
         .select("formId trigger layout showAgainDays pages devices")
         .lean(),
     ]);
-    if (!workspace?.apps?.popups?.enabled) return [];
+    if (!workspace || !appEnabled(workspace, "popups")) return [];
 
     const allowed = (plan ?? getPlanCatalogEntry("free")!).maxPopups;
     return popups.slice(0, allowed).map((p) => ({

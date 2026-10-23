@@ -4,7 +4,7 @@ import { AppPrice } from "./models/AppPrice.js";
 import { asPriceMap } from "./plan-pricing.js";
 import { convertMinor, FX_BASE, getCachedRates } from "./fx.js";
 import { CURRENCIES, type Currency } from "./currency.js";
-import { DEFAULT_APP_PRICE_INR, PAID_APP_NAMES, PAID_APPS, isPaidApp, type PaidApp } from "./paid-apps.catalog.js";
+import { DEFAULT_APP_PRICE_INR, PAID_APP_NAMES, PAID_APPS, paidAppUnlocked, type PaidApp } from "./paid-apps.catalog.js";
 
 export type ResolvedAppPrice = {
   appId: PaidApp;
@@ -38,8 +38,7 @@ export async function appPrice(appId: PaidApp, currency: Currency): Promise<numb
 }
 
 export function appUnlocked(workspace: AppsCarrier, app: string): boolean {
-  if (!isPaidApp(app)) return true;
-  return Boolean(workspace.get(`apps.${app}.paidAt`) || workspace.get(`apps.${app}.enabledAt`));
+  return paidAppUnlocked(workspace, app);
 }
 
 export async function unlockApp(workspaceId: string, app: PaidApp): Promise<void> {

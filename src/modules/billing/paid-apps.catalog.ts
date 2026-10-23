@@ -14,6 +14,16 @@ export const PAID_APP_NAMES: Record<PaidApp, string> = {
   popups: "Quantalog Popups",
 };
 
+export const PAYMENT_ONLY_APPS: readonly PaidApp[] = ["notes", "popups"];
+
+type AppsCarrier = { get: (path: string) => unknown };
+
 export function isPaidApp(value: unknown): value is PaidApp {
   return typeof value === "string" && (PAID_APPS as readonly string[]).includes(value);
+}
+
+export function paidAppUnlocked(workspace: AppsCarrier, app: string): boolean {
+  if (!isPaidApp(app)) return true;
+  if (workspace.get(`apps.${app}.paidAt`)) return true;
+  return !PAYMENT_ONLY_APPS.includes(app) && Boolean(workspace.get(`apps.${app}.enabledAt`));
 }
