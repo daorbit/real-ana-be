@@ -1,7 +1,7 @@
 import { Router, Response, type RequestHandler } from "express";
 import mongoose from "mongoose";
 import { AddonPack, type AddonType } from "../../modules/billing/models/AddonPack.js";
-import { Subscription, type BillingCycle } from "../../modules/billing/models/Subscription.js";
+import { Subscription, type BillingCycle, type RenewalStatus } from "../../modules/billing/models/Subscription.js";
 import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
@@ -18,6 +18,7 @@ import {
   openAutoRenewCheckout,
   renewalPeriodEnd,
   subscriptionMeta,
+  updateRenewalStatus,
   type RazorpaySubscriptionEntity,
 } from "../../modules/billing/auto-renew.js";
 import {
@@ -232,19 +233,28 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
   if (!listed) return res.status(404).json({ error: "plan not found" });
   const plan = await applyPriceLock(workspace.id, listed);
 
+  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
+  const renewal = await autoRenewState(workspace.id);
   const active = await paidPlan(workspace.id);
-  if (active && getPlanCatalogEntry(plan.slug)!.sortOrder < active.sortOrder) {
+  const downgrade = !!active && getPlanCatalogEntry(plan.slug)!.sortOrder < active.sortOrder;
+
+  if (downgrade && !(req.body?.autoRenew === true && planAmount > 0)) {
     return res.status(409).json({
-      error: `this workspace is on ${active.name} until its period ends — a lower plan cannot be bought before then`,
+      error: `this workspace is on ${active!.name} until its period ends — schedule the switch with auto-renew, or pick it after the period ends`,
       code: "downgrade_blocked",
     });
   }
 
-  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
-  const renewal = await autoRenewState(workspace.id);
-
   if (req.body?.autoRenew === true && planAmount > 0) {
-    return startAutoRenew(req, res, { workspaceId: workspace.id, plan, cycle, currency, planAmount, renewal });
+    return startAutoRenew(req, res, {
+      workspaceId: workspace.id,
+      plan,
+      cycle,
+      currency,
+      planAmount,
+      renewal,
+      scheduled: downgrade,
+    });
   }
 
   if (renewal.live && planAmount > 0) {
@@ -377,9 +387,14 @@ async function startAutoRenew(
     currency: Currency;
     planAmount: number;
     renewal: Awaited<ReturnType<typeof autoRenewState>>;
+    scheduled: boolean;
   },
 ) {
-  const { workspaceId, plan, cycle, currency, planAmount, renewal } = params;
+  const { workspaceId, plan, cycle, currency, planAmount, renewal, scheduled } = params;
+  const renewsInto = {
+    planSlug: renewal.sub?.get("renewalPlanSlug") ?? renewal.sub?.get("planSlug"),
+    cycle: renewal.sub?.get("renewalCycle") ?? renewal.sub?.get("cycle"),
+  };
 
   if (Array.isArray(req.body?.addons) && req.body.addons.length) {
     return res
@@ -390,7 +405,7 @@ async function startAutoRenew(
     return res.status(400).json({ error: "auto-renew is available with Razorpay only", code: "gateway_auto_renew" });
   }
   if (!razorpayConfigured()) return res.status(503).json({ error: "razorpay payments are not configured" });
-  if (renewal.live && renewal.sub?.get("planSlug") === plan.slug && renewal.sub?.get("cycle") === cycle) {
+  if (renewal.live && renewsInto.planSlug === plan.slug && renewsInto.cycle === cycle) {
     return res.status(409).json({ error: "this plan already renews automatically", code: "already_auto_renewing" });
   }
 
@@ -407,6 +422,7 @@ async function startAutoRenew(
       currency,
       amount: planAmount,
       coupon: discounted.coupon ? { code: discounted.coupon.code, amount: discounted.amount } : null,
+      scheduled,
     });
     if (!opened.ok) return res.status(400).json({ error: opened.error, code: opened.code });
     return res.json({
@@ -791,6 +807,51 @@ export async function creditSubscriptionPayment(entity: RazorpaySubscriptionEnti
   const row = await claimSubscriptionRow(entity, meta, payment);
   if (row) await creditPlanPurchase(String(row._id), payment.id, renewalPeriodEnd(entity, meta.cycle));
   await adoptSubscription(meta.workspaceId, entity, "active");
+}
+
+const RECONCILE_WINDOW_MS = 2 * 86_400_000;
+
+export async function reconcileRenewals(): Promise<{ checked: number; credited: number; errors: string[] }> {
+  const summary = { checked: 0, credited: 0, errors: [] as string[] };
+  if (!razorpayConfigured()) return summary;
+
+  const due = await Subscription.find({
+    autoRenew: true,
+    razorpaySubscriptionId: { $ne: null },
+    currentPeriodEnd: { $lte: new Date(Date.now() + RECONCILE_WINDOW_MS) },
+  })
+    .select("razorpaySubscriptionId")
+    .lean();
+
+  for (const sub of due) {
+    const subscriptionId = String(sub.razorpaySubscriptionId);
+    summary.checked += 1;
+    try {
+      const entity = (await razorpay().subscriptions.fetch(subscriptionId)) as unknown as RazorpaySubscriptionEntity;
+      const invoices = await razorpay().invoices.all({ subscription_id: subscriptionId });
+
+      for (const invoice of invoices.items) {
+        if (invoice.status !== "paid" || !invoice.payment_id) continue;
+        if (await PlanPurchase.exists({ chargeId: invoice.payment_id })) continue;
+        const amounts = invoice as { amount_paid?: number | null; amount?: number | string | null };
+        await creditSubscriptionPayment(entity, {
+          id: invoice.payment_id,
+          amount: Number(amounts.amount_paid ?? amounts.amount ?? 0),
+          currency: String(invoice.currency ?? "INR"),
+        });
+        summary.credited += 1;
+      }
+
+      const status = entity.status as RenewalStatus;
+      if (status === "halted" || status === "cancelled" || status === "completed") {
+        await updateRenewalStatus(entity, status);
+      }
+    } catch (e) {
+      summary.errors.push(`${subscriptionId}: ${(e as Error).message}`);
+    }
+  }
+
+  return summary;
 }
 
 export async function creditPlanPurchase(purchaseId: string, paymentId: string, periodEndsAt?: Date) {

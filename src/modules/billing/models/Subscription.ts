@@ -44,6 +44,8 @@ const subscriptionSchema = new Schema(
     autoRenew: { type: Boolean, default: false },
     renewalStatus: { type: String, default: null },
     nextChargeAt: { type: Date, default: null },
+    renewalPlanSlug: { type: String, default: null },
+    renewalCycle: { type: String, default: null },
 
     usageMonth: { type: String, default: null },
     auditsUsed: { type: Number, default: 0 },

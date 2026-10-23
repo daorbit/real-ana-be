@@ -113,6 +113,9 @@ router.post("/razorpay", async (req: Request, res: Response) => {
     res.json({ ok: true });
   } catch (e) {
     console.error("Webhook handling failed:", event.event, (e as Error).message);
+    if (String(event.event).startsWith("subscription.")) {
+      return res.status(500).json({ error: "subscription event not processed" });
+    }
     // Acknowledge anyway — Razorpay retries on non-2xx, and a bug in our
     // handling shouldn't turn into an indefinite retry storm from their side.
     res.json({ ok: true });

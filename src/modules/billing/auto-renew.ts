@@ -81,7 +81,7 @@ async function razorpayPlanId(
 
 export async function autoRenewState(workspaceId: string) {
   const sub = await Subscription.findOne({ workspaceId }).select(
-    "planSlug cycle currentPeriodEnd autoRenew renewalStatus razorpaySubscriptionId",
+    "planSlug cycle currentPeriodEnd autoRenew renewalStatus razorpaySubscriptionId renewalPlanSlug renewalCycle",
   );
   const live = Boolean(sub?.get("autoRenew")) && LIVE_STATUSES.includes(sub?.get("renewalStatus") as RenewalStatus);
   return { sub, live };
@@ -96,18 +96,17 @@ export async function openAutoRenewCheckout(params: {
   currency: Currency;
   amount: number;
   coupon: { code: string; amount: number } | null;
+  scheduled?: boolean;
 }): Promise<
   | { ok: true; subscriptionId: string; upfront: number; deferred: boolean; startsAt: Date }
   | { ok: false; error: string; code: string }
 > {
-  const { workspaceId, userId, planSlug, planName, cycle, currency, amount, coupon } = params;
+  const { workspaceId, userId, planSlug, planName, cycle, currency, amount, coupon, scheduled = false } = params;
   const { sub } = await autoRenewState(workspaceId);
   const periodEnd = sub?.get("currentPeriodEnd") as Date | null;
+  const sameTerm = sub?.get("planSlug") === planSlug && sub?.get("cycle") === cycle;
   const keepsCurrentPeriod =
-    sub?.get("planSlug") === planSlug &&
-    sub?.get("cycle") === cycle &&
-    !!periodEnd &&
-    periodEnd.getTime() - Date.now() > MIN_START_LEAD_MS;
+    (sameTerm || scheduled) && !!periodEnd && periodEnd.getTime() - Date.now() > MIN_START_LEAD_MS;
 
   if (keepsCurrentPeriod && coupon) {
     return {
@@ -164,6 +163,7 @@ export async function adoptSubscription(
   const previous = sub.get("razorpaySubscriptionId") as string | null;
   const status = toRenewalStatus(entity.status, fallback);
   const keepActive = previous === entity.id && sub.get("renewalStatus") === "active" && status === "authenticated";
+  const meta = subscriptionMeta(entity);
 
   await Subscription.updateOne(
     { workspaceId },
@@ -173,6 +173,8 @@ export async function adoptSubscription(
         autoRenew: true,
         renewalStatus: keepActive ? "active" : status,
         nextChargeAt: nextChargeDate(entity),
+        renewalPlanSlug: meta?.planSlug ?? null,
+        renewalCycle: meta?.cycle ?? null,
       },
     },
   );

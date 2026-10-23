@@ -5,6 +5,7 @@ import { runDueSchedules } from "../../modules/reports/report-runner.js";
 import { runDuePosts } from "../../modules/social/post-runner.js";
 import { runStatsRefresh } from "../../modules/social/stats-runner.js";
 import { sendExpiryReminders } from "../../modules/billing/expiry-reminder.js";
+import { reconcileRenewals } from "./billing.js";
 import { syncDue } from "../../modules/reviews/sync.service.js";
 import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
@@ -251,18 +252,32 @@ router.get("/plan-expiry", async (req: Request, res: Response) => {
     retention = { error: message };
   }
 
+  let renewals: Awaited<ReturnType<typeof reconcileRenewals>> | { error: string };
+  try {
+    renewals = await reconcileRenewals();
+    if (renewals.errors.length) {
+      console.error("[cron] renewal reconcile errors:", renewals.errors.join(" | "));
+      await alertCronFailure("renewal-reconcile", renewals.errors.join(" | "));
+    }
+  } catch (e) {
+    const message = (e as Error).message;
+    console.error("[cron] renewal reconcile failed:", message);
+    await alertCronFailure("renewal-reconcile", message);
+    renewals = { error: message };
+  }
+
   try {
     const summary = await sendExpiryReminders();
     if (summary.sent > 0) {
       console.log(`[cron] plan expiry: ${summary.checked} checked, ${summary.sent} sent, ${summary.failed} failed`);
     }
     if (summary.errors.length) console.error("[cron] plan expiry errors:", summary.errors.join(" | "));
-    res.json({ ok: true, ...summary, retention });
+    res.json({ ok: true, ...summary, retention, renewals });
   } catch (e) {
     const message = (e as Error).message;
     console.error("[cron] plan expiry run failed:", message);
     await alertCronFailure("plan-expiry", message);
-    res.status(500).json({ ok: false, error: message, retention });
+    res.status(500).json({ ok: false, error: message, retention, renewals });
   }
 });
 
