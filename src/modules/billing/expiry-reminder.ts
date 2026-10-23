@@ -22,6 +22,7 @@ export async function sendExpiryReminders(): Promise<ExpirySummary> {
   const horizon = new Date(now + Math.max(...REMIND_DAYS) * 24 * 60 * 60 * 1000);
   const subs = await Subscription.find({
     planSlug: { $ne: "free" },
+    autoRenew: { $ne: true },
     currentPeriodEnd: { $gt: new Date(now), $lte: horizon },
   });
 

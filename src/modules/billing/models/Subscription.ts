@@ -4,12 +4,6 @@ import mongoose, { Schema } from "mongoose";
  * One workspace's billing state: which plan it's on, when the current paid
  * period ends, and how much of this cycle's audit/crawl quota is left.
  *
- * No Razorpay subscription id — plans are bought via a one-time Order per
- * billing cycle, not an auto-recurring Razorpay Subscription. Renewal is the
- * user buying again; nothing here auto-charges. `status` therefore only
- * tracks whether the account currently has access, not a payment-provider
- * lifecycle — see `lib/quota.ts` for how `currentPeriodEnd` decides that.
- *
  * One per workspace, not per account: a workspace is the unit that is sold, so
  * an account running three workspaces pays three times and each carries its own
  * plan, period, and quota. `userId` is kept alongside for ownership queries
@@ -20,6 +14,9 @@ export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 
 export const BILLING_CYCLES = ["monthly", "yearly"] as const;
 export type BillingCycle = (typeof BILLING_CYCLES)[number];
+
+export const RENEWAL_STATUSES = ["authenticated", "active", "pending", "halted", "cancelled", "completed"] as const;
+export type RenewalStatus = (typeof RENEWAL_STATUSES)[number];
 
 const subscriptionSchema = new Schema(
   {
@@ -34,14 +31,6 @@ const subscriptionSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     /** Joins to the fixed catalogue in `src/plans.ts`, not a `Plan` document id. */
     planSlug: { type: String, required: true },
-    /**
-     * Joins to the Orbit catalogue in `src/orbit-plans.ts`.
-     *
-     * A second, independent axis: a workspace's analytics tier and its AI tier
-     * are separate purchases, because they serve different appetites — a small
-     * site can be a heavy Orbit user, and vice versa. Rows written before Orbit
-     * plans existed have no value here, which `resolveOrbitPlan` reads as Free.
-     */
     orbitPlanSlug: { type: String, default: null },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 
@@ -50,6 +39,11 @@ const subscriptionSchema = new Schema(
     currentPeriodStart: { type: Date, default: null },
     /** Free has no real expiry (see the seed script); paid plans expire one cycle after purchase. */
     currentPeriodEnd: { type: Date, default: null },
+
+    razorpaySubscriptionId: { type: String, default: null, index: true },
+    autoRenew: { type: Boolean, default: false },
+    renewalStatus: { type: String, default: null },
+    nextChargeAt: { type: Date, default: null },
 
     usageMonth: { type: String, default: null },
     auditsUsed: { type: Number, default: 0 },
@@ -95,14 +89,6 @@ const subscriptionSchema = new Schema(
      */
     orbitUsed: { type: Number, default: 0 },
 
-    /**
-     * When the Orbit period ends, tracked separately from the analytics one.
-     *
-     * The two tiers are bought independently, so they expire independently: a
-     * lapsed analytics plan must not take a paid Orbit tier down with it. Null
-     * means the workspace has never bought a paid Orbit tier and is on Free,
-     * which does not expire.
-     */
     orbitPeriodEnd: { type: Date, default: null },
 
     /**

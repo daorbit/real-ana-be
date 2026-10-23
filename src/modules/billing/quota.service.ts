@@ -17,11 +17,6 @@ import { getResolvedPlan } from "./plan-pricing.js";
 import { nextUsageReset, rollUsageMonth, usageMonthKey } from "./usage-month.js";
 import type { PlanLimitCode, PlanLimitInfo } from "../../http/plan-limit.js";
 import { COUNTED_FEATURES, featureUsage, type CountedFeature } from "./feature-limits.js";
-import {
-  DEFAULT_ORBIT_PLAN_SLUG,
-  resolveOrbitPlan,
-  type OrbitPlanEntry,
-} from "../orbit/orbit-plans.catalog.js";
 
 export type QuotaKind = "audit" | "crawl" | "orbit" | "inspection";
 
@@ -102,12 +97,13 @@ export async function activatePlanPeriod(
   userId: string,
   planSlug: string,
   cycle: BillingCycle,
+  endsAt?: Date,
 ): Promise<Date> {
   const now = new Date();
   await rollUsageMonth(workspaceId);
   const existing = await Subscription.findOne({ workspaceId });
-  const carried = await carriedOverMs(existing, planSlug);
-  const periodEnd = new Date(now.getTime() + carried + CYCLE_DAYS[cycle] * DAY_MS);
+  const carried = endsAt ? 0 : await carriedOverMs(existing, planSlug);
+  const periodEnd = endsAt ?? new Date(now.getTime() + carried + CYCLE_DAYS[cycle] * DAY_MS);
 
   await Subscription.findOneAndUpdate(
     { workspaceId },
@@ -174,28 +170,6 @@ export async function paidPlan(workspaceId: string) {
   return getPlanCatalogEntry(sub.planSlug as string) ?? null;
 }
 
-/**
- * Start an Orbit plan period. The question count belongs to the usage month and carries on.
- *
- * Separate from `activatePlanPeriod` because the two ladders are bought
- * independently — buying Orbit Pro must not restart the analytics period or
- * refund its audit quota.
- */
-export async function activateOrbitPeriod(
-  workspaceId: string,
-  userId: string,
-  orbitPlanSlug: string,
-  cycle: BillingCycle,
-) {
-  const now = new Date();
-  await rollUsageMonth(workspaceId);
-  const periodEnd = new Date(now.getTime() + CYCLE_DAYS[cycle] * 24 * 60 * 60 * 1000);
-  await Subscription.findOneAndUpdate(
-    { workspaceId },
-    { $set: { userId, orbitPlanSlug, orbitPeriodEnd: periodEnd } },
-    { upsert: true },
-  );
-}
 
 export type QuotaCheck =
   | { ok: true }
@@ -618,7 +592,7 @@ export async function quotaSummary(workspaceId: string) {
       planQuota: orbitPlan.monthlyQuota,
       used: (sub.orbitUsed as number) ?? 0,
       addonCredits: (sub.addonOrbitCredits as number) ?? 0,
-      periodEnd: sub.orbitPeriodEnd ?? null,
+      periodEnd: sub.currentPeriodEnd ?? null,
       dataAccess: orbitPlan.dataAccess,
     },
     workspaceId: String(sub.workspaceId),
@@ -635,6 +609,11 @@ export async function quotaSummary(workspaceId: string) {
     cycle: sub.cycle,
     status: expired ? ("expired" as const) : sub.status,
     currentPeriodEnd: sub.currentPeriodEnd,
+    renewal: {
+      autoRenew: Boolean(sub.get("autoRenew")),
+      status: (sub.get("renewalStatus") as string | null) ?? null,
+      nextChargeAt: (sub.get("nextChargeAt") as Date | null) ?? null,
+    },
     usageMonth: (sub.get("usageMonth") as string | null) ?? usageMonthKey(),
     usageResetsAt: nextUsageReset().toISOString(),
     audits: {

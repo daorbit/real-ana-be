@@ -47,17 +47,6 @@ const planPurchaseSchema = new Schema(
      */
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", default: null, index: true },
     planSlug: { type: String, required: true },
-    /**
-     * Which catalogue `planSlug` joins to: the analytics tiers in `plans.ts`, or
-     * the Orbit AI tiers in `orbit-plans.ts`.
-     *
-     * The two ladders are bought independently and activate different fields on
-     * the subscription, but they are the same kind of transaction — one order,
-     * one receipt, one idempotent credit — so they share this model rather than
-     * duplicating the whole purchase-and-receipt path. Rows written before Orbit
-     * existed have no value here and default to `analytics`, which is what they
-     * were.
-     */
     ladder: { type: String, enum: ["analytics", "orbit"], default: "analytics", index: true },
     cycle: { type: String, enum: BILLING_CYCLES, required: true },
 
@@ -83,6 +72,9 @@ const planPurchaseSchema = new Schema(
      */
     razorpayOrderId: { type: String, unique: true, sparse: true },
     cashfreeOrderId: { type: String, unique: true, sparse: true },
+    razorpaySubscriptionId: { type: String, default: null, index: true },
+    chargeId: { type: String, unique: true, sparse: true },
+    startsAt: { type: Date, default: null },
     /** The successful payment's id at whichever gateway. Keeps the Razorpay-era name; the invoice reads it as "paymentId". */
     razorpayPaymentId: { type: String, default: "" },
     /** Final charged amount, after any coupon discount. */

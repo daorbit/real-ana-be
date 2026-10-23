@@ -22,6 +22,7 @@ import { ApiKeyUsage } from "../identity/models/ApiKeyUsage.js";
 import { purgeGrantsFor } from "../mcp-oauth/grant.service.js";
 import { Subscription } from "../billing/models/Subscription.js";
 import { UsageMonth } from "../billing/models/UsageMonth.js";
+import { cancelWorkspaceRenewals } from "../billing/auto-renew.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { SocialPostRun } from "../social/models/SocialPostRun.js";
@@ -69,6 +70,7 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
   if (!workspaceIds.length) return;
   const byWorkspace = { workspaceId: { $in: workspaceIds } };
 
+  await cancelWorkspaceRenewals(workspaceIds);
   await Promise.all(workspaceIds.map((id) => purgeFormsWorkspace(id)));
 
   const sites = await Site.find(byWorkspace).select("siteId").lean();

@@ -5,7 +5,21 @@ import { Subscription, type BillingCycle } from "../../modules/billing/models/Su
 import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
-import { razorpay, razorpayConfigured, verifyOrderPayment } from "../../infra/payments/razorpay.js";
+import {
+  razorpay,
+  razorpayConfigured,
+  verifyOrderPayment,
+  verifySubscriptionPayment,
+} from "../../infra/payments/razorpay.js";
+import {
+  adoptSubscription,
+  autoRenewState,
+  cancelAutoRenew,
+  openAutoRenewCheckout,
+  renewalPeriodEnd,
+  subscriptionMeta,
+  type RazorpaySubscriptionEntity,
+} from "../../modules/billing/auto-renew.js";
 import {
   cashfreeConfigured,
   createCashfreeOrder,
@@ -14,7 +28,6 @@ import {
 } from "../../infra/payments/cashfree.js";
 import crypto from "crypto";
 import {
-  activateOrbitPeriod,
   activatePlanPeriod,
   paidPlan,
   previewPeriodEnd,
@@ -23,18 +36,12 @@ import {
 } from "../../modules/billing/quota.service.js";
 import { resolveAccess, isDenied } from "../../modules/workspace/access.service.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
-import {
-  listResolvedPlans,
-  getResolvedPlan,
-  listResolvedOrbitPlans,
-  getResolvedOrbitPlan,
-} from "../../modules/billing/plan-pricing.js";
-import { DEFAULT_ORBIT_PLAN_SLUG } from "../../modules/orbit/orbit-plans.catalog.js";
+import { listResolvedPlans, getResolvedPlan, type ResolvedPlan } from "../../modules/billing/plan-pricing.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { applyCoupon, claimCoupon, planPurchaseLabel, redeemCoupon } from "../../modules/billing/coupons.js";
 import { qualifyReferralOnPayment } from "../../modules/referrals/referral.service.js";
 import { applyPriceLock } from "../../modules/billing/price-lock.js";
-import { resolveCurrency } from "../../modules/billing/currency.js";
+import { resolveCurrency, type Currency } from "../../modules/billing/currency.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
   buildInvoice,
@@ -233,7 +240,20 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     });
   }
 
- 
+  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
+  const renewal = await autoRenewState(workspace.id);
+
+  if (req.body?.autoRenew === true && planAmount > 0) {
+    return startAutoRenew(req, res, { workspaceId: workspace.id, plan, cycle, currency, planAmount, renewal });
+  }
+
+  if (renewal.live && planAmount > 0) {
+    return res.status(409).json({
+      error: "auto-renew is on for this workspace — turn it off before paying once",
+      code: "auto_renew_on",
+    });
+  }
+
   if (await renewalWouldExceedCap(workspace.id, plan.slug, cycle)) {
     return res.status(409).json({
       error: `this plan is already paid up ${MAX_PREPAID_CYCLES} cycles ahead — renew again closer to the renewal date`,
@@ -241,8 +261,7 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
     });
   }
 
-  const planAmount = (cycle === "yearly" ? plan.priceYearly : plan.priceMonthly)[currency];
- 
+
   const resolvedAddons = await resolveAddonSelection(req.body?.addons, currency);
   if ("error" in resolvedAddons) return res.status(400).json({ error: resolvedAddons.error });
 
@@ -346,6 +365,76 @@ router.post("/subscribe", async (req: AuthedRequest, res: Response) => {
       credits: a.quantity * a.packs,
     })),
   });
+});
+
+async function startAutoRenew(
+  req: AuthedRequest,
+  res: Response,
+  params: {
+    workspaceId: string;
+    plan: ResolvedPlan;
+    cycle: BillingCycle;
+    currency: Currency;
+    planAmount: number;
+    renewal: Awaited<ReturnType<typeof autoRenewState>>;
+  },
+) {
+  const { workspaceId, plan, cycle, currency, planAmount, renewal } = params;
+
+  if (Array.isArray(req.body?.addons) && req.body.addons.length) {
+    return res
+      .status(400)
+      .json({ error: "add-on packs are bought separately when auto-renew is on", code: "addons_auto_renew" });
+  }
+  if (resolveGateway(req.body?.gateway) !== "razorpay") {
+    return res.status(400).json({ error: "auto-renew is available with Razorpay only", code: "gateway_auto_renew" });
+  }
+  if (!razorpayConfigured()) return res.status(503).json({ error: "razorpay payments are not configured" });
+  if (renewal.live && renewal.sub?.get("planSlug") === plan.slug && renewal.sub?.get("cycle") === cycle) {
+    return res.status(409).json({ error: "this plan already renews automatically", code: "already_auto_renewing" });
+  }
+
+  const discounted = await applyCoupon(planAmount, req.body?.couponCode, req.userId);
+  if (discounted.error) return res.status(400).json({ error: discounted.error });
+
+  try {
+    const opened = await openAutoRenewCheckout({
+      workspaceId,
+      userId: String(req.userId),
+      planSlug: plan.slug,
+      planName: plan.name,
+      cycle,
+      currency,
+      amount: planAmount,
+      coupon: discounted.coupon ? { code: discounted.coupon.code, amount: discounted.amount } : null,
+    });
+    if (!opened.ok) return res.status(400).json({ error: opened.error, code: opened.code });
+    return res.json({
+      gateway: "razorpay",
+      autoRenew: true,
+      subscriptionId: opened.subscriptionId,
+      razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+      upfront: opened.upfront,
+      deferred: opened.deferred,
+      currency,
+      startsAt: opened.startsAt.toISOString(),
+      plan: { name: plan.name, cycle },
+    });
+  } catch (e) {
+    console.error("razorpay subscription failed:", (e as Error).message);
+    return res.status(502).json({ error: (e as Error).message || "could not start auto-renew with razorpay" });
+  }
+}
+
+router.post("/auto-renew/cancel", async (req: AuthedRequest, res: Response) => {
+  const workspaceId = String(req.body?.workspaceId ?? "").trim();
+  if (!mongoose.isValidObjectId(workspaceId)) return res.status(404).json({ error: "workspace not found" });
+  const access = await resolveAccess(req, "admin", workspaceId);
+  if (isDenied(access)) return res.status(404).json({ error: access.error });
+
+  const result = await cancelAutoRenew(access.workspace.id);
+  if (!result.ok) return res.status(409).json({ error: result.error });
+  res.json({ ok: true });
 });
 
  
@@ -468,6 +557,8 @@ const confirmPurchase: RequestHandler = async (req, res) => {
     return res.json({ ok: true, kind: purchase.kind });
   }
 
+  if (b.razorpay_subscription_id) return confirmSubscription(req as AuthedRequest, res);
+
   const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = b;
   if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature)
     return res.status(400).json({ error: "missing verification fields" });
@@ -485,6 +576,44 @@ const confirmPurchase: RequestHandler = async (req, res) => {
   await creditFor(purchase.kind)(purchase.id, String(razorpay_payment_id));
   res.json({ ok: true, kind: purchase.kind });
 };
+
+async function confirmSubscription(req: AuthedRequest, res: Response) {
+  const b = req.body ?? {};
+  const subscriptionId = String(b.razorpay_subscription_id ?? "");
+  const paymentId = String(b.razorpay_payment_id ?? "");
+  const signature = String(b.razorpay_signature ?? "");
+  if (!paymentId || !signature) return res.status(400).json({ error: "missing verification fields" });
+  if (!verifySubscriptionPayment({ subscriptionId, paymentId, signature })) {
+    return res.status(400).json({ error: "signature mismatch" });
+  }
+
+  let entity: RazorpaySubscriptionEntity;
+  try {
+    entity = (await razorpay().subscriptions.fetch(subscriptionId)) as unknown as RazorpaySubscriptionEntity;
+  } catch (e) {
+    return res.status(502).json({ error: (e as Error).message || "could not read the subscription" });
+  }
+
+  const meta = subscriptionMeta(entity);
+  if (!meta) return res.status(404).json({ error: "subscription not found" });
+  const workspace = await resolveAccessibleWorkspace(req, meta.workspaceId);
+  if ("error" in workspace) return res.status(404).json({ error: workspace.error });
+
+  const pending = await PlanPurchase.findOne({ razorpaySubscriptionId: subscriptionId, status: "created" })
+    .select("amount currency")
+    .lean();
+  if (pending) {
+    await creditSubscriptionPayment(entity, {
+      id: paymentId,
+      amount: Number(pending.amount),
+      currency: String(pending.currency),
+    });
+  } else {
+    await adoptSubscription(meta.workspaceId, entity, "authenticated");
+  }
+
+  res.json({ ok: true, kind: "plan", autoRenew: true });
+}
 
 router.post("/confirm", confirmPurchase);
 
@@ -616,8 +745,55 @@ export async function creditAddonPurchase(purchaseId: string, paymentId: string)
   await issueReceipt("addon", purchase.id, String(purchase.userId));
 }
 
- 
-export async function creditPlanPurchase(purchaseId: string, paymentId: string) {
+type SubscriptionPayment = { id: string; amount: number; currency: string };
+
+function isDuplicateKey(e: unknown): boolean {
+  return (e as { code?: number } | null)?.code === 11000;
+}
+
+async function claimSubscriptionRow(
+  entity: RazorpaySubscriptionEntity,
+  meta: NonNullable<ReturnType<typeof subscriptionMeta>>,
+  payment: SubscriptionPayment,
+) {
+  try {
+    const pending = await PlanPurchase.findOneAndUpdate(
+      { razorpaySubscriptionId: entity.id, status: "created", chargeId: { $exists: false } },
+      { $set: { chargeId: payment.id } },
+      { new: true },
+    );
+    if (pending) return pending;
+
+    return await PlanPurchase.create({
+      userId: meta.userId,
+      workspaceId: meta.workspaceId,
+      planSlug: meta.planSlug,
+      cycle: meta.cycle,
+      addons: [],
+      planAmount: payment.amount,
+      gateway: "razorpay",
+      razorpaySubscriptionId: entity.id,
+      chargeId: payment.id,
+      amount: payment.amount,
+      currency: resolveCurrency(payment.currency),
+      status: "created",
+    });
+  } catch (e) {
+    if (isDuplicateKey(e)) return null;
+    throw e;
+  }
+}
+
+export async function creditSubscriptionPayment(entity: RazorpaySubscriptionEntity, payment: SubscriptionPayment) {
+  const meta = subscriptionMeta(entity);
+  if (!meta) return;
+
+  const row = await claimSubscriptionRow(entity, meta, payment);
+  if (row) await creditPlanPurchase(String(row._id), payment.id, renewalPeriodEnd(entity, meta.cycle));
+  await adoptSubscription(meta.workspaceId, entity, "active");
+}
+
+export async function creditPlanPurchase(purchaseId: string, paymentId: string, periodEndsAt?: Date) {
   const purchase = await PlanPurchase.findOneAndUpdate(
     { _id: purchaseId, status: { $ne: "paid" } },
     { $set: { status: "paid", razorpayPaymentId: paymentId } },
@@ -625,26 +801,17 @@ export async function creditPlanPurchase(purchaseId: string, paymentId: string) 
   if (!purchase) return;
 
   const workspaceId = await purchaseWorkspaceId(purchase.workspaceId, purchase.userId);
- 
+
   if (!workspaceId) return;
 
- 
-  if (purchase.ladder === "orbit") {
-    await activateOrbitPeriod(
-      workspaceId,
-      String(purchase.userId),
-      purchase.planSlug as string,
-      purchase.cycle as BillingCycle,
-    );
-  } else {
-    const periodEnd = await activatePlanPeriod(
-      workspaceId,
-      String(purchase.userId),
-      purchase.planSlug as string,
-      purchase.cycle as BillingCycle
-    );
-    await PlanPurchase.updateOne({ _id: purchase._id }, { $set: { periodEnd } });
-  }
+  const periodEnd = await activatePlanPeriod(
+    workspaceId,
+    String(purchase.userId),
+    purchase.planSlug as string,
+    purchase.cycle as BillingCycle,
+    periodEndsAt,
+  );
+  await PlanPurchase.updateOne({ _id: purchase._id }, { $set: { periodEnd } });
  
   const addons = (purchase.addons ?? []) as unknown as {
     type: string;

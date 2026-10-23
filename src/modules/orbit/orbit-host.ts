@@ -28,10 +28,6 @@ import { workspaceDataDigest, workspaceDataSummary } from "./orbit-data.js";
  * the Pro assistant, without a second purchase. Without this, a customer on the
  * top analytics plan would hit an AI wall at twenty questions and read it as
  * stinginess rather than as "there is a second product".
- *
- * Buying an Orbit tier outright is still meaningful — it is how a workspace on
- * analytics Free reaches the better models, and how anyone exceeds what their
- * analytics plan grants. The two are compared and the stronger wins.
  */
 const ORBIT_TIER_BY_PLAN: Record<string, string> = {
   free: "orbit-free",
@@ -44,16 +40,6 @@ function lapsed(end?: Date | null): boolean {
   return !end || end.getTime() < Date.now();
 }
 
-/**
- * The Orbit plan a workspace is effectively on: the better of what its
- * analytics plan grants and what it has bought outright.
- *
- * Each side is checked against its own expiry, because the two are bought
- * separately and must lapse separately — an analytics plan running out should
- * not take a separately-paid Orbit tier down with it, or the other way round.
- * Both lapsing lands on Orbit Free, which costs us nothing to serve and keeps
- * the assistant answering rather than going dark on someone mid-conversation.
- */
 export async function effectiveOrbitPlan(workspaceId: string): Promise<OrbitPlanEntry> {
   const sub = await Subscription.findOne({ workspaceId });
   if (!sub) return resolveOrbitPlan(DEFAULT_ORBIT_PLAN_SLUG);
@@ -66,7 +52,6 @@ export async function effectiveOrbitPlan(workspaceId: string): Promise<OrbitPlan
     ? resolveOrbitPlan(ORBIT_TIER_BY_PLAN[analyticsPlan.slug])
     : null;
 
-  // Bought outright, while its own separate period is live.
   const purchasedSlug = sub.orbitPlanSlug as string | null;
   const purchased =
     purchasedSlug && purchasedSlug !== DEFAULT_ORBIT_PLAN_SLUG && !lapsed(sub.orbitPeriodEnd as Date | null)

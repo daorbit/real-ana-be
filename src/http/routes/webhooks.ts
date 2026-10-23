@@ -3,7 +3,75 @@ import { AddonPurchase } from "../../modules/billing/models/AddonPurchase.js";
 import { PlanPurchase } from "../../modules/billing/models/PlanPurchase.js";
 import { verifyWebhookSignature } from "../../infra/payments/razorpay.js";
 import { verifyCashfreeWebhook } from "../../infra/payments/cashfree.js";
-import { creditAddonPurchase, creditPlanPurchase } from "./billing.js";
+import { creditAddonPurchase, creditPlanPurchase, creditSubscriptionPayment } from "./billing.js";
+import {
+  adoptSubscription,
+  paidUpfrontPayment,
+  subscriptionMeta,
+  updateRenewalStatus,
+  type RazorpaySubscriptionEntity,
+} from "../../modules/billing/auto-renew.js";
+import { Subscription, type RenewalStatus } from "../../modules/billing/models/Subscription.js";
+import { emit } from "../../modules/notifications/notify.service.js";
+
+const SUBSCRIPTION_STATUS_EVENTS: Record<string, RenewalStatus> = {
+  "subscription.activated": "active",
+  "subscription.pending": "pending",
+  "subscription.halted": "halted",
+  "subscription.cancelled": "cancelled",
+  "subscription.completed": "completed",
+};
+
+const RENEWAL_FAILURE_REASON: Partial<Record<RenewalStatus, string>> = {
+  pending: "the automatic renewal was declined, and Razorpay will retry it",
+  halted: "auto-renew stopped after repeated failed charges",
+};
+
+async function notifyRenewalFailed(entity: RazorpaySubscriptionEntity, status: RenewalStatus) {
+  const reason = RENEWAL_FAILURE_REASON[status];
+  if (!reason) return;
+  const sub = await Subscription.findOne({ razorpaySubscriptionId: entity.id }).select("workspaceId").lean();
+  if (!sub?.workspaceId) return;
+  await emit({
+    type: "payment.failed",
+    workspaceId: String(sub.workspaceId),
+    data: { reason },
+    link: "/app/billing",
+  });
+}
+
+async function handleSubscriptionEvent(event: {
+  event: string;
+  payload?: { subscription?: { entity?: RazorpaySubscriptionEntity }; payment?: { entity?: { id?: string; amount?: number; currency?: string } } };
+}) {
+  const entity = event.payload?.subscription?.entity;
+  if (!entity?.id) return;
+  const payment = event.payload?.payment?.entity;
+
+  if (event.event === "subscription.charged") {
+    if (!payment?.id) return;
+    await creditSubscriptionPayment(entity, {
+      id: payment.id,
+      amount: Number(payment.amount ?? 0),
+      currency: String(payment.currency ?? "INR"),
+    });
+    return;
+  }
+
+  if (event.event === "subscription.authenticated") {
+    const meta = subscriptionMeta(entity);
+    if (!meta) return;
+    const upfront = await paidUpfrontPayment(entity.id).catch(() => null);
+    if (upfront) await creditSubscriptionPayment(entity, upfront);
+    else await adoptSubscription(meta.workspaceId, entity, "authenticated");
+    return;
+  }
+
+  const status = SUBSCRIPTION_STATUS_EVENTS[event.event];
+  if (!status) return;
+  await updateRenewalStatus(entity, status);
+  await notifyRenewalFailed(entity, status);
+}
 
 /**
  * Inbound webhooks from third parties. Unauthenticated by design — the
@@ -18,10 +86,6 @@ const router = Router();
  * global JSON parser) because signature verification needs the exact bytes
  * Razorpay signed — a body that has been parsed and re-serialised is not
  * guaranteed to match byte-for-byte.
- *
- * Only `order.paid` matters here — plans and addon packs are both bought as
- * one-time Orders, not Razorpay Subscriptions, so there's no recurring-billing
- * lifecycle to track.
  */
 router.post("/razorpay", async (req: Request, res: Response) => {
   const signature = req.headers["x-razorpay-signature"];
@@ -43,6 +107,8 @@ router.post("/razorpay", async (req: Request, res: Response) => {
 
       const planPurchase = await PlanPurchase.findOne({ razorpayOrderId: payload.id });
       if (planPurchase) await creditPlanPurchase(planPurchase.id, payment?.id ?? "");
+    } else if (String(event.event).startsWith("subscription.")) {
+      await handleSubscriptionEvent(event);
     }
     res.json({ ok: true });
   } catch (e) {

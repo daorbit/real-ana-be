@@ -23,6 +23,7 @@ const planSchema = new Schema(
     /** Amount in the smallest unit of each currency (paise/cents), matching Razorpay's own unit. */
     priceMonthly: { type: new Schema(priceFields, { _id: false }), default: () => ({}) },
     priceYearly: { type: new Schema(priceFields, { _id: false }), default: () => ({}) },
+    razorpayPlanIds: { type: Map, of: String, default: () => new Map() },
   },
   { timestamps: true }
 );

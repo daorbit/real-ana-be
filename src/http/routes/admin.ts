@@ -11,13 +11,7 @@ import { Plan } from "../../modules/billing/models/Plan.js";
 import { Subscription } from "../../modules/billing/models/Subscription.js";
 import { AddonPack, ADDON_TYPES, type AddonType } from "../../modules/billing/models/AddonPack.js";
 import { Coupon } from "../../modules/billing/models/Coupon.js";
-import {
-  listResolvedPlans,
-  getResolvedPlan,
-  listResolvedOrbitPlans,
-  getResolvedOrbitPlan,
-} from "../../modules/billing/plan-pricing.js";
-import { getOrbitPlanEntry } from "../../modules/orbit/orbit-plans.catalog.js";
+import { listResolvedPlans, getResolvedPlan } from "../../modules/billing/plan-pricing.js";
 import { accountBillingSummary } from "../../modules/billing/quota.service.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { CURRENCIES } from "../../modules/billing/currency.js";
@@ -769,24 +763,6 @@ router.get("/billing/plans", async (_req: AuthedRequest, res: Response) => {
   res.json(await listResolvedPlans());
 });
 
-
-router.get("/billing/orbit-plans", async (_req: AuthedRequest, res: Response) => {
-  res.json(await listResolvedOrbitPlans());
-});
-
-router.put("/billing/orbit-plans/:slug", async (req: AuthedRequest, res: Response) => {
-  const slug = String(req.params.slug);
-  if (!getOrbitPlanEntry(slug)) return res.status(404).json({ error: "unknown Orbit plan" });
-
-  const priceMonthly = readCurrencyPrices(req.body?.priceMonthly);
-  const priceYearly = readCurrencyPrices(req.body?.priceYearly);
-  if (!priceMonthly || !priceYearly) {
-    return res.status(400).json({ error: "priceMonthly and priceYearly must have non-negative numbers for every currency" });
-  }
-
-  await Plan.updateOne({ slug }, { $set: { priceMonthly, priceYearly } }, { upsert: true });
-  res.json(await getResolvedOrbitPlan(slug));
-});
 
 /** Set a plan's per-currency prices. Upserts the price row — a catalogue plan with no row yet defaults to 0 in every currency. */
 router.put("/billing/plans/:slug", async (req: AuthedRequest, res: Response) => {

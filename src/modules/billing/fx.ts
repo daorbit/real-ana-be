@@ -2,7 +2,7 @@ import axios from "axios";
 import { AppSetting } from "../../config/AppSetting.js";
 import { Plan } from "./models/Plan.js";
 import { AddonPack } from "./models/AddonPack.js";
-import { listResolvedPlans, listResolvedOrbitPlans, asPriceMap } from "./plan-pricing.js";
+import { listResolvedPlans, asPriceMap } from "./plan-pricing.js";
 import { CURRENCIES, type Currency } from "./currency.js";
 
 
@@ -108,7 +108,7 @@ export async function repriceAllPlans(): Promise<RepriceResult> {
   const priced = (p: { priceMonthly: Record<string, number>; priceYearly: Record<string, number> }) =>
     (p.priceMonthly[FX_BASE] ?? 0) > 0 || (p.priceYearly[FX_BASE] ?? 0) > 0;
 
-  const plans = [...(await listResolvedPlans()), ...(await listResolvedOrbitPlans())].filter(priced);
+  const plans = (await listResolvedPlans()).filter(priced);
   const repriced: RepricedPlan[] = [];
 
   for (const plan of plans) {
