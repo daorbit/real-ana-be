@@ -33,9 +33,9 @@ import { generateKey, expiryFromDays } from "../middleware/api-key.js";
 import { parseUsageWindow, workspaceKeyUsage } from "../../modules/identity/api-key-usage.service.js";
 import { decryptApiKey, loadRevealTarget } from "../../modules/identity/api-key-reveal.service.js";
 import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
-import { canUseRange, canUseCompare, currentPlan, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
+import { canUseRange, canUseCompare, assignFreePlan, quotaSummary } from "../../modules/billing/quota.service.js";
 import { usageHistory } from "../../modules/billing/usage-history.js";
-import { Membership } from "../../modules/workspace/models/Membership.js";
+import { Membership, type WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { resolveAccess, isDenied, accessibleWorkspaces, requireWorkspace } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { EMPTY_WORKSPACE_ICON, workspaceIcons } from "../../modules/workspace/workspace-icons.service.js";
@@ -705,22 +705,19 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
   res.end();
 });
 
-router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req);
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
-
-  // Funnels are a Starter/Pro feature — Free can view the builder UI but not
-  // spend compute on it.
-  const plan = await currentPlan(ws.id);
-  if (!plan || plan.slug === "free") {
-    return planLimit(
-      res,
-      "funnels need this workspace on the Starter or Pro plan",
-      { kind: "funnels", label: "Funnels", plan: plan?.name },
-      "plan_required",
-    );
+async function requireFunnelsWorkspace(req: AuthedRequest, res: Response, minimum?: WorkspaceRole) {
+  const ws = await requireWorkspace(req, res, minimum);
+  if (!ws) return null;
+  if (!appEnabled(ws, "funnels")) {
+    res.status(403).json({ error: APP_DISABLED_MESSAGE.funnels });
+    return null;
   }
+  return ws;
+}
+
+router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireFunnelsWorkspace(req, res);
+  if (!ws) return;
 
   const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
   const steps: FunnelStep[] = raw
@@ -761,9 +758,8 @@ function parseFunnelSteps(raw: unknown): FunnelStep[] {
 }
 
 router.get("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req);
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
+  const ws = await requireFunnelsWorkspace(req, res);
+  if (!ws) return;
   const funnels = await Funnel.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
   res.json(
     funnels.map((f) => ({
@@ -775,9 +771,8 @@ router.get("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req, "editor");
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
+  const ws = await requireFunnelsWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
   const steps = parseFunnelSteps(req.body?.steps);
@@ -789,9 +784,8 @@ router.post("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
 });
 
 router.put("/:wid/funnels/:fid", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req, "editor");
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
+  const ws = await requireFunnelsWorkspace(req, res, "editor");
+  if (!ws) return;
 
   const name = String(req.body?.name ?? "").trim().slice(0, 80);
   const steps = parseFunnelSteps(req.body?.steps);
@@ -806,9 +800,8 @@ router.put("/:wid/funnels/:fid", async (req: AuthedRequest, res: Response) => {
 });
 
 router.delete("/:wid/funnels/:fid", async (req: AuthedRequest, res: Response) => {
-  const access = await resolveAccess(req, "editor");
-  if (isDenied(access)) return res.status(access.status).json({ error: access.error });
-  const ws = access.workspace;
+  const ws = await requireFunnelsWorkspace(req, res, "editor");
+  if (!ws) return;
   const funnel = await Funnel.findOne({ _id: req.params.fid, workspaceId: ws.id });
   if (!funnel) return res.status(404).json({ error: "funnel not found" });
   await funnel.deleteOne();

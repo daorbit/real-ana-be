@@ -68,6 +68,7 @@ const workspaceSchema = new Schema(
       popups: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       publicDashboard: {
         enabled: { type: Boolean, default: false },
@@ -78,6 +79,11 @@ const workspaceSchema = new Schema(
         enabledAt: { type: Date },
       },
       bio: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+        paidAt: { type: Date },
+      },
+      funnels: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
         paidAt: { type: Date },

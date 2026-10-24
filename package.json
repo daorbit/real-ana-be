@@ -19,6 +19,7 @@
     "backfill:links-app": "tsx scripts/backfill-links-app.ts",
     "backfill:media-app": "tsx scripts/backfill-media-app.ts",
     "backfill:site-first-event": "tsx scripts/backfill-site-first-event.ts",
+    "backfill:funnels-app": "tsx scripts/backfill-funnels-app.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
