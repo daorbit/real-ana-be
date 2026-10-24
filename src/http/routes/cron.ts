@@ -11,6 +11,7 @@ import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
 import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
+import { markServerErrorReported } from "../middleware/report-server-errors.js";
 
 /**
  * Scheduled jobs invoked by Vercel Cron.
@@ -27,6 +28,11 @@ import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/m
  * rather than a second decorator on the same route.
  */
 const router = Router();
+
+router.use((_req: Request, res: Response, next) => {
+  markServerErrorReported(res);
+  next();
+});
 
 /**
  * Rejects anything that can't prove it's the scheduler.

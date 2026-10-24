@@ -76,6 +76,7 @@ import { requireMcpEnabled } from "./http/middleware/mcp-guards.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
 import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
 import { auditTrail } from "./http/middleware/audit-trail.js";
+import { reportServerErrors } from "./http/middleware/report-server-errors.js";
 
 const app = express();
 
@@ -91,6 +92,8 @@ app.use(
     referrerPolicy: { policy: "strict-origin-when-cross-origin" },
   }),
 );
+
+app.use(reportServerErrors);
 
 app.use(["/api", "/v1"], compression());
 

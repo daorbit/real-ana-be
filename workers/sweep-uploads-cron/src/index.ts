@@ -77,11 +77,15 @@ async function runSweeps(env: Env, tasks: Task[]): Promise<string[]> {
 
 function alertsFor(change: DownChange, sweepErrors: string[]): OpsAlert[] {
   const alerts: OpsAlert[] = [];
-  if (change.newlyDown.length) {
+  for (const service of change.newlyDown) {
     alerts.push({
       title: "Service down",
-      where: change.newlyDown.map((d) => d.name).join(", "),
-      detail: change.newlyDown.map((d) => `${d.name}: ${d.reason}`).join("\n"),
+      where: service.name,
+      detail: `${service.name} did not answer its health check twice in a row: ${service.reason}`,
+      fields: [
+        { label: "Checked URL", value: service.url },
+        { label: "Result", value: service.reason },
+      ],
     });
   }
   if (change.recovered.length) {
@@ -92,7 +96,12 @@ function alertsFor(change: DownChange, sweepErrors: string[]): OpsAlert[] {
     });
   }
   if (sweepErrors.length) {
-    alerts.push({ title: "Forms cron failed", where: "cron sweep", detail: sweepErrors.join("\n") });
+    alerts.push({
+      title: "Forms cron failed",
+      where: "Forms API · /api/cron",
+      detail: sweepErrors.join("\n"),
+      fields: [{ label: "Worker", value: "sweep-uploads-cron" }],
+    });
   }
   return alerts;
 }

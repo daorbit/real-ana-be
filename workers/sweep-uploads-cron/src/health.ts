@@ -38,6 +38,7 @@ async function probeOnce(url: string): Promise<string | null> {
 
 export interface DownService {
   name: string;
+  url: string;
   reason: string;
 }
 
@@ -47,7 +48,7 @@ async function probe(target: Probe): Promise<DownService | null> {
   if ((await probeOnce(target.url)) === null) return null;
   await sleep(RETRY_DELAY_MS);
   const reason = await probeOnce(target.url);
-  return reason === null ? null : { name: target.name, reason };
+  return reason === null ? null : { name: target.name, url: target.url, reason };
 }
 
 export async function failingServices(env: HealthEnv): Promise<DownService[]> {

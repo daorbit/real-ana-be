@@ -1,6 +1,7 @@
 import express, { Router, type Request, type Response } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { limitByIp } from "../middleware/mcp-guards.js";
+import { markServerErrorReported } from "../middleware/report-server-errors.js";
 import { registerClient } from "../../modules/mcp-oauth/client.service.js";
 import { AuthorizeRedirect, UnredirectableError, startAuthorization } from "../../modules/mcp-oauth/authorize.service.js";
 import { exchangeAuthorizationCode, refreshAccessToken, revokeToken } from "../../modules/mcp-oauth/token.service.js";
@@ -22,6 +23,7 @@ function noStore(res: Response) {
 async function sendOAuthFailure(req: Request, res: Response, err: unknown) {
   noStore(res);
   if (isOAuthError(err)) return res.status(err.status).json(err.toJSON());
+  markServerErrorReported(res);
   res.status(500).json({ error: "server_error", error_description: "unexpected error" });
   runAfterResponse("oauth error report", () => captureServerError(err, { method: req.method, path: req.path }));
 }
@@ -52,6 +54,7 @@ router.get(
       if (err instanceof UnredirectableError) {
         return res.status(400).type("html").send(renderOAuthErrorPage(err.message));
       }
+      markServerErrorReported(res);
       res.status(500).type("html").send(renderOAuthErrorPage("Something went wrong. Try connecting again."));
       runAfterResponse("oauth error report", () => captureServerError(err, { method: req.method, path: req.path }));
     }

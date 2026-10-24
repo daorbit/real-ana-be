@@ -5,10 +5,16 @@ export interface AlertEnv {
   OPS_ALERT_TELEGRAM_CHAT_ID?: string;
 }
 
+export interface OpsAlertField {
+  label: string;
+  value: string;
+}
+
 export interface OpsAlert {
   title: string;
   where: string;
   detail: string;
+  fields?: OpsAlertField[];
 }
 
 const TIMEOUT_MS = 10_000;
@@ -38,9 +44,12 @@ async function sendDirect(env: AlertEnv, alert: OpsAlert): Promise<void> {
   }
   const text = [
     `<b>Watchdog · ${escapeHtml(alert.title)}</b>`,
-    `<code>${escapeHtml(alert.where)}</code>`,
-    escapeHtml(alert.detail),
-    `<i>${new Date().toISOString()}</i>`,
+    "",
+    `<b>Where:</b> <code>${escapeHtml(alert.where)}</code>`,
+    `<b>Issue:</b> ${escapeHtml(alert.detail)}`,
+    ...(alert.fields ?? []).map((f) => `<b>${escapeHtml(f.label)}:</b> <code>${escapeHtml(f.value)}</code>`),
+    "",
+    `<i>sent directly, Quantalog API unreachable · ${new Date().toISOString()}</i>`,
   ].join("\n");
   try {
     const response = await fetch(`https://api.telegram.org/bot${env.OPS_ALERT_TELEGRAM_BOT_TOKEN}/sendMessage`, {

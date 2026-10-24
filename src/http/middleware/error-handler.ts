@@ -3,8 +3,10 @@ import { isAppError } from "../../shared/errors/index.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
 import { runAfterResponse } from "../../shared/utils/after-response.js";
 import type { AuthedRequest } from "./auth.js";
+import { markServerErrorReported } from "./report-server-errors.js";
 
-function reportAfterResponse(err: unknown, req: Request): void {
+function reportAfterResponse(err: unknown, req: Request, res: Response): void {
+  markServerErrorReported(res);
   const context = { method: req.method, path: req.path, userId: (req as AuthedRequest).userId };
   runAfterResponse("error report", () => captureServerError(err, context));
 }
@@ -23,7 +25,7 @@ export async function errorHandler(
 ) {
 
   if (res.headersSent) {
-    reportAfterResponse(err, req);
+    reportAfterResponse(err, req, res);
     return req.socket.destroy();
   }
 
@@ -57,6 +59,6 @@ export async function errorHandler(
   }
 
   console.error(`unhandled error on ${req.method} ${req.originalUrl}:`, err);
+  reportAfterResponse(err, req, res);
   res.status(500).json({ error: "internal server error" });
-  reportAfterResponse(err, req);
 }
