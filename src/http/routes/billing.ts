@@ -746,21 +746,40 @@ router.post("/apps/:appId/purchase", async (req: AuthedRequest, res: Response) =
     return res.status(409).json({ error: `${PAID_APP_NAMES[appId]} is already unlocked for this workspace`, code: "app_already_unlocked" });
   }
 
-  const gateway = resolveGateway(req.body?.gateway);
-  if (!gatewayConfigured(gateway))
-    return res.status(503).json({ error: `${gateway} payments are not configured` });
-
   const currency = resolveCurrency(req.body?.currency);
-  if (!gatewaySupportsCurrency(gateway, currency))
-    return res
-      .status(400)
-      .json({ error: `${gateway} cannot take ${currency} payments yet`, code: "gateway_currency_unsupported" });
-
   const price = await appPrice(appId, currency);
   if (price <= 0) return res.status(503).json({ error: `${PAID_APP_NAMES[appId]} has no ${currency} price yet` });
 
   const discounted = await applyCoupon(price, req.body?.couponCode, req.userId);
   if (discounted.error) return res.status(400).json({ error: discounted.error });
+
+  if (discounted.amount === 0) {
+    const couponCode = discounted.coupon?.code ?? "";
+    if (!(await claimCoupon(couponCode, PAID_APP_NAMES[appId]))) {
+      return res.status(400).json({ error: "coupon has already been used" });
+    }
+    const purchase = await AppPurchase.create({
+      userId: req.userId,
+      workspaceId: access.workspace.id,
+      appId,
+      gateway: "coupon",
+      amount: 0,
+      currency,
+      couponCode,
+      status: "created",
+    });
+    await creditAppPurchase(String(purchase._id), `coupon:${couponCode}`);
+    return res.json({ free: true, app: { id: appId, name: PAID_APP_NAMES[appId] } });
+  }
+
+  const gateway = resolveGateway(req.body?.gateway);
+  if (!gatewayConfigured(gateway))
+    return res.status(503).json({ error: `${gateway} payments are not configured` });
+  if (!gatewaySupportsCurrency(gateway, currency))
+    return res
+      .status(400)
+      .json({ error: `${gateway} cannot take ${currency} payments yet`, code: "gateway_currency_unsupported" });
+
   const amount = Math.max(discounted.amount, 100);
 
   const buyer = await User.findById(req.userId).select("name email");
@@ -808,9 +827,10 @@ export async function creditAppPurchase(purchaseId: string, paymentId: string) {
   if (!isPaidApp(appId)) return;
   await unlockApp(String(purchase.workspaceId), appId);
 
+  const viaCoupon = purchase.gateway === "coupon";
   await Promise.all([
-    redeemCoupon(purchase.couponCode, PAID_APP_NAMES[appId]),
-    qualifyReferralOnPayment(String(purchase.userId)),
+    viaCoupon ? null : redeemCoupon(purchase.couponCode, PAID_APP_NAMES[appId]),
+    (purchase.amount as number) > 0 ? qualifyReferralOnPayment(String(purchase.userId)) : null,
   ]);
   await issueReceipt("app", purchase.id, String(purchase.userId));
 }

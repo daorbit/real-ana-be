@@ -6,7 +6,7 @@ const appPurchaseSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true, index: true },
     appId: { type: String, required: true },
-    gateway: { type: String, enum: ["razorpay", "cashfree"], default: "razorpay", index: true },
+    gateway: { type: String, enum: ["razorpay", "cashfree", "coupon"], default: "razorpay", index: true },
     razorpayOrderId: { type: String, unique: true, sparse: true },
     cashfreeOrderId: { type: String, unique: true, sparse: true },
     razorpayPaymentId: { type: String, default: "" },
