@@ -1,11 +1,11 @@
 import { Branding } from "../branding/models/Branding.js";
 import { Site } from "../analytics/models/Site.js";
 
-export type WorkspaceIcon = { logoUrl: string | null };
+export type WorkspaceIcon = { logoUrl: string | null; brandLogoUrl: string | null };
 
 const SITES_PER_WORKSPACE = 25;
 
-export const EMPTY_WORKSPACE_ICON: WorkspaceIcon = { logoUrl: null };
+export const EMPTY_WORKSPACE_ICON: WorkspaceIcon = { logoUrl: null, brandLogoUrl: null };
 
 function cleanUrl(raw: string | undefined): string | null {
   const url = (raw ?? "").trim();
@@ -29,14 +29,14 @@ export async function workspaceIcons(ids: string[]): Promise<Map<string, Workspa
 
   for (const brand of brands) {
     const logoUrl = cleanUrl(brand.logoUrl);
-    if (logoUrl) icons.set(String(brand.workspaceId), { logoUrl });
+    if (logoUrl) icons.set(String(brand.workspaceId), { logoUrl, brandLogoUrl: logoUrl });
   }
 
   for (const site of sites) {
     const id = String(site.workspaceId);
     if (icons.has(id)) continue;
     const logoUrl = cleanUrl(site.logoUrl);
-    if (logoUrl) icons.set(id, { logoUrl });
+    if (logoUrl) icons.set(id, { logoUrl, brandLogoUrl: null });
   }
 
   return icons;
