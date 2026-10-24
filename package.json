@@ -18,7 +18,8 @@
     "backfill:reviews-app": "tsx scripts/backfill-reviews-app.ts",
     "backfill:links-app": "tsx scripts/backfill-links-app.ts",
     "backfill:media-app": "tsx scripts/backfill-media-app.ts",
-    "backfill:site-first-event": "tsx scripts/backfill-site-first-event.ts"
+    "backfill:site-first-event": "tsx scripts/backfill-site-first-event.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

@@ -57,7 +57,7 @@ export async function startAuthorization(query: Record<string, unknown>): Promis
 
   if (query.response_type !== "code") fail("unsupported_response_type", "response_type must be code");
   if (query.code_challenge_method !== "S256") fail("invalid_request", "code_challenge_method must be S256");
-  if (!isValidChallenge(query.code_challenge)) fail("invalid_request", "a valid PKCE code_challenge is required");
+  if (!isValidChallenge(query.code_challenge)) return fail("invalid_request", "a valid PKCE code_challenge is required");
 
   const scopes = parseScopes(query.scope);
   if (!scopes) return fail("invalid_scope", "unknown scope requested");

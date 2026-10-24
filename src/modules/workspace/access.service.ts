@@ -38,7 +38,8 @@ export async function resolveAccess(
   minimum: WorkspaceRole = "viewer",
   workspaceId?: string,
 ): Promise<Access | Denied> {
-  return resolveAccessFor(req.userId, workspaceId ?? req.params.wid, minimum);
+  const wid = workspaceId ?? req.params.wid;
+  return resolveAccessFor(req.userId, typeof wid === "string" ? wid : undefined, minimum);
 }
 
 export async function resolveAccessFor(
