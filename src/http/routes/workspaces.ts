@@ -12,7 +12,6 @@ import { planLimit } from "../plan-limit.js";
 import { guardSiteCreation } from "../site-limit.js";
 import {
   computeStats,
-  computeFunnel,
   computeUserFlow,
   computeRetention,
   exportEvents,
@@ -24,8 +23,9 @@ import {
   EXPORT_COLUMNS,
   TRACKER_VERSION,
   computeLive,
-  type FunnelStep,
 } from "../../modules/analytics/stats.service.js";
+import { computeFunnelReport } from "../../modules/analytics/funnel.service.js";
+import { funnelCacheKey, type FunnelReport, type FunnelStep } from "../../modules/analytics/funnel-report.js";
 import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
@@ -705,6 +705,8 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
   res.end();
 });
 
+const funnelReports = createTtlCache<FunnelReport>(30_000, 300);
+
 async function requireFunnelsWorkspace(req: AuthedRequest, res: Response, minimum?: WorkspaceRole) {
   const ws = await requireWorkspace(req, res, minimum);
   if (!ws) return null;
@@ -719,33 +721,27 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   const ws = await requireFunnelsWorkspace(req, res);
   if (!ws) return;
 
-  const raw = Array.isArray(req.body?.steps) ? req.body.steps : [];
-  const steps: FunnelStep[] = raw
-    .map((s: { type?: string; value?: string }) => ({
-      type: s?.type === "event" ? "event" : "page",
-      value: String(s?.value ?? "").slice(0, 300),
-    }))
-    .filter((s: FunnelStep) => s.value)
-    .slice(0, 8);
-
+  const steps = parseFunnelSteps(req.body?.steps);
   if (steps.length < 2) {
     return res.status(400).json({ error: "at least 2 steps required" });
   }
 
-  const sites = await Site.find({ workspaceId: ws.id }).select("siteId");
+  const rangeKey = String(req.body?.range ?? "24h");
+  const [sites, allowed] = await Promise.all([
+    Site.find({ workspaceId: ws.id }).select("siteId"),
+    canUseRange(ws.id, rangeKey),
+  ]);
+  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
+
   const ids = selectSiteIds(sites, req.body?.sites);
   if (ids.length === 0) return res.json({ steps: [] });
 
-  const rangeKey = String(req.body?.range ?? "24h");
-  const allowed = await canUseRange(ws.id, rangeKey);
-  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
-
+  const compare = req.body?.compare !== false;
   const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
-  const result = await computeFunnel(ids, steps, rangeKey, win);
-  res.json({ steps: result });
+  const key = funnelCacheKey({ workspaceId: ws.id, siteIds: ids, steps, since: win.since, until: win.until, compare, rangeKey: win.rangeKey });
+  res.json(await funnelReports(key, () => computeFunnelReport(ids, steps, win, compare)));
 });
 
-// --- saved funnel definitions --------------------------------------------
 function parseFunnelSteps(raw: unknown): FunnelStep[] {
   const arr = Array.isArray(raw) ? raw : [];
   return arr
