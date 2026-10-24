@@ -25,7 +25,8 @@ import {
   computeLive,
 } from "../../modules/analytics/stats.service.js";
 import { computeFunnelReport } from "../../modules/analytics/funnel.service.js";
-import { funnelCacheKey, type FunnelReport, type FunnelStep } from "../../modules/analytics/funnel-report.js";
+import { funnelCacheKey, overviewRow, type FunnelReport, type FunnelStep } from "../../modules/analytics/funnel-report.js";
+import { mapLimit } from "../../shared/utils/map-limit.js";
 import ExcelJS from "exceljs";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { Funnel } from "../../modules/analytics/models/Funnel.js";
@@ -706,6 +707,9 @@ router.get("/:wid/export", async (req: AuthedRequest, res: Response) => {
 });
 
 const funnelReports = createTtlCache<FunnelReport>(30_000, 300);
+const SAVED_FUNNELS_LIMIT = 50;
+const FUNNEL_OVERVIEW_LIMIT = 20;
+const FUNNEL_OVERVIEW_CONCURRENCY = 4;
 
 async function requireFunnelsWorkspace(req: AuthedRequest, res: Response, minimum?: WorkspaceRole) {
   const ws = await requireWorkspace(req, res, minimum);
@@ -717,6 +721,31 @@ async function requireFunnelsWorkspace(req: AuthedRequest, res: Response, minimu
   return ws;
 }
 
+type FunnelScopeInput = { range?: unknown; from?: unknown; to?: unknown; sites?: unknown; compare?: unknown };
+
+async function resolveFunnelScope(workspaceId: string, input: FunnelScopeInput, res: Response) {
+  const rangeKey = String(input.range ?? "24h");
+  const [sites, allowed] = await Promise.all([
+    Site.find({ workspaceId }).select("siteId"),
+    canUseRange(workspaceId, rangeKey),
+  ]);
+  if (!allowed.ok) {
+    planLimit(res, allowed.error, allowed.limit);
+    return null;
+  }
+  const compare = input.compare !== false && input.compare !== "0" && input.compare !== "false";
+  return {
+    ids: selectSiteIds(sites, input.sites),
+    win: resolveWindow(rangeKey, input.from, input.to),
+    compare,
+  };
+}
+
+function cachedFunnelReport(workspaceId: string, ids: string[], steps: FunnelStep[], win: ReturnType<typeof resolveWindow>, compare: boolean) {
+  const key = funnelCacheKey({ workspaceId, siteIds: ids, steps, since: win.since, until: win.until, compare, rangeKey: win.rangeKey });
+  return funnelReports(key, () => computeFunnelReport(ids, steps, win, compare));
+}
+
 router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
   const ws = await requireFunnelsWorkspace(req, res);
   if (!ws) return;
@@ -726,20 +755,31 @@ router.post("/:wid/funnel", async (req: AuthedRequest, res: Response) => {
     return res.status(400).json({ error: "at least 2 steps required" });
   }
 
-  const rangeKey = String(req.body?.range ?? "24h");
-  const [sites, allowed] = await Promise.all([
-    Site.find({ workspaceId: ws.id }).select("siteId"),
-    canUseRange(ws.id, rangeKey),
-  ]);
-  if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit);
+  const scope = await resolveFunnelScope(ws.id, req.body ?? {}, res);
+  if (!scope) return;
+  if (scope.ids.length === 0) return res.json({ steps: [] });
+  res.json(await cachedFunnelReport(ws.id, scope.ids, steps, scope.win, scope.compare));
+});
 
-  const ids = selectSiteIds(sites, req.body?.sites);
-  if (ids.length === 0) return res.json({ steps: [] });
+router.get("/:wid/funnels/overview", async (req: AuthedRequest, res: Response) => {
+  const ws = await requireFunnelsWorkspace(req, res);
+  if (!ws) return;
 
-  const compare = req.body?.compare !== false;
-  const win = resolveWindow(rangeKey, req.body?.from, req.body?.to);
-  const key = funnelCacheKey({ workspaceId: ws.id, siteIds: ids, steps, since: win.since, until: win.until, compare, rangeKey: win.rangeKey });
-  res.json(await funnelReports(key, () => computeFunnelReport(ids, steps, win, compare)));
+  const scope = await resolveFunnelScope(ws.id, req.query, res);
+  if (!scope) return;
+  if (scope.ids.length === 0) return res.json([]);
+
+  const funnels = await Funnel.find({ workspaceId: ws.id })
+    .sort({ updatedAt: -1 })
+    .limit(FUNNEL_OVERVIEW_LIMIT)
+    .select("steps")
+    .lean();
+  const rows = await mapLimit(funnels, FUNNEL_OVERVIEW_CONCURRENCY, async (f) => {
+    const steps = parseFunnelSteps(f.steps);
+    const report = await cachedFunnelReport(ws.id, scope.ids, steps, scope.win, scope.compare);
+    return overviewRow(String(f._id), report);
+  });
+  res.json(rows);
 });
 
 function parseFunnelSteps(raw: unknown): FunnelStep[] {
@@ -756,12 +796,17 @@ function parseFunnelSteps(raw: unknown): FunnelStep[] {
 router.get("/:wid/funnels", async (req: AuthedRequest, res: Response) => {
   const ws = await requireFunnelsWorkspace(req, res);
   if (!ws) return;
-  const funnels = await Funnel.find({ workspaceId: ws.id }).sort({ createdAt: 1 });
+  const funnels = await Funnel.find({ workspaceId: ws.id })
+    .sort({ updatedAt: -1 })
+    .limit(SAVED_FUNNELS_LIMIT)
+    .select("name steps updatedAt")
+    .lean();
   res.json(
     funnels.map((f) => ({
-      id: f.id,
-      name: f.get("name"),
-      steps: f.get("steps"),
+      id: String(f._id),
+      name: f.name,
+      steps: f.steps,
+      updatedAt: f.updatedAt,
     })),
   );
 });

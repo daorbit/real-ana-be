@@ -27,4 +27,6 @@ const funnelSchema = new Schema(
   { timestamps: true }
 );
 
+funnelSchema.index({ workspaceId: 1, updatedAt: -1 });
+
 export const Funnel = mongoose.model("Funnel", funnelSchema);

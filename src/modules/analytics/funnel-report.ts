@@ -126,6 +126,26 @@ export function buildFunnelReport(input: {
   };
 }
 
+export type FunnelOverviewRow = {
+  id: string;
+  entered: number;
+  completed: number;
+  conversion: number;
+  previousConversion: number | null;
+  biggestDrop: FunnelReport["biggestDrop"];
+};
+
+export function overviewRow(id: string, report: FunnelReport): FunnelOverviewRow {
+  return {
+    id,
+    entered: report.current.entered,
+    completed: report.current.completed,
+    conversion: report.current.conversion,
+    previousConversion: report.previous?.conversion ?? null,
+    biggestDrop: report.biggestDrop,
+  };
+}
+
 export function funnelCacheKey(parts: {
   workspaceId: string;
   siteIds: string[];
