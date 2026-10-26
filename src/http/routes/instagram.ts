@@ -17,7 +17,7 @@ import { dashboardCors } from "../middleware/cors.js";
 import { requireAuth, blockDemoWrites, jwtSecret, verifySessionToken, AuthedRequest } from "../middleware/auth.js";
 import {
   SOCIAL_CONNECT_ROLE, assertSocialAccess, canManageSocial, connectionTakenElsewhere,
-  findWorkspaceConnection, readWorkspaceId,
+  deleteWorkspaceConnection, findWorkspaceConnection, readWorkspaceId, saveWorkspaceConnection,
 } from "../../modules/social/social-connection.service.js";
 
 /**
@@ -326,23 +326,15 @@ router.get(
     if (takenByOther) return closePopup(res, "error", "already_connected");
 
     try {
-      await SocialConnection.findOneAndUpdate(
-        { workspaceId, provider: "instagram" },
-        {
-          $set: {
-            userId,
-            providerUserId: profile.userId,
-            // The `@username`, which is the only display identity Instagram
-            // gives. No email: the scope does not carry one.
-            name: profile.username,
-            picture: profile.picture,
-            accessToken: encryptSecret(token.accessToken),
-            expiresAt: token.expiresAt,
-            scope: token.scope,
-          },
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
-      );
+      await saveWorkspaceConnection(workspaceId, "instagram", {
+        userId,
+        providerUserId: profile.userId,
+        name: profile.username,
+        picture: profile.picture,
+        accessToken: encryptSecret(token.accessToken),
+        expiresAt: token.expiresAt,
+        scope: token.scope,
+      });
     } catch (e) {
       // Logged with the error's name and any Mongo driver code alongside the
       // message: every cause — a failed connection, a duplicate key, a
@@ -430,7 +422,7 @@ router.delete(
   asyncHandler(async (req: AuthedRequest, res: Response) => {
     const workspaceId = readWorkspaceId(req.query.workspaceId);
     await assertSocialAccess(req.userId, workspaceId, SOCIAL_CONNECT_ROLE);
-    const removed = await SocialConnection.findOneAndDelete({ workspaceId, provider: "instagram" });
+    const removed = await deleteWorkspaceConnection(workspaceId, "instagram");
 
     if (removed) await pauseInstagramSchedules(workspaceId);
 

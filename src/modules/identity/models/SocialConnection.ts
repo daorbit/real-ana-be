@@ -29,7 +29,10 @@ const socialConnectionSchema = new Schema(
   { timestamps: true }
 );
 
-socialConnectionSchema.index({ workspaceId: 1, provider: 1 }, { unique: true });
+socialConnectionSchema.index(
+  { workspaceId: 1, provider: 1 },
+  { unique: true, partialFilterExpression: { workspaceId: { $type: "objectId" } } },
+);
 socialConnectionSchema.index({ provider: 1, providerUserId: 1 });
 
 export type SocialConnectionDoc = InferSchemaType<typeof socialConnectionSchema>;

@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import { SocialConnection, Provider } from "../identity/models/SocialConnection.js";
 import { resolveAccessFor, isDenied } from "../workspace/access.service.js";
 import { WorkspaceRole } from "../workspace/models/Membership.js";
@@ -25,8 +26,40 @@ export async function canManageSocial(userId: string, workspaceId: string): Prom
   return !isDenied(access);
 }
 
-export function findWorkspaceConnection(workspaceId: unknown, provider: Provider) {
-  return SocialConnection.findOne({ workspaceId, provider });
+const LEGACY_USER_INDEX = "userId_1_provider_1";
+
+function hitsLegacyIndex(e: unknown): boolean {
+  const err = e as { code?: number; message?: string };
+  return err?.code === 11000 && String(err.message ?? "").includes(LEGACY_USER_INDEX);
+}
+
+export async function saveWorkspaceConnection(
+  workspaceId: string,
+  provider: Provider,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const write = () =>
+    SocialConnection.findOneAndUpdate(
+      { workspaceId: new Types.ObjectId(workspaceId), provider },
+      { $set: fields },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+  try {
+    await write();
+  } catch (e) {
+    if (!hitsLegacyIndex(e)) throw e;
+    await SocialConnection.collection.dropIndex(LEGACY_USER_INDEX).catch(() => {});
+    await write();
+  }
+}
+
+export function findWorkspaceConnection(workspaceId: string | Types.ObjectId, provider: Provider) {
+  return SocialConnection.findOne({ workspaceId: new Types.ObjectId(String(workspaceId)), provider });
+}
+
+export function deleteWorkspaceConnection(workspaceId: string, provider: Provider) {
+  return SocialConnection.findOneAndDelete({ workspaceId: new Types.ObjectId(workspaceId), provider });
 }
 
 export async function connectionTakenElsewhere(
@@ -37,7 +70,7 @@ export async function connectionTakenElsewhere(
   const found = await SocialConnection.findOne({
     provider,
     providerUserId,
-    workspaceId: { $ne: workspaceId },
+    workspaceId: { $ne: new Types.ObjectId(workspaceId) },
   }).select("_id").lean();
   return Boolean(found);
 }

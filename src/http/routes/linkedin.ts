@@ -30,6 +30,7 @@ import {
 import { badRequest, forbidden } from "../../shared/errors/index.js";
 import {
   SOCIAL_CONNECT_ROLE, assertSocialAccess, canManageSocial, findWorkspaceConnection, readWorkspaceId,
+  saveWorkspaceConnection,
 } from "../../modules/social/social-connection.service.js";
 
 /**
@@ -568,22 +569,16 @@ router.get(
     }
 
     try {
-      await SocialConnection.findOneAndUpdate(
-        { workspaceId, provider: "linkedin" },
-        {
-          $set: {
-            userId,
-            providerUserId: profile.sub,
-            name: profile.name,
-            email: profile.email,
-            picture: profile.picture,
-            accessToken: encryptSecret(token.accessToken),
-            expiresAt: token.expiresAt,
-            scope: token.scope,
-          },
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
-      );
+      await saveWorkspaceConnection(workspaceId!, "linkedin", {
+        userId,
+        providerUserId: profile.sub,
+        name: profile.name,
+        email: profile.email,
+        picture: profile.picture,
+        accessToken: encryptSecret(token.accessToken),
+        expiresAt: token.expiresAt,
+        scope: token.scope,
+      });
     } catch (e) {
       // Logged with the error's name and any Mongo driver code alongside the
       // message. "could not save connection" on its own is the least useful

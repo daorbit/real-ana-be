@@ -20,7 +20,6 @@
     "backfill:media-app": "tsx scripts/backfill-media-app.ts",
     "backfill:site-first-event": "tsx scripts/backfill-site-first-event.ts",
     "backfill:funnels-app": "tsx scripts/backfill-funnels-app.ts",
-    "migrate:social-connections": "tsx scripts/migrate-social-connections-workspace.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
