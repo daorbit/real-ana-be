@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { SocialPostRun } from "./models/SocialPostRun.js";
 import { SocialConnection } from "../identity/models/SocialConnection.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
+import { findWorkspaceConnection } from "./social-connection.service.js";
 import { canReadAnalytics } from "../../infra/http-client/linkedin-auth.js";
 import { LinkedInApiError } from "../../infra/http-client/linkedin-post.js";
 import { STATS_BATCH_SIZE, fetchMemberPostStats } from "../../infra/http-client/linkedin-stats.js";
@@ -94,15 +95,16 @@ export async function runStatsRefresh(now: Date = new Date()): Promise<StatsSumm
 
   // One pass per user, because the statistics call is per-member: it takes the
   // author URN and that member's own token.
-  const userIds = (await SocialPostRun.distinct("userId", due) as Types.ObjectId[])
+  const workspaceIds = (await SocialPostRun.distinct("workspaceId", due) as Types.ObjectId[])
+    .filter(Boolean)
     .slice(0, MAX_USERS_PER_RUN);
 
-  for (const userId of userIds) {
+  for (const workspaceId of workspaceIds) {
     summary.users++;
     try {
-      summary.updated += await refreshForUser(userId, due, now, summary);
+      summary.updated += await refreshForWorkspace(workspaceId, due, now, summary);
     } catch (e) {
-      summary.errors.push(`${String(userId)}: ${(e as Error).message}`);
+      summary.errors.push(`${String(workspaceId)}: ${(e as Error).message}`);
     }
   }
 
@@ -110,13 +112,13 @@ export async function runStatsRefresh(now: Date = new Date()): Promise<StatsSumm
 }
 
 /** Refresh one user's posts, returning how many rows were updated. */
-async function refreshForUser(
-  userId: Types.ObjectId,
+async function refreshForWorkspace(
+  workspaceId: Types.ObjectId,
   due: Record<string, unknown>,
   now: Date,
   summary: StatsSummary,
 ): Promise<number> {
-  const conn = await SocialConnection.findOne({ userId, provider: "linkedin" })
+  const conn = await findWorkspaceConnection(workspaceId, "linkedin")
     .select("+accessToken providerUserId scope expiresAt");
 
   // No connection, a dead token, or — the case that applies today — an app with
@@ -135,7 +137,7 @@ async function refreshForUser(
 
   // Oldest refresh first, so a capped tick works through the backlog rather
   // than re-fetching the same newest handful every time.
-  const rows = await SocialPostRun.find({ ...due, userId })
+  const rows = await SocialPostRun.find({ ...due, workspaceId })
     .sort({ "stats.fetchedAt": 1, publishedAt: -1 })
     .limit(STATS_BATCH_SIZE * MAX_BATCHES_PER_USER)
     .select("postUrn");

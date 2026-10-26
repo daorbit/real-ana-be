@@ -28,6 +28,9 @@ import {
   requireAuth, blockDemoWrites, signToken, signPending2faToken, jwtSecret, verifySessionToken, AuthedRequest,
 } from "../middleware/auth.js";
 import { badRequest, forbidden } from "../../shared/errors/index.js";
+import {
+  SOCIAL_CONNECT_ROLE, assertSocialAccess, canManageSocial, findWorkspaceConnection, readWorkspaceId,
+} from "../../modules/social/social-connection.service.js";
 
 /**
  * Connecting a LinkedIn account, and publishing to it.
@@ -90,6 +93,7 @@ type StateMode = "connect" | "login";
 type StatePayload = {
   /** Absent on a login flow, which has no signed-in user yet. */
   userId?: string;
+  workspaceId?: string;
   mode: StateMode;
   nonce: string;
   kind: "linkedin-oauth";
@@ -146,6 +150,7 @@ const REASON_TEXT: Record<string, string> = {
   linkedin_failed: "LinkedIn could not complete the connection. Please try again.",
   save_failed: "The connection could not be saved. Please try again.",
   denied: "You cancelled the LinkedIn authorisation.",
+  no_workspace: "You need editor access to this workspace to connect LinkedIn.",
 };
 
 function closePopup(
@@ -373,6 +378,7 @@ router.get(
     }
 
     let userId: string | undefined;
+    let workspaceId: string | undefined;
 
     if (mode === "connect") {
       const token = String(req.query.token ?? "");
@@ -380,15 +386,19 @@ router.get(
 
       const session = await verifySessionToken(token);
       if (!session) return closePopup(res, "error", "not_signed_in");
-      // A demo session is read-only and has no real user row to attach a
-      // connection to, so it is refused here rather than failing at the upsert.
       if (session.demo) return closePopup(res, "error", "demo");
       userId = session.userId;
+
+      workspaceId = String(req.query.workspaceId ?? "");
+      if (!workspaceId || !(await canManageSocial(userId, workspaceId))) {
+        return closePopup(res, "error", "no_workspace");
+      }
     }
 
     const state = jwt.sign(
       {
         ...(userId ? { userId } : {}),
+        ...(workspaceId ? { workspaceId } : {}),
         mode,
         nonce: randomBytes(16).toString("hex"),
         kind: "linkedin-oauth",
@@ -446,15 +456,17 @@ router.get(
     if (req.query.error === UNAUTHORIZED_SCOPE_ERROR && !wantedLogin) {
       let retried = false;
       let stateUserId: string | undefined;
+      let stateWorkspaceId: string | undefined;
       try {
         const payload = jwt.verify(state, jwtSecret()) as StatePayload;
         retried = payload.noReadScopes === true;
         stateUserId = payload.userId;
+        stateWorkspaceId = payload.workspaceId;
       } catch {
         return fail("error", "invalid_state");
       }
 
-      if (!retried && stateUserId) {
+      if (!retried && stateUserId && stateWorkspaceId) {
         console.warn(
           "[linkedin] read scopes refused — this app has no product granting "
           + "r_member_social / r_member_postAnalytics; retrying without them",
@@ -462,6 +474,7 @@ router.get(
         const next = jwt.sign(
           {
             userId: stateUserId,
+            workspaceId: stateWorkspaceId,
             mode: "connect",
             nonce: randomBytes(16).toString("hex"),
             kind: "linkedin-oauth",
@@ -489,6 +502,7 @@ router.get(
     if (!state) return fail("error", "invalid_state");
 
     let userId: string | undefined;
+    let workspaceId: string | undefined;
     let mode: StateMode;
     try {
       const payload = jwt.verify(state, jwtSecret()) as StatePayload;
@@ -497,8 +511,8 @@ router.get(
       if (!safeEqual(payload.kind ?? "", "linkedin-oauth")) throw new Error("wrong kind");
       mode = payload.mode === "login" ? "login" : "connect";
       userId = payload.userId;
-      // A connect flow without a user is a malformed state, not a login.
-      if (mode === "connect" && !userId) throw new Error("missing user");
+      workspaceId = payload.workspaceId;
+      if (mode === "connect" && (!userId || !workspaceId)) throw new Error("missing user");
     } catch {
       return fail("error", "invalid_state");
     }
@@ -546,14 +560,19 @@ router.get(
       }
     }
 
+    if (issuedToken) return res.redirect(loginUrl("ok", undefined, issuedToken));
+    if (pending2faToken) return res.redirect(loginUrl("2fa", undefined, undefined, pending2faToken));
+
+    if (!(await canManageSocial(userId!, workspaceId!))) {
+      return closePopup(res, "error", "no_workspace");
+    }
+
     try {
-      // Upsert on (userId, provider), which is the collection's unique key:
-      // connecting a second time replaces the token and refreshes the profile
-      // instead of leaving a duplicate row behind.
       await SocialConnection.findOneAndUpdate(
-        { userId, provider: "linkedin" },
+        { workspaceId, provider: "linkedin" },
         {
           $set: {
+            userId,
             providerUserId: profile.sub,
             name: profile.name,
             email: profile.email,
@@ -582,25 +601,8 @@ router.get(
         .join(" | ");
 
       console.error("[linkedin] could not save connection:", detail);
-
-      // Carried to the page as well as the log while this is being diagnosed.
-      // The server's logs are not reachable from where the failure is seen, and
-      // a message that says only "please try again" has sent us round the same
-      // loop several times. It is our own error text — no LinkedIn response
-      // body, no token, no secret.
-      // On a login flow the sign-in itself succeeded; failing to store the
-      // posting token must not cost the user their session, so they are still
-      // let in and simply arrive without LinkedIn connected for posting.
-      if (!issuedToken && !pending2faToken) return closePopup(res, "error", "save_failed", detail);
+      return closePopup(res, "error", "save_failed", detail);
     }
-
-    if (pending2faToken) return res.redirect(loginUrl("2fa", undefined, undefined, pending2faToken));
-
-    // A login hands the freshly signed token to the app, which stores it and
-    // completes the sign-in. This is the one place a token travels in a URL:
-    // there is no session and no fetch here to answer, and the client strips it
-    // from the address bar as soon as it has been read.
-    if (issuedToken) return res.redirect(loginUrl("ok", undefined, issuedToken));
 
     closePopup(res, "connected");
   }),
@@ -618,10 +620,10 @@ router.get(
   dashboardCors,
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const conn = await SocialConnection.findOne({
-      userId: req.userId,
-      provider: "linkedin",
-    }).select("name email picture expiresAt scope");
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId);
+    const conn = await findWorkspaceConnection(workspaceId, "linkedin")
+      .select("name email picture expiresAt scope");
 
     // Whether the deployment can run the flow at all. Reported so the panel can
     // say "not configured" in place of a button, rather than navigating the
@@ -681,10 +683,9 @@ router.delete(
   requireAuth,
   blockDemoWrites,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const conn = await SocialConnection.findOne({
-      userId: req.userId,
-      provider: "linkedin",
-    }).select("+accessToken");
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId, SOCIAL_CONNECT_ROLE);
+    const conn = await findWorkspaceConnection(workspaceId, "linkedin").select("+accessToken");
 
     if (!conn) return res.json({ connected: false });
 
@@ -724,10 +725,9 @@ router.post(
     const parsed = checkImageDataUrl(image, MAX_IMAGE_BYTES);
     if ("error" in parsed) throw badRequest(parsed.error);
 
-    const conn = await SocialConnection.findOne({
-      userId: req.userId,
-      provider: "linkedin",
-    }).select("+accessToken");
+    const workspaceId = readWorkspaceId(req.body?.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId, SOCIAL_CONNECT_ROLE);
+    const conn = await findWorkspaceConnection(workspaceId, "linkedin").select("+accessToken");
 
     if (!conn) throw badRequest("Please connect your LinkedIn account first.");
     if (!conn.providerUserId) throw badRequest("Please reconnect your LinkedIn account.");
@@ -770,6 +770,7 @@ router.post(
       // just sent, and this route never hosts it anywhere.
       await SocialPostRun.create({
         userId: req.userId,
+        workspaceId,
         source: "share",
         status: "published",
         postUrn: post.postUrn,

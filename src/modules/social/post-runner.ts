@@ -4,6 +4,7 @@ import { SocialPostRun } from "./models/SocialPostRun.js";
 import { computeNextRun } from "./schedule-time.js";
 import { SocialConnection } from "../identity/models/SocialConnection.js";
 import { decryptSecret } from "../../shared/utils/crypto-box.js";
+import { findWorkspaceConnection } from "./social-connection.service.js";
 import {
   LinkedInApiError,
   createImagePost,
@@ -115,10 +116,7 @@ async function publish(
 async function publishInstagram(
   post: InstanceType<typeof ScheduledPost>,
 ): Promise<{ postUrl: string | null; postUrn: string }> {
-  const conn = await SocialConnection.findOne({
-    userId: post.userId,
-    provider: "instagram",
-  }).select("+accessToken");
+  const conn = await findWorkspaceConnection(post.workspaceId, "instagram").select("+accessToken");
 
   if (!conn) throw new Error("Instagram is not connected. Reconnect it to resume this schedule.");
   if (!conn.providerUserId) {
@@ -205,10 +203,7 @@ async function publishInstagram(
 async function publishLinkedIn(
   post: InstanceType<typeof ScheduledPost>,
 ): Promise<{ postUrl: string | null; postUrn: string }> {
-  const conn = await SocialConnection.findOne({
-    userId: post.userId,
-    provider: "linkedin",
-  }).select("+accessToken");
+  const conn = await findWorkspaceConnection(post.workspaceId, "linkedin").select("+accessToken");
 
   if (!conn) throw new Error("LinkedIn is not connected. Reconnect it to resume this schedule.");
   if (!conn.providerUserId) throw new Error("LinkedIn connection is incomplete. Please reconnect LinkedIn.");

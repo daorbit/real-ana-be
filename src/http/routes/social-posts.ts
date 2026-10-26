@@ -6,7 +6,9 @@ import {
 import { computeNextRun } from "../../modules/social/schedule-time.js";
 import { publishNow } from "../../modules/social/post-runner.js";
 import { SocialPostRun } from "../../modules/social/models/SocialPostRun.js";
-import { SocialConnection } from "../../modules/identity/models/SocialConnection.js";
+import {
+  assertSocialAccess, findWorkspaceConnection, readWorkspaceId,
+} from "../../modules/social/social-connection.service.js";
 import { canReadAnalytics } from "../../infra/http-client/linkedin-auth.js";
 import { Membership } from "../../modules/workspace/models/Membership.js";
 import {
@@ -224,8 +226,8 @@ function readCaption(value: unknown, provider: PostProvider): string {
  * the runner reports it with a reconnect prompt, and refusing the save over it
  * would block editing a schedule for the very account that needs reconnecting.
  */
-async function assertCanPublishTo(userId: string, provider: PostProvider): Promise<void> {
-  const conn = await SocialConnection.findOne({ userId, provider }).select("scope");
+async function assertCanPublishTo(workspaceId: string, provider: PostProvider): Promise<void> {
+  const conn = await findWorkspaceConnection(workspaceId, provider).select("scope");
   if (!conn) {
     throw badRequest(`Connect your ${providerName(provider)} account before scheduling a post.`);
   }
@@ -437,12 +439,12 @@ router.get(
   "/",
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId);
     const [posts, conn, igConn] = await Promise.all([
-      ScheduledPost.find({ userId: req.userId }).sort({ createdAt: -1 }),
-      SocialConnection.findOne({ userId: req.userId, provider: "linkedin" })
-        .select("name picture expiresAt scope"),
-      SocialConnection.findOne({ userId: req.userId, provider: "instagram" })
-        .select("name picture expiresAt scope"),
+      ScheduledPost.find({ userId: req.userId, workspaceId }).sort({ createdAt: -1 }),
+      findWorkspaceConnection(workspaceId, "linkedin").select("name picture expiresAt scope"),
+      findWorkspaceConnection(workspaceId, "instagram").select("name picture expiresAt scope"),
     ]);
 
     res.json({
@@ -494,7 +496,9 @@ router.get(
     // Bounded so a crafted `limit` cannot ask for the whole collection.
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
 
-    const query: Record<string, unknown> = { userId: req.userId };
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId);
+    const query: Record<string, unknown> = { userId: req.userId, workspaceId };
 
     // The cursor is the previous page's last `publishedAt`. Rows share
     // timestamps rarely enough that a strict `$lt` is the right trade against
@@ -525,8 +529,7 @@ router.get(
     // second count query over the same index.
     const [rows, conn] = await Promise.all([
       SocialPostRun.find(query).sort({ publishedAt: -1 }).limit(limit + 1),
-      SocialConnection.findOne({ userId: req.userId, provider: "linkedin" })
-        .select("name picture scope"),
+      findWorkspaceConnection(workspaceId, "linkedin").select("name picture scope"),
     ]);
 
     const hasMore = rows.length > limit;
@@ -574,7 +577,7 @@ router.post(
     // Refused at save time rather than at the first run: a schedule that can
     // never publish is not worth storing, and an error weeks later reads as the
     // scheduler being broken.
-    await assertCanPublishTo(req.userId!, provider);
+    await assertCanPublishTo(workspaceId, provider);
 
     // Checked after the schedule parses, so a malformed request is refused for
     // being malformed rather than reported as a plan limit.

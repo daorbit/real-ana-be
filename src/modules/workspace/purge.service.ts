@@ -26,6 +26,7 @@ import { cancelWorkspaceRenewals } from "../billing/auto-renew.js";
 import { ReportSchedule } from "../reports/models/ReportSchedule.js";
 import { ScheduledPost } from "../social/models/ScheduledPost.js";
 import { SocialPostRun } from "../social/models/SocialPostRun.js";
+import { SocialConnection } from "../identity/models/SocialConnection.js";
 import { Branding } from "../branding/models/Branding.js";
 import { Notification } from "../notifications/models/Notification.js";
 import { OrbitConversation } from "../orbit-history/models/OrbitConversation.js";
@@ -96,6 +97,7 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
     ReportSchedule.deleteMany(byWorkspace),
     ScheduledPost.deleteMany(byWorkspace),
     SocialPostRun.deleteMany(byWorkspace),
+    SocialConnection.deleteMany(byWorkspace),
     Branding.deleteMany(byWorkspace),
     Notification.deleteMany(byWorkspace),
     OrbitConversation.deleteMany(byWorkspace),

@@ -15,6 +15,10 @@ import { encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
 import { requireAuth, blockDemoWrites, jwtSecret, verifySessionToken, AuthedRequest } from "../middleware/auth.js";
+import {
+  SOCIAL_CONNECT_ROLE, assertSocialAccess, canManageSocial, connectionTakenElsewhere,
+  findWorkspaceConnection, readWorkspaceId,
+} from "../../modules/social/social-connection.service.js";
 
 /**
  * Connecting an Instagram professional account.
@@ -48,6 +52,7 @@ const STATE_TTL = "10m";
 
 type StatePayload = {
   userId: string;
+  workspaceId: string;
   nonce: string;
   kind: "instagram-oauth";
 };
@@ -92,7 +97,8 @@ const REASON_TEXT: Record<string, string> = {
   no_publish:
     "Posting permission was not granted. Reconnect and allow Quantalog to publish to continue.",
   already_connected:
-    "That Instagram account is already connected to a different Quantalog account.",
+    "That Instagram account is already connected to a different Quantalog workspace.",
+  no_workspace: "You need editor access to this workspace to connect Instagram.",
   not_professional:
     "Only Instagram Business or Creator accounts can be connected. Switch your account type in the Instagram app, then try again.",
 };
@@ -225,9 +231,15 @@ router.get(
     if (session.demo) return closePopup(res, "error", "demo");
     const userId = session.userId;
 
+    const workspaceId = String(req.query.workspaceId ?? "");
+    if (!workspaceId || !(await canManageSocial(userId, workspaceId))) {
+      return closePopup(res, "error", "no_workspace");
+    }
+
     const state = jwt.sign(
       {
         userId,
+        workspaceId,
         nonce: randomBytes(16).toString("hex"),
         kind: "instagram-oauth",
       } satisfies StatePayload,
@@ -263,13 +275,15 @@ router.get(
     if (!state) return closePopup(res, "error", "invalid_state");
 
     let userId: string;
+    let workspaceId: string;
     try {
       const payload = jwt.verify(state, jwtSecret()) as StatePayload;
       // The `kind` claim stops any other token this app signs — a login token
       // above all — from being replayed here as state.
       if (!safeEqual(payload.kind ?? "", "instagram-oauth")) throw new Error("wrong kind");
-      if (!payload.userId) throw new Error("missing user");
+      if (!payload.userId || !payload.workspaceId) throw new Error("missing user");
       userId = payload.userId;
+      workspaceId = payload.workspaceId;
     } catch {
       return closePopup(res, "error", "invalid_state");
     }
@@ -303,25 +317,20 @@ router.get(
       return closePopup(res, "error", "not_professional");
     }
 
-    // The same Instagram account connected to a second Quantalog user would give
-    // two accounts a token for one feed, and a disconnect from either would read
-    // as broken to the other. Refused rather than silently stolen.
-    const takenByOther = await SocialConnection.findOne({
-      provider: "instagram",
-      providerUserId: profile.userId,
-      userId: { $ne: userId },
-    }).select("_id");
+    const [takenByOther, allowed] = await Promise.all([
+      connectionTakenElsewhere("instagram", profile.userId, workspaceId),
+      canManageSocial(userId, workspaceId),
+    ]);
 
+    if (!allowed) return closePopup(res, "error", "no_workspace");
     if (takenByOther) return closePopup(res, "error", "already_connected");
 
     try {
-      // Upsert on (userId, provider), the collection's unique key: connecting a
-      // second time replaces the token and refreshes the profile instead of
-      // leaving a duplicate row behind.
       await SocialConnection.findOneAndUpdate(
-        { userId, provider: "instagram" },
+        { workspaceId, provider: "instagram" },
         {
           $set: {
+            userId,
             providerUserId: profile.userId,
             // The `@username`, which is the only display identity Instagram
             // gives. No email: the scope does not carry one.
@@ -369,10 +378,10 @@ router.get(
   dashboardCors,
   requireAuth,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const conn = await SocialConnection.findOne({
-      userId: req.userId,
-      provider: "instagram",
-    }).select("name picture expiresAt scope");
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId);
+    const conn = await findWorkspaceConnection(workspaceId, "instagram")
+      .select("name picture expiresAt scope");
 
     // Whether the deployment can run the flow at all. Reported so the panel can
     // say "not configured" in place of a button, rather than opening a popup
@@ -419,12 +428,11 @@ router.delete(
   requireAuth,
   blockDemoWrites,
   asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const removed = await SocialConnection.findOneAndDelete({
-      userId: req.userId,
-      provider: "instagram",
-    });
+    const workspaceId = readWorkspaceId(req.query.workspaceId);
+    await assertSocialAccess(req.userId, workspaceId, SOCIAL_CONNECT_ROLE);
+    const removed = await SocialConnection.findOneAndDelete({ workspaceId, provider: "instagram" });
 
-    if (removed) await pauseInstagramSchedules(req.userId!);
+    if (removed) await pauseInstagramSchedules(workspaceId);
 
     res.json({ connected: false });
   }),
@@ -437,10 +445,10 @@ router.delete(
  * account is not a request to throw it away. Reconnecting and un-pausing brings
  * it straight back.
  */
-async function pauseInstagramSchedules(userId: string): Promise<void> {
+async function pauseInstagramSchedules(workspaceId: string): Promise<void> {
   try {
     await ScheduledPost.updateMany(
-      { userId, provider: "instagram", status: "active" },
+      { workspaceId, provider: "instagram", status: "active" },
       { $set: { status: "paused", lastError: "Instagram was disconnected." } },
     );
   } catch (e) {
@@ -518,7 +526,7 @@ async function handleDeauthorize(req: Request, res: Response): Promise<void> {
   });
 
   if (conn) {
-    await pauseInstagramSchedules(String(conn.userId));
+    await pauseInstagramSchedules(String(conn.workspaceId));
     // No account identifiers in the log — this line exists to confirm the
     // callback is wired up and firing, which does not require naming anyone.
     console.log("[instagram] deauthorized: connection removed");
@@ -578,7 +586,7 @@ async function handleDataDeletion(req: Request, res: Response): Promise<void> {
   if (conn) {
     // The schedules go too, not just paused: this is a deletion request, and
     // keeping the content someone asked us to erase is the thing it forbids.
-    await ScheduledPost.deleteMany({ userId: conn.userId, provider: "instagram" }).catch((e) => {
+    await ScheduledPost.deleteMany({ workspaceId: conn.workspaceId, provider: "instagram" }).catch((e) => {
       console.error("[instagram] could not delete schedules:", (e as Error).message);
     });
   }
