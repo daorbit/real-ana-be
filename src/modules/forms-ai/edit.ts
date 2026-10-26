@@ -8,6 +8,7 @@ import {
 } from "./form-schema.js";
 import { MAX_OPS, parseEditOps, type EditOp } from "./edit-ops.js";
 import { paletteMenu } from "./palettes.js";
+import { mentionsTheme, paletteForPrompt } from "./named-colors.js";
 
 /**
  * Change a form that already exists, without rewriting it.
@@ -64,6 +65,7 @@ function systemPrompt(): string {
     '- Emit "setTheme" only when the request is about appearance. Send only the keys the request is actually about — a request about one colour should patch that one key, not the whole palette.',
     '- For a whole new look ("make it dark", "warmer", "more professional"), send only "palette", set to one of:',
     paletteMenu(),
+    '- When the request names colours ("orange and white"), pick the palette whose mood names that colour. Never pick a palette of a different colour.',
     '- For one colour ("make the button green"), patch that one key. Text colours are corrected for readability automatically.',
     `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}.`,
     `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}.`,
@@ -306,7 +308,7 @@ export async function generateEdit(
     // The theme is read by its own parser, which applies the contrast
     // corrections that keep a generated palette legible. Parsed separately and
     // appended, so a reply that is only a restyle still produces an operation.
-    const themeOp = readThemeOp(json, snapshot.theme as GeneratedTheme | undefined);
+    const themeOp = readThemeOp(json, asked, snapshot.theme as GeneratedTheme | undefined);
 
     if (parsed.ok) {
       const ops = themeOp ? [...parsed.ops, themeOp] : parsed.ops;
@@ -322,16 +324,28 @@ export async function generateEdit(
 }
 
 /** The `setTheme` operation in a reply, run through the theme parser. */
-function readThemeOp(json: unknown, currentTheme?: GeneratedTheme): EditOp | null {
-  if (!json || typeof json !== "object") return null;
-  const ops = (json as Record<string, unknown>).ops;
-  if (!Array.isArray(ops)) return null;
+function readThemeOp(json: unknown, prompt: string, currentTheme?: GeneratedTheme): EditOp | null {
+  const ops = json && typeof json === "object" ? (json as Record<string, unknown>).ops : null;
+  const raw = Array.isArray(ops)
+    ? (ops.find(
+        (o) => o && typeof o === "object" && (o as Record<string, unknown>).op === "setTheme",
+      ) as Record<string, unknown> | undefined)
+    : undefined;
 
-  const raw = ops.find(
-    (o) => o && typeof o === "object" && (o as Record<string, unknown>).op === "setTheme",
-  ) as Record<string, unknown> | undefined;
-  if (!raw) return null;
+  const patch = alignPaletteWithPrompt(raw?.patch, prompt);
+  if (!patch) return null;
 
-  const parsed = parseGeneratedTheme({ theme: raw.patch }, currentTheme);
+  const parsed = parseGeneratedTheme({ theme: patch }, currentTheme);
   return parsed.ok ? { op: "setTheme", patch: parsed.theme } : null;
+}
+
+function alignPaletteWithPrompt(patch: unknown, prompt: string): Record<string, unknown> | null {
+  const asked = paletteForPrompt(prompt);
+  const current = patch && typeof patch === "object" ? (patch as Record<string, unknown>) : null;
+
+  if (!current) return asked && mentionsTheme(prompt) ? { palette: asked } : null;
+  if (asked && "palette" in current && current.palette !== asked) {
+    return { ...current, palette: asked, accentColor: undefined };
+  }
+  return current;
 }

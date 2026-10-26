@@ -105,6 +105,48 @@ export const FORM_PALETTES = {
       textMode: "dark",
     },
   },
+  citrus: {
+    mood: "white with bright orange, energetic, food delivery, fitness, sales, promotions",
+    colors: {
+      pageBg: "#fff4ec",
+      cardBg: "#ffffff",
+      cardBorder: "#fde0cc",
+      accentColor: "#ea580c",
+      labelColor: "#2b1608",
+      inputBg: "#ffffff",
+      inputBorder: "#f6cfb3",
+      inputTextColor: "#2b1608",
+      textMode: "dark",
+    },
+  },
+  ember: {
+    mood: "white with bold red, urgent, sports, events, sign-ups",
+    colors: {
+      pageBg: "#fdf0f0",
+      cardBg: "#ffffff",
+      cardBorder: "#f5d6d6",
+      accentColor: "#dc2626",
+      labelColor: "#2a1010",
+      inputBg: "#ffffff",
+      inputBorder: "#ecc4c4",
+      inputTextColor: "#2a1010",
+      textMode: "dark",
+    },
+  },
+  lagoon: {
+    mood: "white with teal, fresh, travel, spas, startups",
+    colors: {
+      pageBg: "#ecf7f6",
+      cardBg: "#ffffff",
+      cardBorder: "#d2ebe8",
+      accentColor: "#0f8a80",
+      labelColor: "#0f2725",
+      inputBg: "#ffffff",
+      inputBorder: "#bfe0dc",
+      inputTextColor: "#0f2725",
+      textMode: "dark",
+    },
+  },
   blush: {
     mood: "soft pink and rose, beauty, salons, baby showers, celebrations",
     colors: {
