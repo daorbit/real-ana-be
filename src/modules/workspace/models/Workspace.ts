@@ -88,6 +88,10 @@ const workspaceSchema = new Schema(
         enabledAt: { type: Date },
         paidAt: { type: Date },
       },
+      invoicing: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+      },
     },
 
     /**

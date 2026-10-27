@@ -111,6 +111,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "PUT", pattern: route("/theme"), action: null },
   { method: "POST", pattern: route("/onboarding-ai/copy"), action: null },
   { method: "POST", pattern: route("/forms-token"), action: null },
+  { method: "POST", pattern: route("/invoices-token"), action: null },
   { method: "POST", pattern: /^\/share\/(caption|plan|plan-image)\/?$/, action: null },
 
   { method: "POST", pattern: route(`${SITE}/seo/analyze`), action: "seo.audit_run", kind: "seo" },

@@ -15,6 +15,7 @@ import googleReviewsRoutes from "./http/routes/google-reviews.js";
 import socialPostRoutes from "./http/routes/social-posts.js";
 import workspaceRoutes from "./http/routes/workspaces.js";
 import formsTokenRoutes from "./http/routes/forms-token.js";
+import invoicesTokenRoutes from "./http/routes/invoices-token.js";
 import socialAiRoutes from "./http/routes/social-ai.js";
 import collectRoutes from "./http/routes/collect.js";
 import trackRoutes from "./http/routes/track.js";
@@ -234,6 +235,7 @@ app.use("/api/workspaces", dashboardCors, requireUnlocked, socialAiRoutes);
 app.use("/api/workspaces", dashboardCors, requireUnlocked, workspaceRoutes);
 
 app.use("/api/workspaces", dashboardCors, requireUnlocked, formsTokenRoutes);
+app.use("/api/workspaces", dashboardCors, requireUnlocked, invoicesTokenRoutes);
 
 app.use("/api/workspaces", dashboardCors, requireUnlocked, seoRoutes);
 app.use("/api/workspaces", dashboardCors, requireUnlocked, searchConsoleRoutes);

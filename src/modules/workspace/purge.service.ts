@@ -41,6 +41,7 @@ import { deleteWorkspaceNavLogos } from "./nav-prefs.service.js";
 import { disconnectGoogleReviews } from "../reviews/connection.service.js";
 import { disconnectSearchConsole } from "../seo/search-console-connection.service.js";
 import { purgeFormsWorkspace } from "../../infra/http-client/forms-service.js";
+import { purgeInvoiceWorkspace } from "../../infra/http-client/invoice-service.js";
 
 async function purgeSiteData(siteIds: string[]): Promise<void> {
   if (!siteIds.length) return;
@@ -72,7 +73,9 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
   const byWorkspace = { workspaceId: { $in: workspaceIds } };
 
   await cancelWorkspaceRenewals(workspaceIds);
-  await Promise.all(workspaceIds.map((id) => purgeFormsWorkspace(id)));
+  await Promise.all(
+    workspaceIds.flatMap((id) => [purgeFormsWorkspace(id), purgeInvoiceWorkspace(id)]),
+  );
 
   const sites = await Site.find(byWorkspace).select("siteId").lean();
   const siteIds = sites.map((s) => s.siteId as string);
