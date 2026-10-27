@@ -36,6 +36,7 @@ const router = Router();
 const ADMIN_ROLE_ROUTES: { method: string; path: RegExp }[] = [
   { method: "GET", path: /^\/users$/ },
   { method: "GET", path: /^\/users\/[^/]+\/(overview|billing)$/ },
+  { method: "PUT", path: /^\/users\/[^/]+\/audience$/ },
   { method: "POST", path: /^\/impersonate\/[^/]+$/ },
   { method: "GET", path: /^\/email\/(status|templates|segments|recipients)$/ },
   { method: "POST", path: /^\/email\/(preview|send|test)$/ },
@@ -68,10 +69,13 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
     ];
   }
   if (role === "admin" || role === "user") filter.role = role;
+  const audience = String(req.query.audience ?? "").trim();
+  if (audience === "internal") filter.audience = "internal";
+  if (audience === "external") filter.audience = { $ne: "internal" };
 
   const [users, total] = await Promise.all([
     User.find(filter)
-      .select("email name role avatarUrl createdAt totpEnabled screenLockEnabled")
+      .select("email name role audience avatarUrl createdAt totpEnabled screenLockEnabled")
       .sort({ createdAt: -1 })
       .skip((page - 1) * USERS_PAGE_SIZE)
       .limit(USERS_PAGE_SIZE),
@@ -145,6 +149,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
         email: u.email,
         name: u.name,
         role: u.role,
+        audience: u.audience === "internal" ? "internal" : "external",
         avatarUrl: u.avatarUrl ?? "",
         createdAt: u.get("createdAt"),
         totpEnabled: Boolean(u.totpEnabled),
@@ -262,6 +267,18 @@ router.post("/users/:userId/screen-lock/reset", async (req: AuthedRequest, res: 
   ).catch((e) => console.error("[admin] screen-lock-reset notice failed:", (e as Error)?.message));
 
   res.json({ ok: true });
+});
+
+router.put("/users/:userId/audience", async (req: AuthedRequest, res: Response) => {
+  const audience = req.body?.audience;
+  if (audience !== "internal" && audience !== "external")
+    return res.status(400).json({ error: "audience must be internal or external" });
+
+  const target = await User.findByIdAndUpdate(req.params.userId, { audience }, { new: true }).select("email audience");
+  if (!target) return res.status(404).json({ error: "user not found" });
+
+  console.log(`[admin] ${req.userId} marked user ${target.id} (${target.email}) as ${audience}`);
+  res.json({ id: target.id, audience });
 });
 
 router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {

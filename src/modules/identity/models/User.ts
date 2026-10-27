@@ -27,6 +27,7 @@ const userSchema = new Schema(
     dateLocale: { type: String, trim: true, default: "" },
     timezone: { type: String, trim: true, default: "" },
     role: { type: String, enum: ROLES, required: true, default: "user" },
+    audience: { type: String, enum: ["internal", "external"], default: "external" },
     totpEnabled: { type: Boolean, default: false },
     totpSecretEnc: { type: String, default: "" },
     totpBackupCodeHashes: { type: [String], default: [] },
