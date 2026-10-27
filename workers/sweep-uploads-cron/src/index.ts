@@ -2,21 +2,27 @@ import { failingServices, QUANTALOG_API, type HealthEnv } from "./health";
 import { sendOpsAlert, type AlertEnv, type OpsAlert } from "./telegram";
 import { diffDownState, type DownChange, type StateEnv } from "./downState";
 
-export type Env = HealthEnv & AlertEnv & StateEnv;
+export type Env = HealthEnv & AlertEnv & StateEnv & { INVOICES_API_BASE?: string };
+
+type Service = "forms" | "invoices";
 
 interface Task {
+  service: Service;
   path: string;
   quietWhen: string;
 }
 
 const EVERY_TICK: Task[] = [
-  { path: "sweep-uploads", quietWhen: '"found":0' },
-  { path: "sweep-payments", quietWhen: '"deleted":0,"staleBookingHolds":0' },
+  { service: "forms", path: "sweep-uploads", quietWhen: '"found":0' },
+  { service: "forms", path: "sweep-payments", quietWhen: '"deleted":0,"staleBookingHolds":0' },
 ];
 
-const DAILY: Task = { path: "sweep-partials", quietWhen: '"deletedCount":0' };
+const DAILY: Task = { service: "forms", path: "sweep-partials", quietWhen: '"deletedCount":0' };
 const DAILY_HOUR_UTC = 3;
 const HEALTH_EVERY_MINUTES = 5;
+
+const INVOICE_EMAILS: Task = { service: "invoices", path: "scheduled-emails", quietWhen: '"sent":0,"failed":0' };
+const INVOICE_EMAILS_EVERY_MINUTES = 5;
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 10_000;
@@ -24,8 +30,13 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function baseFor(env: Env, service: Service): string {
+  const base = service === "invoices" ? env.INVOICES_API_BASE ?? "" : env.FORMS_API_BASE;
+  return base.replace(/\/$/, "");
+}
+
 async function callCronRoute(env: Env, task: Task): Promise<void> {
-  const url = `${env.FORMS_API_BASE.replace(/\/$/, "")}/api/cron/${task.path}`;
+  const url = `${baseFor(env, task.service)}/api/cron/${task.path}`;
 
   let lastError: Error | undefined;
 
@@ -58,10 +69,12 @@ async function callCronRoute(env: Env, task: Task): Promise<void> {
   throw new Error(`${task.path} tick failed after ${MAX_ATTEMPTS} attempts: ${lastError?.message}`);
 }
 
-function tasksFor(scheduledTime: number): Task[] {
+function tasksFor(env: Env, scheduledTime: number): Task[] {
   const at = new Date(scheduledTime);
-  const daily = at.getUTCHours() === DAILY_HOUR_UTC && at.getUTCMinutes() === 0;
-  return daily ? [...EVERY_TICK, DAILY] : EVERY_TICK;
+  const tasks = [...EVERY_TICK];
+  if (at.getUTCHours() === DAILY_HOUR_UTC && at.getUTCMinutes() === 0) tasks.push(DAILY);
+  if (env.INVOICES_API_BASE && at.getUTCMinutes() % INVOICE_EMAILS_EVERY_MINUTES === 0) tasks.push(INVOICE_EMAILS);
+  return tasks;
 }
 
 function isHealthTick(scheduledTime: number): boolean {
@@ -97,8 +110,8 @@ function alertsFor(change: DownChange, sweepErrors: string[]): OpsAlert[] {
   }
   if (sweepErrors.length) {
     alerts.push({
-      title: "Forms cron failed",
-      where: "Forms API · /api/cron",
+      title: "Scheduled job failed",
+      where: "Forms or Invoicing API · /api/cron",
       detail: sweepErrors.join("\n"),
       fields: [{ label: "Worker", value: "sweep-uploads-cron" }],
     });
@@ -109,7 +122,7 @@ function alertsFor(change: DownChange, sweepErrors: string[]): OpsAlert[] {
 async function runTick(env: Env, scheduledTime: number): Promise<void> {
   const healthTick = isHealthTick(scheduledTime);
   const [sweepErrors, down] = await Promise.all([
-    runSweeps(env, tasksFor(scheduledTime)),
+    runSweeps(env, tasksFor(env, scheduledTime)),
     healthTick ? failingServices(env) : Promise.resolve([]),
   ]);
 

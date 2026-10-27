@@ -38,6 +38,7 @@ import billingRoutes from "./http/routes/billing.js";
 import webhookRoutes from "./http/routes/webhooks.js";
 import cronRoutes from "./http/routes/cron.js";
 import formsInternalRoutes from "./http/routes/forms-internal.js";
+import invoicesInternalRoutes from "./http/routes/invoices-internal.js";
 import reportRoutes from "./http/routes/reports.js";
 import telegramRoutes from "./http/routes/telegram.js";
 import telegramWebhookRoutes from "./http/routes/telegram-webhook.js";
@@ -114,6 +115,7 @@ app.use("/api/workspaces/:wid/media", express.json({ limit: "40mb" }));
 app.use("/api/workspaces/:wid/orbit/ask", express.json({ limit: "8mb" }));
 // A form-generation request can carry a photo of the form being recreated.
 app.use("/api/internal/forms/generate/:workspaceId", express.json({ limit: "8mb" }));
+app.use("/api/internal/invoices/email/:workspaceId", express.json({ limit: "8mb" }));
 // Razorpay webhook signatures are over the exact request bytes, so this route
 // must see the raw body rather than the parsed-and-reserialised JSON every
 // other route gets — it has to be registered before the global json parser.
@@ -284,6 +286,7 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/cron", cronRoutes);
 
 app.use("/api/internal/forms", formsInternalRoutes);
+app.use("/api/internal/invoices", invoicesInternalRoutes);
 
 app.use("/.well-known", connectorCors, requireMcpEnabled, wellKnownRoutes);
 app.use("/oauth", connectorCors, requireMcpEnabled, oauthRoutes);

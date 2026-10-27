@@ -64,11 +64,17 @@ export function mailConfigured(): boolean {
 }
 
 /** The address recipients see. Falls back to the login account. */
-export function mailFrom(): string {
+export function mailFrom(displayName?: string): string {
   const address = process.env.SMTP_FROM || process.env.SMTP_USER || "";
-  const name = process.env.SMTP_FROM_NAME || "Quantalog";
+  const name = (displayName || process.env.SMTP_FROM_NAME || "Quantalog").replace(/["\r\n<>]/g, "");
   return address ? `"${name}" <${address}>` : "";
 }
+
+export type SendOptions = {
+  cc?: string[];
+  replyTo?: string;
+  fromName?: string;
+};
 
 /**
  * The shared transport, built on first use.
@@ -199,10 +205,13 @@ export async function sendOne(
   attachments: { filename: string; content: Buffer; contentType?: string; cid?: string }[] = [],
   /** Extra headers, e.g. `List-Unsubscribe` on mail to people without an account. */
   headers?: Record<string, string>,
+  options: SendOptions = {},
 ): Promise<void> {
   await getTransport().sendMail({
-    from: mailFrom(),
+    from: mailFrom(options.fromName),
     to: to.name ? `"${to.name}" <${to.email}>` : to.email,
+    ...(options.cc?.length ? { cc: options.cc } : {}),
+    ...(options.replyTo ? { replyTo: options.replyTo } : {}),
     subject,
     text,
     // Everything goes out branded — an unstyled fallback would be the one

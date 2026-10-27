@@ -31,6 +31,7 @@ crons = ["* * * * *"]
 # sibling Workers here call. Not a secret: CRON_SECRET is the credential, and it
 # is set via `wrangler secret put`, never in this file.
 FORMS_API_BASE = "https://forms.daorbit.in"
+INVOICES_API_BASE = "https://invoicing.daorbit.in"
 API_BASE = "https://quantalog-be.daorbit.in"
 DASHBOARD_URL = "https://studio-quantalog.daorbit.in"
 SITE_URL = "https://quantalog.daorbit.in"
