@@ -20,6 +20,7 @@
     "backfill:media-app": "tsx scripts/backfill-media-app.ts",
     "backfill:site-first-event": "tsx scripts/backfill-site-first-event.ts",
     "backfill:funnels-app": "tsx scripts/backfill-funnels-app.ts",
+    "set:member-role": "tsx scripts/set-member-role.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {

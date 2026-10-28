@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { isValidObjectId } from "mongoose";
 import { asyncHandler } from "../middleware/async-handler.js";
-import { invoiceServiceSecret } from "../../shared/utils/invoice-workspace-token.js";
+import { authorizeInvoiceService } from "./invoices-internal-auth.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { overRateLimit } from "../../modules/security/rate-limit.service.js";
 import { mailConfigured, sendOne } from "../../infra/mail/mailer.js";
 import { documentEmailHtml, documentEmailText, readDocumentEmail } from "../../modules/invoicing/document-email.js";
+import { FX_BASE, getCachedRates } from "../../modules/billing/fx.js";
 
 const router = Router();
 
@@ -14,24 +15,20 @@ const LOGO_CID = "quantalog-logo";
 const DAILY_EMAILS = 200;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function authorize(req: Request, res: Response): boolean {
-  const secret = invoiceServiceSecret();
-  if (!secret) {
-    console.error("[invoices-internal] INVOICE_SERVICE_SECRET is not set, refusing");
-    res.status(503).json({ error: "invoices integration is not configured" });
-    return false;
-  }
-  if (req.get("authorization") !== `Bearer ${secret}`) {
-    res.status(401).json({ error: "unauthorized" });
-    return false;
-  }
-  return true;
-}
+router.get(
+  "/fx",
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!authorizeInvoiceService(req, res)) return;
+    const snapshot = await getCachedRates();
+    if (!snapshot) return res.status(404).json({ error: "no_rates" });
+    res.json({ base: FX_BASE, rates: snapshot.rates, fetchedAt: snapshot.fetchedAt });
+  }),
+);
 
 router.post(
   "/email/:workspaceId",
   asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
-    if (!authorize(req, res)) return;
+    if (!authorizeInvoiceService(req, res)) return;
     const { workspaceId } = req.params;
 
     if (!mailConfigured()) {
