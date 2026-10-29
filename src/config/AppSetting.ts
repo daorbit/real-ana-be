@@ -15,6 +15,7 @@ export const AppSetting = mongoose.model("AppSetting", appSettingSchema);
 export const SETTING_DEMO_DAILY_LIMIT = "demo.dailyLimitPerIp";
 export const SETTING_REFERRAL_PROGRAM = "referrals.program";
 export const SETTING_OPS_ALERTS = "ops.alerts";
+export const SETTING_DB_CONNECTIONS = "admin.dbConnections";
 
 /** How many demo sessions one address may start per day before being refused. */
 export const DEFAULT_DEMO_DAILY_LIMIT = 3;

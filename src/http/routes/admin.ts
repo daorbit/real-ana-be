@@ -25,6 +25,13 @@ import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, A
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
 import { getOpsAlertSettings, setOpsAlertSettings } from "../../modules/admin/ops-alert-settings.js";
+import { DEFAULT_DB_LIMIT_BYTES, readDbStorage } from "../../modules/admin/db-stats.service.js";
+import {
+  addDbConnection,
+  dbConnectionStats,
+  listDbConnections,
+  removeDbConnection,
+} from "../../modules/admin/db-connections.service.js";
 import { changeUserRole, isRole } from "../../modules/admin/user-role.service.js";
 import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
 import { sendOpsTestAlert } from "../../infra/monitoring/ops-alert.js";
@@ -386,19 +393,15 @@ router.post("/ops-alerts/test", async (_req: AuthedRequest, res: Response) => {
   }
 });
 
- 
-const DB_PLAN_LIMIT_BYTES = 512 * 1024 * 1024;
 
 router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
   const conn = mongoose.connection;
   if (conn.readyState !== 1 || !conn.db) {
     return res.status(503).json({ error: "database not connected" });
   }
-  const db = conn.db;
- 
-  // Both are external services and slow to answer; neither must delay the
-  // database figures, which are the point of the page.
-  const [cloudinary, workersAi] = await Promise.all([
+
+  const [storage, cloudinary, workersAi] = await Promise.all([
+    readDbStorage(conn.db, DEFAULT_DB_LIMIT_BYTES),
     cloudinaryUsage().catch((e) => {
       console.error("[admin] cloudinary usage failed:", e instanceof Error ? e.message : e);
       return null;
@@ -409,46 +412,27 @@ router.get("/db/stats", async (_req: AuthedRequest, res: Response) => {
     }),
   ]);
 
-  const stats = await db.command({ dbStats: 1 });
-  const cols = await db.listCollections().toArray();
+  res.json({ ...storage, cloudinary, workersAi });
+});
 
-  const collections = await Promise.all(
-    cols.map(async (c) => {
-      try {
-        const cs = await db.command({ collStats: c.name });
-        return {
-          name: c.name,
-          count: cs.count ?? 0,
-          dataSize: cs.size ?? 0,
-          storageSize: cs.storageSize ?? 0,
-          indexSize: cs.totalIndexSize ?? 0,
-        };
-      } catch {
-        return { name: c.name, count: 0, dataSize: 0, storageSize: 0, indexSize: 0 };
-      }
-    })
-  );
-  collections.sort(
-    (a, b) => b.storageSize + b.indexSize - (a.storageSize + a.indexSize)
-  );
+router.get("/db/connections", async (_req: AuthedRequest, res: Response) => {
+  res.json(await listDbConnections());
+});
 
-  const storageSize = stats.storageSize ?? 0;
-  const indexSize = stats.indexSize ?? 0;
-  const used = stats.totalSize ?? storageSize + indexSize;
+router.post("/db/connections", async (req: AuthedRequest, res: Response) => {
+  const connection = await addDbConnection(req.body ?? {});
+  console.log(`[admin] ${req.userId} added database connection ${connection.id} (${connection.host})`);
+  res.status(201).json(connection);
+});
 
-  res.json({
-    name: stats.db,
-    collections: stats.collections ?? collections.length,
-    objects: stats.objects ?? 0,
-    dataSize: stats.dataSize ?? 0,
-    storageSize,
-    indexSize,
-    used,
-    limit: DB_PLAN_LIMIT_BYTES,
-    collectionStats: collections,
-    cloudinary,
-    workersAi,
-  });
+router.delete("/db/connections/:id", async (req: AuthedRequest, res: Response) => {
+  await removeDbConnection(req.params.id);
+  console.log(`[admin] ${req.userId} removed database connection ${req.params.id}`);
+  res.json({ ok: true });
+});
+
+router.get("/db/connections/:id/stats", async (req: AuthedRequest, res: Response) => {
+  res.json(await dbConnectionStats(req.params.id));
 });
 
 /** Neuron usage over time, for the AI-usage tab's trend chart — its own
