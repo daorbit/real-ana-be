@@ -419,9 +419,10 @@ export async function formLimits(workspaceId: string) {
 
   await rollUsageMonth(workspaceId);
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
-  const sub = await Subscription.findOne({ workspaceId }).select(
-    "formSubmissionsUsed addonFormSubmissionCredits",
-  );
+  const [sub, invoicing] = await Promise.all([
+    Subscription.findOne({ workspaceId }).select("formSubmissionsUsed addonFormSubmissionCredits"),
+    Workspace.exists({ _id: workspaceId, "apps.invoicing.enabled": true }),
+  ]);
 
   return {
     plan: plan.slug,
@@ -435,6 +436,7 @@ export async function formLimits(workspaceId: string) {
     submissionCredits: (sub?.get("addonFormSubmissionCredits") as number) ?? 0,
     notificationEmails: plan.formNotificationEmails,
     fileUploads: plan.formFileUploads,
+    invoicingEnabled: Boolean(invoicing),
   };
 }
 
