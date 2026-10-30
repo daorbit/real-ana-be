@@ -91,17 +91,16 @@ export async function nextTaskKey(workspaceId: string): Promise<number> {
   return Number((updated as { apps?: { tasks?: { seq?: number } } } | null)?.apps?.tasks?.seq ?? 0);
 }
 
-export async function isMember(workspaceId: string, userId: string): Promise<boolean> {
-  return Boolean(await Membership.exists({ workspaceId, userId }));
-}
-
 export async function areMembers(workspaceId: string, userIds: string[]): Promise<boolean> {
   if (!userIds.length) return true;
   const rows = await Membership.find({ workspaceId, userId: { $in: userIds } }).select("userId").lean();
   return new Set(rows.map((row) => String(row.userId))).size === new Set(userIds).size;
 }
 
-export function taskAssigneeIds(task: { assigneeIds?: Types.ObjectId[] | string[] | null; assigneeId?: Types.ObjectId | string | null }) {
+export function taskAssigneeIds(task: {
+  assigneeIds?: Types.ObjectId[] | string[] | null;
+  assigneeId?: Types.ObjectId | string | null;
+}) {
   return task.assigneeIds !== undefined && task.assigneeIds !== null
     ? task.assigneeIds.map(String)
     : task.assigneeId

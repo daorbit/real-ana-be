@@ -110,7 +110,7 @@ router.post(
       draft.bucketId ? bucketBelongs(ws.id, draft.bucketId) : true,
       draft.bucketId ? null : firstBucketId(ws.id),
     ]);
-    if (!assigneeOk) return res.status(400).json({ error: "The assignee isn't a member of this workspace" });
+    if (!assigneeOk) return res.status(400).json({ error: "Every assignee must be a member of this workspace" });
     if (!bucketOk) return res.status(400).json({ error: "That bucket doesn't exist" });
     if (!draft.bucketId && fallbackBucket) draft.bucketId = fallbackBucket;
 

@@ -1,5 +1,4 @@
-import { isValidObjectId } from "mongoose";
-import { Types } from "mongoose";
+import { Types, isValidObjectId } from "mongoose";
 import {
   LABEL_COLORS,
   TASK_PRIORITIES,
