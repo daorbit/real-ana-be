@@ -73,6 +73,7 @@ const workspaceSchema = new Schema(
       publicDashboard: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       seoReports: {
         enabled: { type: Boolean, default: false },
@@ -91,16 +92,19 @@ const workspaceSchema = new Schema(
       invoicing: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
       },
       tasks: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
         seq: { type: Number, default: 0 },
         bucketsSeeded: { type: Boolean, default: false },
       },
       insights: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        paidAt: { type: Date },
         nextRunAt: { type: Date, default: null },
       },
     },

@@ -73,4 +73,8 @@ describe("unlockApp", () => {
     assert.ok(change.$set["apps.notes.paidAt"] instanceof Date);
     assert.equal(change.$set["apps.notes.paidAt"], change.$set["apps.notes.enabledAt"]);
   });
+
+  test("every paid app can store paidAt on the workspace", () => {
+    for (const app of PAID_APPS) assert.ok(Workspace.schema.path(`apps.${app}.paidAt`), app);
+  });
 });
