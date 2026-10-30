@@ -2,13 +2,12 @@ import { Types } from "mongoose";
 import { Task, type TaskStatus } from "./models/Task.js";
 import { Membership } from "../workspace/models/Membership.js";
 import { Workspace } from "../workspace/models/Workspace.js";
-import { emitTo } from "../notifications/notify.service.js";
-
+import { emitToMany } from "../notifications/notify.service.js";
 const OPEN_LIMIT = 2_000;
 const DONE_LIMIT = 200;
 const DONE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TASK_FIELDS =
-  "key bucketId title notes status priority assigneeId dueDate order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
+  "key bucketId title notes status priority assigneeIds assigneeId dueDate order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
 
 type TaskRow = {
   _id: Types.ObjectId;
@@ -21,6 +20,7 @@ type TaskRow = {
   notes: string;
   status: TaskStatus;
   priority: string;
+  assigneeIds?: Types.ObjectId[];
   assigneeId: Types.ObjectId | null;
   dueDate: Date | null;
   order: number;
@@ -32,6 +32,11 @@ type TaskRow = {
 };
 
 export function presentTask(task: TaskRow) {
+  const assigneeIds = task.assigneeIds !== undefined && task.assigneeIds !== null
+    ? task.assigneeIds.map(String)
+    : task.assigneeId
+      ? [String(task.assigneeId)]
+      : [];
   return {
     id: String(task._id),
     key: task.key ?? 0,
@@ -40,7 +45,8 @@ export function presentTask(task: TaskRow) {
     notes: task.notes ?? "",
     status: task.status,
     priority: task.priority,
-    assigneeId: task.assigneeId ? String(task.assigneeId) : null,
+    assigneeIds,
+    assigneeId: assigneeIds[0] ?? null,
     dueDate: task.dueDate,
     order: task.order,
     link: task.link ?? "",
@@ -89,16 +95,29 @@ export async function isMember(workspaceId: string, userId: string): Promise<boo
   return Boolean(await Membership.exists({ workspaceId, userId }));
 }
 
-export function notifyAssignee(args: {
-  assigneeId: string | null | undefined;
+export async function areMembers(workspaceId: string, userIds: string[]): Promise<boolean> {
+  if (!userIds.length) return true;
+  const rows = await Membership.find({ workspaceId, userId: { $in: userIds } }).select("userId").lean();
+  return new Set(rows.map((row) => String(row.userId))).size === new Set(userIds).size;
+}
+
+export function taskAssigneeIds(task: { assigneeIds?: Types.ObjectId[] | string[] | null; assigneeId?: Types.ObjectId | string | null }) {
+  return task.assigneeIds !== undefined && task.assigneeIds !== null
+    ? task.assigneeIds.map(String)
+    : task.assigneeId
+      ? [String(task.assigneeId)]
+      : [];
+}
+
+export function notifyAssignees(args: {
+  assigneeIds: string[];
   actorId: string | undefined;
   title: string;
   workspaceName: string;
 }) {
-  if (!args.assigneeId) return Promise.resolve();
-  return emitTo({
+  if (!args.assigneeIds.length) return Promise.resolve();
+  return emitToMany(args.assigneeIds, {
     type: "task.assigned",
-    userId: args.assigneeId,
     actorId: args.actorId ?? null,
     data: { title: args.title, workspaceName: args.workspaceName },
     link: "/app/tasks",

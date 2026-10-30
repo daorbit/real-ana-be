@@ -35,6 +35,7 @@ const taskSchema = new Schema(
     notes: { type: String, default: "", maxlength: 4000 },
     status: { type: String, enum: TASK_STATUSES, default: "todo" },
     priority: { type: String, enum: TASK_PRIORITIES, default: "none" },
+    assigneeIds: { type: [{ type: Schema.Types.ObjectId, ref: "User" }], default: undefined },
     assigneeId: { type: Schema.Types.ObjectId, ref: "User", default: null },
     dueDate: { type: Date, default: null },
     order: { type: Number, default: 0 },

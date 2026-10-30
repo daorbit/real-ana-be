@@ -14,10 +14,11 @@ import {
   workspaceBuckets,
 } from "../../modules/tasks/buckets.service.js";
 import {
-  isMember,
+  areMembers,
   nextTaskKey,
-  notifyAssignee,
+  notifyAssignees,
   presentTask,
+  taskAssigneeIds,
   topOrder,
   workspaceTasks,
 } from "../../modules/tasks/tasks.service.js";
@@ -105,7 +106,7 @@ router.post(
     const draft = parseTaskPatch(req.body, { requireTitle: true });
     if (typeof draft === "string") return res.status(400).json({ error: draft });
     const [assigneeOk, bucketOk, fallbackBucket] = await Promise.all([
-      draft.assigneeId ? isMember(ws.id, draft.assigneeId) : true,
+      areMembers(ws.id, draft.assigneeIds ?? []),
       draft.bucketId ? bucketBelongs(ws.id, draft.bucketId) : true,
       draft.bucketId ? null : firstBucketId(ws.id),
     ]);
@@ -133,8 +134,8 @@ router.post(
       createdBy: req.userId,
     });
 
-    await notifyAssignee({
-      assigneeId: draft.assigneeId,
+    await notifyAssignees({
+      assigneeIds: draft.assigneeIds ?? [],
       actorId: req.userId,
       title: task.title,
       workspaceName: String(ws.get("name") ?? ""),
@@ -156,10 +157,13 @@ router.patch(
     const patch = parseTaskPatch(req.body, { requireTitle: false });
     if (typeof patch === "string") return res.status(400).json({ error: patch });
 
-    const previousAssignee = task.assigneeId ? String(task.assigneeId) : null;
-    const assigneeChanged = patch.assigneeId !== undefined && patch.assigneeId !== previousAssignee;
-    if (assigneeChanged && patch.assigneeId && !(await isMember(ws.id, patch.assigneeId)))
-      return res.status(400).json({ error: "The assignee isn't a member of this workspace" });
+    const previousAssignees = taskAssigneeIds(task);
+    const assigneeChanged =
+      patch.assigneeIds !== undefined &&
+      (patch.assigneeIds.length !== previousAssignees.length ||
+        patch.assigneeIds.some((id) => !previousAssignees.includes(id)));
+    if (assigneeChanged && !(await areMembers(ws.id, patch.assigneeIds ?? [])))
+      return res.status(400).json({ error: "Every assignee must be a member of this workspace" });
 
     if (patch.bucketId && !(await bucketBelongs(ws.id, patch.bucketId)))
       return res.status(400).json({ error: "That bucket doesn't exist" });
@@ -176,8 +180,8 @@ router.patch(
     await task.save();
 
     if (assigneeChanged)
-      await notifyAssignee({
-        assigneeId: patch.assigneeId,
+      await notifyAssignees({
+        assigneeIds: (patch.assigneeIds ?? []).filter((id) => !previousAssignees.includes(id)),
         actorId: req.userId,
         title: task.title,
         workspaceName: String(ws.get("name") ?? ""),

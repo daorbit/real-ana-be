@@ -1,4 +1,5 @@
 import { isValidObjectId } from "mongoose";
+import { Types } from "mongoose";
 import {
   LABEL_COLORS,
   TASK_PRIORITIES,
@@ -13,7 +14,7 @@ export type TaskPatch = {
   notes?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
-  assigneeId?: string | null;
+  assigneeIds?: string[];
   dueDate?: Date | null;
   order?: number;
   link?: string;
@@ -84,6 +85,16 @@ function parseChecklist(value: unknown): TaskPatch["checklist"] | string {
   return items;
 }
 
+function parseAssigneeIds(value: unknown): string[] | string {
+  if (!Array.isArray(value)) return "Assignees must be a list";
+  const ids = new Set<string>();
+  for (const raw of value) {
+    if (!isValidObjectId(raw)) return "Unknown assignee";
+    ids.add(new Types.ObjectId(String(raw)).toString());
+  }
+  return [...ids];
+}
+
 export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: boolean }): TaskPatch | string {
   const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const patch: TaskPatch = {};
@@ -107,10 +118,14 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
     if (!TASK_PRIORITIES.includes(body.priority as TaskPriority)) return "Unknown priority";
     patch.priority = body.priority as TaskPriority;
   }
-  if (has(body, "assigneeId")) {
+  if (has(body, "assigneeIds")) {
+    const ids = parseAssigneeIds(body.assigneeIds);
+    if (typeof ids === "string") return ids;
+    patch.assigneeIds = ids;
+  } else if (has(body, "assigneeId")) {
     const id = body.assigneeId;
     if (id !== null && id !== "" && !isValidObjectId(id)) return "Unknown assignee";
-    patch.assigneeId = id ? String(id) : null;
+    patch.assigneeIds = id ? [new Types.ObjectId(String(id)).toString()] : [];
   }
   if (has(body, "dueDate")) {
     const due = parseDate(body.dueDate);
