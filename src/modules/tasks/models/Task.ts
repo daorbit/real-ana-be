@@ -6,9 +6,30 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["none", "low", "medium", "high"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+export const LABEL_COLORS = ["blue", "green", "amber", "red", "violet", "pink", "teal", "gray"] as const;
+export type LabelColor = (typeof LABEL_COLORS)[number];
+
+const labelSchema = new Schema(
+  {
+    text: { type: String, required: true, maxlength: 24 },
+    color: { type: String, enum: LABEL_COLORS, default: "gray" },
+  },
+  { _id: false },
+);
+
+const checkItemSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    text: { type: String, required: true, maxlength: 200 },
+    done: { type: Boolean, default: false },
+  },
+  { _id: false },
+);
+
 const taskSchema = new Schema(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true },
+    key: { type: Number, default: 0 },
     title: { type: String, required: true, maxlength: 200 },
     notes: { type: String, default: "", maxlength: 4000 },
     status: { type: String, enum: TASK_STATUSES, default: "todo" },
@@ -17,6 +38,8 @@ const taskSchema = new Schema(
     dueDate: { type: Date, default: null },
     order: { type: Number, default: 0 },
     link: { type: String, default: "", maxlength: 500 },
+    labels: { type: [labelSchema], default: [] },
+    checklist: { type: [checkItemSchema], default: [] },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     completedAt: { type: Date, default: null },
   },

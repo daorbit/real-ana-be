@@ -95,6 +95,7 @@ const workspaceSchema = new Schema(
       tasks: {
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
+        seq: { type: Number, default: 0 },
       },
     },
 

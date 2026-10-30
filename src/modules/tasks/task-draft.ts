@@ -1,5 +1,12 @@
 import { isValidObjectId } from "mongoose";
-import { TASK_PRIORITIES, TASK_STATUSES, type TaskPriority, type TaskStatus } from "./models/Task.js";
+import {
+  LABEL_COLORS,
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  type LabelColor,
+  type TaskPriority,
+  type TaskStatus,
+} from "./models/Task.js";
 
 export type TaskPatch = {
   title?: string;
@@ -10,11 +17,17 @@ export type TaskPatch = {
   dueDate?: Date | null;
   order?: number;
   link?: string;
+  labels?: { text: string; color: LabelColor }[];
+  checklist?: { id: string; text: string; done: boolean }[];
 };
 
 const MAX_TITLE = 200;
 const MAX_NOTES = 4000;
 const MAX_LINK = 500;
+const MAX_LABELS = 6;
+const MAX_LABEL = 24;
+const MAX_CHECK_ITEMS = 30;
+const MAX_CHECK_TEXT = 200;
 
 function has(body: Record<string, unknown>, key: string) {
   return Object.prototype.hasOwnProperty.call(body, key);
@@ -37,6 +50,36 @@ function parseLink(value: unknown): string | "invalid" {
   } catch {
     return "invalid";
   }
+}
+
+function parseLabels(value: unknown): TaskPatch["labels"] | string {
+  if (!Array.isArray(value)) return "Labels must be a list";
+  if (value.length > MAX_LABELS) return `A task can have up to ${MAX_LABELS} labels`;
+  const seen = new Set<string>();
+  const labels: NonNullable<TaskPatch["labels"]> = [];
+  for (const raw of value) {
+    const item = (raw ?? {}) as { text?: unknown; color?: unknown };
+    const text = String(item.text ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL);
+    if (!text || seen.has(text.toLowerCase())) continue;
+    seen.add(text.toLowerCase());
+    const color = LABEL_COLORS.includes(item.color as LabelColor) ? (item.color as LabelColor) : "gray";
+    labels.push({ text, color });
+  }
+  return labels;
+}
+
+function parseChecklist(value: unknown): TaskPatch["checklist"] | string {
+  if (!Array.isArray(value)) return "The checklist must be a list";
+  if (value.length > MAX_CHECK_ITEMS) return `A checklist can have up to ${MAX_CHECK_ITEMS} items`;
+  const items: NonNullable<TaskPatch["checklist"]> = [];
+  for (const raw of value) {
+    const item = (raw ?? {}) as { id?: unknown; text?: unknown; done?: unknown };
+    const text = String(item.text ?? "").trim().slice(0, MAX_CHECK_TEXT);
+    const id = String(item.id ?? "").slice(0, 40);
+    if (!text || !id) continue;
+    items.push({ id, text, done: item.done === true });
+  }
+  return items;
 }
 
 export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: boolean }): TaskPatch | string {
@@ -81,6 +124,16 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
     const link = parseLink(body.link);
     if (link === "invalid") return "The link must be a web address or a Quantalog page";
     patch.link = link;
+  }
+  if (has(body, "labels")) {
+    const labels = parseLabels(body.labels);
+    if (typeof labels === "string") return labels;
+    patch.labels = labels;
+  }
+  if (has(body, "checklist")) {
+    const checklist = parseChecklist(body.checklist);
+    if (typeof checklist === "string") return checklist;
+    patch.checklist = checklist;
   }
   return patch;
 }

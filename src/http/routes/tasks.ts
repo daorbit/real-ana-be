@@ -2,7 +2,14 @@ import { Router, Response } from "express";
 import { isValidObjectId } from "mongoose";
 import { Task } from "../../modules/tasks/models/Task.js";
 import { parseTaskPatch } from "../../modules/tasks/task-draft.js";
-import { isMember, notifyAssignee, presentTask, topOrder, workspaceTasks } from "../../modules/tasks/tasks.service.js";
+import {
+  isMember,
+  nextTaskKey,
+  notifyAssignee,
+  presentTask,
+  topOrder,
+  workspaceTasks,
+} from "../../modules/tasks/tasks.service.js";
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
@@ -51,11 +58,16 @@ router.post(
       if (!allowed.ok) return planLimit(res, allowed.error, allowed.limit, allowed.code);
     }
 
+    const [key, order] = await Promise.all([
+      nextTaskKey(ws.id),
+      draft.order ?? topOrder(ws.id, status),
+    ]);
     const task = await Task.create({
       workspaceId: ws.id,
       ...draft,
+      key,
       status,
-      order: draft.order ?? (await topOrder(ws.id, status)),
+      order,
       completedAt: status === "done" ? new Date() : null,
       createdBy: req.userId,
     });

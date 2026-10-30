@@ -1,15 +1,20 @@
 import { Types } from "mongoose";
 import { Task, type TaskStatus } from "./models/Task.js";
 import { Membership } from "../workspace/models/Membership.js";
+import { Workspace } from "../workspace/models/Workspace.js";
 import { emitTo } from "../notifications/notify.service.js";
 
 const OPEN_LIMIT = 2_000;
 const DONE_LIMIT = 200;
 const DONE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-const TASK_FIELDS = "title notes status priority assigneeId dueDate order link createdBy completedAt createdAt updatedAt";
+const TASK_FIELDS =
+  "key title notes status priority assigneeId dueDate order link labels checklist createdBy completedAt createdAt updatedAt";
 
 type TaskRow = {
   _id: Types.ObjectId;
+  key?: number;
+  labels?: { text: string; color: string }[];
+  checklist?: { id: string; text: string; done: boolean }[];
   title: string;
   notes: string;
   status: TaskStatus;
@@ -27,6 +32,7 @@ type TaskRow = {
 export function presentTask(task: TaskRow) {
   return {
     id: String(task._id),
+    key: task.key ?? 0,
     title: task.title,
     notes: task.notes ?? "",
     status: task.status,
@@ -35,6 +41,8 @@ export function presentTask(task: TaskRow) {
     dueDate: task.dueDate,
     order: task.order,
     link: task.link ?? "",
+    labels: (task.labels ?? []).map(({ text, color }) => ({ text, color })),
+    checklist: (task.checklist ?? []).map(({ id, text, done }) => ({ id, text, done })),
     createdBy: task.createdBy ? String(task.createdBy) : null,
     completedAt: task.completedAt,
     createdAt: task.createdAt,
@@ -62,6 +70,15 @@ export async function workspaceTasks(workspaceId: string) {
 export async function topOrder(workspaceId: string, status: TaskStatus): Promise<number> {
   const first = await Task.findOne({ workspaceId, status }).sort({ order: 1 }).select("order").lean();
   return (first?.order ?? 1) - 1;
+}
+
+export async function nextTaskKey(workspaceId: string): Promise<number> {
+  const updated = await Workspace.findByIdAndUpdate(
+    workspaceId,
+    { $inc: { "apps.tasks.seq": 1 } },
+    { new: true, projection: { "apps.tasks.seq": 1 } },
+  ).lean();
+  return Number((updated as { apps?: { tasks?: { seq?: number } } } | null)?.apps?.tasks?.seq ?? 0);
 }
 
 export async function isMember(workspaceId: string, userId: string): Promise<boolean> {
