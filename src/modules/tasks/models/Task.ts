@@ -32,7 +32,7 @@ const taskSchema = new Schema(
     key: { type: Number, default: 0 },
     bucketId: { type: Schema.Types.ObjectId, ref: "TaskBucket", default: null },
     title: { type: String, required: true, maxlength: 200 },
-    notes: { type: String, default: "", maxlength: 4000 },
+    notes: { type: String, default: "", maxlength: 64_000 },
     status: { type: String, enum: TASK_STATUSES, default: "todo" },
     priority: { type: String, enum: TASK_PRIORITIES, default: "none" },
     assigneeIds: { type: [{ type: Schema.Types.ObjectId, ref: "User" }], default: undefined },

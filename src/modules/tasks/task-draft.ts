@@ -24,7 +24,7 @@ export type TaskPatch = {
 };
 
 const MAX_TITLE = 200;
-const MAX_NOTES = 4000;
+const MAX_NOTES = 64_000;
 const MAX_LINK = 500;
 const MAX_LABELS = 6;
 const MAX_LABEL = 24;
@@ -106,7 +106,7 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
   }
   if (has(body, "notes")) {
     const notes = String(body.notes ?? "").trim();
-    if (notes.length > MAX_NOTES) return `Keep the notes under ${MAX_NOTES} characters`;
+    if (notes.length > MAX_NOTES) return "The notes are too long";
     patch.notes = notes;
   }
   if (has(body, "status")) {
