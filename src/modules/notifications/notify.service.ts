@@ -208,11 +208,11 @@ export async function emitTo(args: EmitUserArgs): Promise<void> {
  */
 export async function emitToMany(
   userIds: string[],
-  args: Omit<EmitUserArgs, "userId">,
+  args: Omit<EmitUserArgs, "userId"> & { includeActor?: boolean },
 ): Promise<void> {
   try {
     const recipients = [...new Set(userIds.map(String))].filter(
-      (userId) => userId !== String(args.actorId ?? ""),
+      (userId) => args.includeActor === true || userId !== String(args.actorId ?? ""),
     );
 
     await deliver(recipients, {

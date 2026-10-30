@@ -118,6 +118,7 @@ export function notifyAssignees(args: {
   return emitToMany(args.assigneeIds, {
     type: "task.assigned",
     actorId: args.actorId ?? null,
+    includeActor: true,
     data: { title: args.title, workspaceName: args.workspaceName },
     link: "/app/tasks",
   });
