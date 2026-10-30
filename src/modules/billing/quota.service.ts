@@ -421,7 +421,11 @@ export async function formLimits(workspaceId: string) {
   const plan = (await currentPlan(workspaceId)) ?? getPlanCatalogEntry("free")!;
   const [sub, invoicing] = await Promise.all([
     Subscription.findOne({ workspaceId }).select("formSubmissionsUsed addonFormSubmissionCredits"),
-    Workspace.exists({ _id: workspaceId, "apps.invoicing.enabled": true }),
+    Workspace.exists({
+      _id: workspaceId,
+      "apps.invoicing.enabled": true,
+      "apps.invoicing.paidAt": { $exists: true },
+    }),
   ]);
 
   return {

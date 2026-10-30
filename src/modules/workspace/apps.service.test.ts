@@ -38,6 +38,13 @@ describe("appEnabledFilter", () => {
   test("builds the query for workspaces with the app on", () => {
     assert.deepEqual(appEnabledFilter("compare"), { "apps.compare.enabled": true });
   });
+
+  test("requires payment for public dashboards", () => {
+    assert.deepEqual(appEnabledFilter("publicDashboard"), {
+      "apps.publicDashboard.enabled": true,
+      "apps.publicDashboard.paidAt": { $exists: true },
+    });
+  });
 });
 
 describe("appEnabled", () => {

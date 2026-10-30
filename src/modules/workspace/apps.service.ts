@@ -1,5 +1,5 @@
 import { Workspace } from "./models/Workspace.js";
-import { paidAppUnlocked } from "../billing/paid-apps.catalog.js";
+import { paidAppUnlocked, PAYMENT_ONLY_APPS, isPaidApp } from "../billing/paid-apps.catalog.js";
 
 export const WORKSPACE_APPS = [
   "compare",
@@ -38,8 +38,12 @@ export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
   insights: "Quantalog Insights is off for this workspace. Turn it on in Apps.",
 };
 
-export function appEnabledFilter(app: WorkspaceApp): Record<string, true> {
-  return { [`apps.${app}.enabled`]: true };
+export function appEnabledFilter(app: WorkspaceApp): Record<string, unknown> {
+  const filter: Record<string, unknown> = { [`apps.${app}.enabled`]: true };
+  if (isPaidApp(app) && PAYMENT_ONLY_APPS.includes(app)) {
+    filter[`apps.${app}.paidAt`] = { $exists: true };
+  }
+  return filter;
 }
 
 type AppsCarrier = { get: (path: string) => unknown };

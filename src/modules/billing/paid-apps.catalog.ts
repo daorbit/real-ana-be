@@ -1,6 +1,18 @@
 import type { WorkspaceApp } from "../workspace/apps.service.js";
 
-export const PAID_APPS = ["notes", "reviews", "alerts", "links", "bio", "popups", "funnels"] as const satisfies readonly WorkspaceApp[];
+export const PAID_APPS = [
+  "notes",
+  "reviews",
+  "alerts",
+  "links",
+  "bio",
+  "popups",
+  "funnels",
+  "publicDashboard",
+  "insights",
+  "tasks",
+  "invoicing",
+] as const satisfies readonly WorkspaceApp[];
 export type PaidApp = (typeof PAID_APPS)[number];
 
 export const DEFAULT_APP_PRICE_INR = 59900;
@@ -13,9 +25,20 @@ export const PAID_APP_NAMES: Record<PaidApp, string> = {
   bio: "Quantalog Link-in-bio",
   popups: "Quantalog Popups",
   funnels: "Quantalog Funnels",
+  publicDashboard: "Quantalog Public Dashboard",
+  insights: "Quantalog Insights",
+  tasks: "Quantalog Tasks",
+  invoicing: "Quantalog Invoicing",
 };
 
-export const PAYMENT_ONLY_APPS: readonly PaidApp[] = ["notes", "popups"];
+export const PAYMENT_ONLY_APPS: readonly PaidApp[] = [
+  "notes",
+  "popups",
+  "publicDashboard",
+  "insights",
+  "tasks",
+  "invoicing",
+];
 
 type AppsCarrier = { get: (path: string) => unknown };
 

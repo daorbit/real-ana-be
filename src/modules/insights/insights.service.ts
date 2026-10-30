@@ -141,7 +141,11 @@ async function runOne(workspaceId: string) {
 }
 
 export async function runDueInsights(): Promise<{ generated: number; failed: number; errors: string[] }> {
-  const due = await Workspace.find({ "apps.insights.enabled": true, "apps.insights.nextRunAt": { $lte: new Date() } })
+  const due = await Workspace.find({
+    "apps.insights.enabled": true,
+    "apps.insights.paidAt": { $exists: true },
+    "apps.insights.nextRunAt": { $lte: new Date() },
+  })
     .sort({ "apps.insights.nextRunAt": 1 })
     .limit(CRON_BATCH)
     .select("_id")

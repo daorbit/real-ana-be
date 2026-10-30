@@ -147,6 +147,9 @@ describe("paid apps catalog", () => {
     assert.equal(paidAppUnlocked(fakeDoc({ apps: { alerts: { enabledAt: new Date() } } }), "alerts"), true);
     assert.equal(paidAppUnlocked(fakeDoc({ apps: { notes: { enabledAt: new Date() } } }), "notes"), false);
     assert.equal(paidAppUnlocked(fakeDoc({ apps: { popups: { enabledAt: new Date() } } }), "popups"), false);
+    for (const app of ["publicDashboard", "insights", "tasks", "invoicing"] as const) {
+      assert.equal(paidAppUnlocked(fakeDoc({ apps: { [app]: { enabledAt: new Date() } } }), app), false, app);
+    }
   });
 
   test("locks a paid app nobody has paid for or used", () => {
