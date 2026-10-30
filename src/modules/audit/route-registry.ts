@@ -12,6 +12,7 @@ import { Competitor } from "../seo/models/Competitor.js";
 import { Backlink } from "../backlinks/models/Backlink.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
 import { BioPage } from "../bio/models/BioPage.js";
+import { Task } from "../tasks/models/Task.js";
 
 type Params = Record<string, string>;
 type Snapshot = (workspaceId: string, params: Params) => Promise<string | undefined>;
@@ -57,6 +58,10 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "POST", pattern: route("/bio"), action: "bio.created", kind: "bio_page" },
   { method: "PUT", pattern: route(`/bio/${ID}`), action: "bio.updated", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
   { method: "DELETE", pattern: route(`/bio/${ID}`), action: "bio.deleted", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
+
+  { method: "POST", pattern: route("/tasks"), action: "task.created", kind: "task", meta: (body) => ({ title: String(body.title ?? "").slice(0, 120) }) },
+  { method: "PATCH", pattern: route(`/tasks/${ID}`), action: null },
+  { method: "DELETE", pattern: route(`/tasks/${ID}`), action: "task.deleted", kind: "task", snapshot: byWorkspace(Task, "title") },
 
   { method: "POST", pattern: route("/targets"), action: "goal.created", kind: "goal" },
   { method: "PUT", pattern: route(`/targets/${ID}`), action: "goal.updated", kind: "goal" },

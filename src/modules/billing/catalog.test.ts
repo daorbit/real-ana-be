@@ -30,6 +30,7 @@ const NUMERIC_LIMITS = [
   "maxGoalTargets",
   "maxPopups",
   "maxBioPages",
+  "maxOpenTasks",
   "alertCheckHours",
   "auditLogDays",
 ] as const;

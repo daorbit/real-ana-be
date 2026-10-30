@@ -37,6 +37,7 @@ export const NOTIFICATION_TYPES = [
   "security.alert",
   "form.submission",
   "referral.rewarded",
+  "task.assigned",
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -113,6 +114,8 @@ export const NOTIFICATION_SPECS: Record<NotificationType, NotificationSpec> = {
   "form.submission": { scope: "workspace", minRole: "editor", optional: true, push: true, mailedElsewhere: true },
 
   "referral.rewarded": { scope: "user", minRole: "viewer", optional: true, push: true, mailedElsewhere: true },
+
+  "task.assigned": { scope: "user", minRole: "viewer", optional: true, push: true, mailedElsewhere: false },
 };
 
 export function isNotificationType(value: unknown): value is NotificationType {

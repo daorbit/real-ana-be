@@ -59,6 +59,8 @@ export const AUDIT_ACTIONS = {
   "bio.created": "workspace",
   "bio.updated": "workspace",
   "bio.deleted": "workspace",
+  "task.created": "workspace",
+  "task.deleted": "workspace",
   "report.created": "analytics",
   "report.updated": "analytics",
   "report.deleted": "analytics",

@@ -3,9 +3,10 @@ import { Embed } from "../dashboards/models/Embed.js";
 import { GoalTarget, TARGET_METRICS } from "../dashboards/models/GoalTarget.js";
 import { Popup } from "../popups/models/Popup.js";
 import { BioPage } from "../bio/models/BioPage.js";
+import { Task } from "../tasks/models/Task.js";
 import type { PlanCatalogEntry } from "./plans.catalog.js";
 
-export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups" | "bioPages";
+export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups" | "bioPages" | "tasks";
 
 type FeatureSpec = {
   kind: string;
@@ -56,6 +57,14 @@ export const COUNTED_FEATURES: Record<CountedFeature, FeatureSpec> = {
     plural: "link-in-bio pages",
     limit: (p) => p.maxBioPages,
     count: (workspaceId) => BioPage.countDocuments({ workspaceId }),
+  },
+  tasks: {
+    kind: "tasks",
+    label: "Open tasks",
+    noun: "open task",
+    plural: "open tasks",
+    limit: (p) => p.maxOpenTasks,
+    count: (workspaceId) => Task.countDocuments({ workspaceId, status: { $in: ["todo", "doing"] } }),
   },
 };
 

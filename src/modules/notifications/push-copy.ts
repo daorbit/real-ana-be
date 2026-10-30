@@ -100,6 +100,11 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
       };
     }
 
+    case "task.assigned": {
+      const title = str(data, "title", "a task");
+      return { title: "Task assigned to you", body: `You were assigned “${title}”.` };
+    }
+
     case "seo.audit.done": {
       const site = str(data, "siteName", "your site");
       return { title: "Audit finished", body: `The SEO audit for ${site} is ready.` };
