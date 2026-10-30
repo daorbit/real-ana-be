@@ -10,9 +10,11 @@ import {
   deleteBucket,
   firstBucketId,
   parseBucketName,
+  parseBucketUpdate,
   presentBucket,
   workspaceBuckets,
 } from "../../modules/tasks/buckets.service.js";
+import { checkDateOrder, checkTaskRelations, detachTask } from "../../modules/tasks/task-relations.js";
 import {
   areMembers,
   nextTaskKey,
@@ -73,11 +75,11 @@ router.patch(
     const ws = await requireTasksWorkspace(req, res, "editor");
     if (!ws) return;
     if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "bucket not found" });
-    const name = parseBucketName(req.body);
-    if (!name) return res.status(400).json({ error: "A bucket needs a name of up to 40 characters" });
+    const update = parseBucketUpdate(req.body);
+    if (typeof update === "string") return res.status(400).json({ error: update });
     const bucket = await TaskBucket.findOneAndUpdate(
       { _id: req.params.id, workspaceId: ws.id },
-      { $set: { name } },
+      { $set: update },
       { new: true },
     ).lean();
     if (!bucket) return res.status(404).json({ error: "bucket not found" });
@@ -105,13 +107,17 @@ router.post(
 
     const draft = parseTaskPatch(req.body, { requireTitle: true });
     if (typeof draft === "string") return res.status(400).json({ error: draft });
-    const [assigneeOk, bucketOk, fallbackBucket] = await Promise.all([
+    const dateError = checkDateOrder(draft.startDate, draft.dueDate);
+    if (dateError) return res.status(400).json({ error: dateError });
+    const [assigneeOk, bucketOk, fallbackBucket, relationError] = await Promise.all([
       areMembers(ws.id, draft.assigneeIds ?? []),
       draft.bucketId ? bucketBelongs(ws.id, draft.bucketId) : true,
       draft.bucketId ? null : firstBucketId(ws.id),
+      checkTaskRelations(ws.id, null, draft),
     ]);
     if (!assigneeOk) return res.status(400).json({ error: "Every assignee must be a member of this workspace" });
     if (!bucketOk) return res.status(400).json({ error: "That bucket doesn't exist" });
+    if (relationError) return res.status(400).json({ error: relationError });
     if (!draft.bucketId && fallbackBucket) draft.bucketId = fallbackBucket;
 
     const status = draft.status ?? "todo";
@@ -162,11 +168,20 @@ router.patch(
       patch.assigneeIds !== undefined &&
       (patch.assigneeIds.length !== previousAssignees.length ||
         patch.assigneeIds.some((id) => !previousAssignees.includes(id)));
-    if (assigneeChanged && !(await areMembers(ws.id, patch.assigneeIds ?? [])))
-      return res.status(400).json({ error: "Every assignee must be a member of this workspace" });
+    const dateError = checkDateOrder(
+      patch.startDate !== undefined ? patch.startDate : task.startDate,
+      patch.dueDate !== undefined ? patch.dueDate : task.dueDate,
+    );
+    if (dateError) return res.status(400).json({ error: dateError });
 
-    if (patch.bucketId && !(await bucketBelongs(ws.id, patch.bucketId)))
-      return res.status(400).json({ error: "That bucket doesn't exist" });
+    const [assigneesOk, bucketOk, relationError] = await Promise.all([
+      assigneeChanged ? areMembers(ws.id, patch.assigneeIds ?? []) : true,
+      patch.bucketId ? bucketBelongs(ws.id, patch.bucketId) : true,
+      checkTaskRelations(ws.id, String(task._id), patch),
+    ]);
+    if (!assigneesOk) return res.status(400).json({ error: "Every assignee must be a member of this workspace" });
+    if (!bucketOk) return res.status(400).json({ error: "That bucket doesn't exist" });
+    if (relationError) return res.status(400).json({ error: relationError });
 
     const reopening = patch.status !== undefined && patch.status !== "done" && task.status === "done";
     if (reopening) {
@@ -199,6 +214,7 @@ router.delete(
 
     const deleted = await Task.findOneAndDelete({ _id: req.params.id, workspaceId: ws.id });
     if (!deleted) return res.status(404).json({ error: "task not found" });
+    await detachTask(ws.id, String(deleted._id));
     res.status(204).end();
   }),
 );

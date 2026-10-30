@@ -6,17 +6,41 @@ import { Workspace } from "../workspace/models/Workspace.js";
 export const DEFAULT_BUCKETS = ["Backlog", "To do", "In progress", "Review", "Blocked", "Done"];
 export const MAX_BUCKETS = 20;
 const MAX_NAME = 40;
+const MAX_LIMIT = 999;
 const DEFAULT_TASK_BUCKET = 1;
 
-type BucketRow = { _id: Types.ObjectId; name: string; order: number };
+type BucketRow = { _id: Types.ObjectId; name: string; order: number; limit?: number | null };
 
 export function presentBucket(bucket: BucketRow) {
-  return { id: String(bucket._id), name: bucket.name, order: bucket.order };
+  return { id: String(bucket._id), name: bucket.name, order: bucket.order, limit: bucket.limit ?? null };
 }
 
 export function parseBucketName(raw: unknown): string | null {
   const name = String((raw as { name?: unknown })?.name ?? "").replace(/\s+/g, " ").trim();
   return name && name.length <= MAX_NAME ? name : null;
+}
+
+export function parseBucketLimit(raw: unknown): number | null | "invalid" {
+  const value = (raw as { limit?: unknown })?.limit;
+  if (value === null || value === "" || value === 0) return null;
+  const limit = Number(value);
+  return Number.isInteger(limit) && limit > 0 && limit <= MAX_LIMIT ? limit : "invalid";
+}
+
+export function parseBucketUpdate(raw: unknown): { name?: string; limit?: number | null } | string {
+  const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const update: { name?: string; limit?: number | null } = {};
+  if ("name" in body) {
+    const name = parseBucketName(body);
+    if (!name) return "A bucket needs a name of up to 40 characters";
+    update.name = name;
+  }
+  if ("limit" in body) {
+    const limit = parseBucketLimit(body);
+    if (limit === "invalid") return `A limit must be a whole number from 1 to ${MAX_LIMIT}`;
+    update.limit = limit;
+  }
+  return Object.keys(update).length ? update : "Nothing to change";
 }
 
 async function seedDefaults(workspaceId: string) {
@@ -37,7 +61,7 @@ async function seedDefaults(workspaceId: string) {
 
 export async function workspaceBuckets(workspaceId: string) {
   await seedDefaults(workspaceId);
-  const rows = await TaskBucket.find({ workspaceId }).sort({ order: 1, createdAt: 1 }).select("name order").lean();
+  const rows = await TaskBucket.find({ workspaceId }).sort({ order: 1, createdAt: 1 }).select("name order limit").lean();
   return rows.map((r) => presentBucket(r as unknown as BucketRow));
 }
 

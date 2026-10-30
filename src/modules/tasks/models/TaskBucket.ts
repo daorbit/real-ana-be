@@ -5,6 +5,7 @@ const taskBucketSchema = new Schema(
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true },
     name: { type: String, required: true, maxlength: 40 },
     order: { type: Number, default: 0 },
+    limit: { type: Number, default: null },
   },
   { timestamps: true },
 );

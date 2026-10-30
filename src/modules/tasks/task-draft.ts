@@ -14,7 +14,10 @@ export type TaskPatch = {
   status?: TaskStatus;
   priority?: TaskPriority;
   assigneeIds?: string[];
+  startDate?: Date | null;
   dueDate?: Date | null;
+  parentId?: string | null;
+  blockedBy?: string[];
   order?: number;
   link?: string;
   labels?: { text: string; color: LabelColor }[];
@@ -30,6 +33,7 @@ const MAX_LABELS = 6;
 const MAX_LABEL = 24;
 const MAX_CHECK_ITEMS = 30;
 const MAX_CHECK_TEXT = 200;
+export const MAX_BLOCKERS = 20;
 
 function has(body: Record<string, unknown>, key: string) {
   return Object.prototype.hasOwnProperty.call(body, key);
@@ -84,14 +88,24 @@ function parseChecklist(value: unknown): TaskPatch["checklist"] | string {
   return items;
 }
 
-function parseAssigneeIds(value: unknown): string[] | string {
-  if (!Array.isArray(value)) return "Assignees must be a list";
+function parseIdList(value: unknown, unknown: string): string[] | string {
+  if (!Array.isArray(value)) return unknown;
   const ids = new Set<string>();
   for (const raw of value) {
-    if (!isValidObjectId(raw)) return "Unknown assignee";
+    if (!isValidObjectId(raw)) return unknown;
     ids.add(new Types.ObjectId(String(raw)).toString());
   }
   return [...ids];
+}
+
+function parseAssigneeIds(value: unknown): string[] | string {
+  return Array.isArray(value) ? parseIdList(value, "Unknown assignee") : "Assignees must be a list";
+}
+
+function parseBlockedBy(value: unknown): string[] | string {
+  const ids = parseIdList(value, "Unknown linked task");
+  if (typeof ids === "string") return ids;
+  return ids.length > MAX_BLOCKERS ? `A task can be blocked by up to ${MAX_BLOCKERS} tasks` : ids;
 }
 
 export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: boolean }): TaskPatch | string {
@@ -126,10 +140,25 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
     if (id !== null && id !== "" && !isValidObjectId(id)) return "Unknown assignee";
     patch.assigneeIds = id ? [new Types.ObjectId(String(id)).toString()] : [];
   }
+  if (has(body, "startDate")) {
+    const start = parseDate(body.startDate);
+    if (start === "invalid") return "Invalid start date";
+    patch.startDate = start;
+  }
   if (has(body, "dueDate")) {
     const due = parseDate(body.dueDate);
     if (due === "invalid") return "Invalid due date";
     patch.dueDate = due;
+  }
+  if (has(body, "parentId")) {
+    const parent = body.parentId;
+    if (parent !== null && parent !== "" && !isValidObjectId(parent)) return "Unknown parent task";
+    patch.parentId = parent ? new Types.ObjectId(String(parent)).toString() : null;
+  }
+  if (has(body, "blockedBy")) {
+    const blockedBy = parseBlockedBy(body.blockedBy);
+    if (typeof blockedBy === "string") return blockedBy;
+    patch.blockedBy = blockedBy;
   }
   if (has(body, "order")) {
     const order = Number(body.order);

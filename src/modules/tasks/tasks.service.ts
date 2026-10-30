@@ -7,7 +7,7 @@ const OPEN_LIMIT = 2_000;
 const DONE_LIMIT = 200;
 const DONE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TASK_FIELDS =
-  "key bucketId title notes status priority assigneeIds assigneeId dueDate order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
+  "key bucketId title notes status priority assigneeIds assigneeId startDate dueDate parentId blockedBy order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
 
 type TaskRow = {
   _id: Types.ObjectId;
@@ -22,7 +22,10 @@ type TaskRow = {
   priority: string;
   assigneeIds?: Types.ObjectId[];
   assigneeId: Types.ObjectId | null;
+  startDate?: Date | null;
   dueDate: Date | null;
+  parentId?: Types.ObjectId | null;
+  blockedBy?: Types.ObjectId[];
   order: number;
   link: string;
   createdBy?: Types.ObjectId | null;
@@ -47,7 +50,10 @@ export function presentTask(task: TaskRow) {
     priority: task.priority,
     assigneeIds,
     assigneeId: assigneeIds[0] ?? null,
+    startDate: task.startDate ?? null,
     dueDate: task.dueDate,
+    parentId: task.parentId ? String(task.parentId) : null,
+    blockedBy: (task.blockedBy ?? []).map(String),
     order: task.order,
     link: task.link ?? "",
     labels: (task.labels ?? []).map(({ text, color }) => ({ text, color })),
