@@ -30,6 +30,7 @@ const taskSchema = new Schema(
   {
     workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true },
     key: { type: Number, default: 0 },
+    bucketId: { type: Schema.Types.ObjectId, ref: "TaskBucket", default: null },
     title: { type: String, required: true, maxlength: 200 },
     notes: { type: String, default: "", maxlength: 4000 },
     status: { type: String, enum: TASK_STATUSES, default: "todo" },

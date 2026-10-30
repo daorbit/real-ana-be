@@ -96,6 +96,7 @@ const workspaceSchema = new Schema(
         enabled: { type: Boolean, default: false },
         enabledAt: { type: Date },
         seq: { type: Number, default: 0 },
+        bucketsSeeded: { type: Boolean, default: false },
       },
       insights: {
         enabled: { type: Boolean, default: false },

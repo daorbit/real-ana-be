@@ -8,11 +8,12 @@ const OPEN_LIMIT = 2_000;
 const DONE_LIMIT = 200;
 const DONE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TASK_FIELDS =
-  "key title notes status priority assigneeId dueDate order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
+  "key bucketId title notes status priority assigneeId dueDate order link labels checklist checklistOnCard createdBy completedAt createdAt updatedAt";
 
 type TaskRow = {
   _id: Types.ObjectId;
   key?: number;
+  bucketId?: Types.ObjectId | null;
   labels?: { text: string; color: string }[];
   checklist?: { id: string; text: string; done: boolean }[];
   checklistOnCard?: boolean;
@@ -34,6 +35,7 @@ export function presentTask(task: TaskRow) {
   return {
     id: String(task._id),
     key: task.key ?? 0,
+    bucketId: task.bucketId ? String(task.bucketId) : null,
     title: task.title,
     notes: task.notes ?? "",
     status: task.status,

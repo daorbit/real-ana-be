@@ -2,6 +2,17 @@ import { Router, Response } from "express";
 import { isValidObjectId } from "mongoose";
 import { Task } from "../../modules/tasks/models/Task.js";
 import { parseTaskPatch } from "../../modules/tasks/task-draft.js";
+import { TaskBucket } from "../../modules/tasks/models/TaskBucket.js";
+import {
+  MAX_BUCKETS,
+  bucketBelongs,
+  createBucket,
+  deleteBucket,
+  firstBucketId,
+  parseBucketName,
+  presentBucket,
+  workspaceBuckets,
+} from "../../modules/tasks/buckets.service.js";
 import {
   isMember,
   nextTaskKey,
@@ -37,7 +48,51 @@ router.get(
   asyncHandler(async (req: AuthedRequest, res: Response) => {
     const ws = await requireTasksWorkspace(req, res);
     if (!ws) return;
-    res.json(await workspaceTasks(ws.id));
+    const buckets = await workspaceBuckets(ws.id);
+    res.json({ buckets, tasks: await workspaceTasks(ws.id) });
+  }),
+);
+
+router.post(
+  "/buckets",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireTasksWorkspace(req, res, "editor");
+    if (!ws) return;
+    const name = parseBucketName(req.body);
+    if (!name) return res.status(400).json({ error: "A bucket needs a name of up to 40 characters" });
+    if ((await TaskBucket.countDocuments({ workspaceId: ws.id })) >= MAX_BUCKETS)
+      return res.status(400).json({ error: `A plan can have up to ${MAX_BUCKETS} buckets` });
+    res.status(201).json(await createBucket(ws.id, name));
+  }),
+);
+
+router.patch(
+  "/buckets/:id",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireTasksWorkspace(req, res, "editor");
+    if (!ws) return;
+    if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "bucket not found" });
+    const name = parseBucketName(req.body);
+    if (!name) return res.status(400).json({ error: "A bucket needs a name of up to 40 characters" });
+    const bucket = await TaskBucket.findOneAndUpdate(
+      { _id: req.params.id, workspaceId: ws.id },
+      { $set: { name } },
+      { new: true },
+    ).lean();
+    if (!bucket) return res.status(404).json({ error: "bucket not found" });
+    res.json(presentBucket(bucket as unknown as Parameters<typeof presentBucket>[0]));
+  }),
+);
+
+router.delete(
+  "/buckets/:id",
+  asyncHandler(async (req: AuthedRequest, res: Response) => {
+    const ws = await requireTasksWorkspace(req, res, "editor");
+    if (!ws) return;
+    if (!isValidObjectId(req.params.id)) return res.status(404).json({ error: "bucket not found" });
+    const result = await deleteBucket(ws.id, req.params.id);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ movedTo: result.movedTo });
   }),
 );
 
@@ -49,8 +104,14 @@ router.post(
 
     const draft = parseTaskPatch(req.body, { requireTitle: true });
     if (typeof draft === "string") return res.status(400).json({ error: draft });
-    if (draft.assigneeId && !(await isMember(ws.id, draft.assigneeId)))
-      return res.status(400).json({ error: "The assignee isn't a member of this workspace" });
+    const [assigneeOk, bucketOk, fallbackBucket] = await Promise.all([
+      draft.assigneeId ? isMember(ws.id, draft.assigneeId) : true,
+      draft.bucketId ? bucketBelongs(ws.id, draft.bucketId) : true,
+      draft.bucketId ? null : firstBucketId(ws.id),
+    ]);
+    if (!assigneeOk) return res.status(400).json({ error: "The assignee isn't a member of this workspace" });
+    if (!bucketOk) return res.status(400).json({ error: "That bucket doesn't exist" });
+    if (!draft.bucketId && fallbackBucket) draft.bucketId = fallbackBucket;
 
     const status = draft.status ?? "todo";
     if (status !== "done") {
@@ -99,6 +160,9 @@ router.patch(
     const assigneeChanged = patch.assigneeId !== undefined && patch.assigneeId !== previousAssignee;
     if (assigneeChanged && patch.assigneeId && !(await isMember(ws.id, patch.assigneeId)))
       return res.status(400).json({ error: "The assignee isn't a member of this workspace" });
+
+    if (patch.bucketId && !(await bucketBelongs(ws.id, patch.bucketId)))
+      return res.status(400).json({ error: "That bucket doesn't exist" });
 
     const reopening = patch.status !== undefined && patch.status !== "done" && task.status === "done";
     if (reopening) {

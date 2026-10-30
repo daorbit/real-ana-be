@@ -20,6 +20,7 @@ export type TaskPatch = {
   labels?: { text: string; color: LabelColor }[];
   checklist?: { id: string; text: string; done: boolean }[];
   checklistOnCard?: boolean;
+  bucketId?: string;
 };
 
 const MAX_TITLE = 200;
@@ -130,6 +131,10 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
     const labels = parseLabels(body.labels);
     if (typeof labels === "string") return labels;
     patch.labels = labels;
+  }
+  if (has(body, "bucketId")) {
+    if (!isValidObjectId(body.bucketId)) return "Unknown bucket";
+    patch.bucketId = String(body.bucketId);
   }
   if (has(body, "checklistOnCard")) patch.checklistOnCard = body.checklistOnCard === true;
   if (has(body, "checklist")) {
