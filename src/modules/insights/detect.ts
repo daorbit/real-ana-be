@@ -44,6 +44,10 @@ const fmt = (n: number) => n.toLocaleString("en-US");
 
 const IGNORED_KEYS = new Set(["(none)", "(direct)", "(unknown)", ""]);
 
+function display(key: string): string {
+  return key.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+}
+
 function traffic({ current, previous }: DetectInput["totals"]): Insight[] {
   if (Math.max(current.visitors, previous.visitors) < MIN_VISITORS) return [];
   const change = pct(current.visitors, previous.visitors);
@@ -101,12 +105,13 @@ function rows(
   for (const row of list) {
     if (IGNORED_KEYS.has(row.key)) continue;
     const base = { kind, dimension, key: row.key, current: row.count, previous: row.previous, unit: copy.unit };
+    const name = display(row.key);
     if (row.previous === 0 && row.count >= NEW_MIN) {
       out.push({
         ...base,
         id: `${kind}:new:${row.key}`,
         tone: "good",
-        title: copy.fresh(row.key, row.count),
+        title: copy.fresh(name, row.count),
         body: `${fmt(row.count)} ${copy.unit} this week, none the week before.`,
         delta: null,
         score: weight + 20 + Math.min(row.count, 200) / 4,
@@ -120,7 +125,7 @@ function rows(
       ...base,
       id: `${kind}:${up ? "up" : "down"}:${row.key}`,
       tone: up ? "good" : "bad",
-      title: up ? copy.up(row.key, change) : copy.down(row.key, Math.abs(change)),
+      title: up ? copy.up(name, change) : copy.down(name, Math.abs(change)),
       body: `${fmt(row.count)} ${copy.unit} this week, against ${fmt(row.previous)} the week before.`,
       delta: change,
       score: weight + Math.min(Math.abs(change), 300) / 6 + Math.min(Math.max(row.count, row.previous), 300) / 10,
