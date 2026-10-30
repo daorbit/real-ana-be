@@ -24,6 +24,12 @@ router.put("/:wid/apps/:appId", async (req: AuthedRequest, res: Response) => {
     });
   }
 
+  if (appId === "tasks" && !enabled) {
+    const apps = await setAppEnabled(ws.id, appId, false);
+    await onAppToggled(ws.id, appId, false);
+    return res.json({ apps });
+  }
+
   const [apps] = await Promise.all([setAppEnabled(ws.id, appId, enabled), onAppToggled(ws.id, appId, enabled)]);
   res.json({ apps });
 });
