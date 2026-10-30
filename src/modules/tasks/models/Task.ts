@@ -3,7 +3,7 @@ import mongoose, { Schema } from "mongoose";
 export const TASK_STATUSES = ["todo", "doing", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-export const TASK_PRIORITIES = ["none", "low", "medium", "high"] as const;
+export const TASK_PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 export const LABEL_COLORS = ["blue", "green", "amber", "red", "violet", "pink", "teal", "gray"] as const;
@@ -40,6 +40,7 @@ const taskSchema = new Schema(
     link: { type: String, default: "", maxlength: 500 },
     labels: { type: [labelSchema], default: [] },
     checklist: { type: [checkItemSchema], default: [] },
+    checklistOnCard: { type: Boolean, default: false },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     completedAt: { type: Date, default: null },
   },

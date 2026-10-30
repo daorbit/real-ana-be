@@ -19,6 +19,7 @@ export type TaskPatch = {
   link?: string;
   labels?: { text: string; color: LabelColor }[];
   checklist?: { id: string; text: string; done: boolean }[];
+  checklistOnCard?: boolean;
 };
 
 const MAX_TITLE = 200;
@@ -130,6 +131,7 @@ export function parseTaskPatch(raw: unknown, { requireTitle }: { requireTitle: b
     if (typeof labels === "string") return labels;
     patch.labels = labels;
   }
+  if (has(body, "checklistOnCard")) patch.checklistOnCard = body.checklistOnCard === true;
   if (has(body, "checklist")) {
     const checklist = parseChecklist(body.checklist);
     if (typeof checklist === "string") return checklist;
