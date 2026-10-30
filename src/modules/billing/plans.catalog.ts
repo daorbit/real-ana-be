@@ -54,6 +54,8 @@ export type PlanCatalogEntry = {
   maxPopups: number;
   maxBioPages: number;
   maxOpenTasks: number;
+  insightWeeks: number;
+  insightRefresh: boolean;
   alertCheckHours: number;
   auditLogDays: number;
 };
@@ -116,6 +118,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxPopups: 1,
     maxBioPages: 1,
     maxOpenTasks: 50,
+    insightWeeks: 4,
+    insightRefresh: false,
     alertCheckHours: 6,
     auditLogDays: 7,
   },
@@ -168,6 +172,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxPopups: 5,
     maxBioPages: 3,
     maxOpenTasks: 500,
+    insightWeeks: 12,
+    insightRefresh: true,
     alertCheckHours: 1,
     auditLogDays: 30,
   },
@@ -220,6 +226,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxPopups: 25,
     maxBioPages: 20,
     maxOpenTasks: 5_000,
+    insightWeeks: 52,
+    insightRefresh: true,
     alertCheckHours: 1,
     auditLogDays: 365,
   },

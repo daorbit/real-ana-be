@@ -60,6 +60,7 @@ import orbitPublicRoutes from "./http/routes/orbit-public.js";
 import dashboardRoutes from "./http/routes/dashboards.js";
 import goalTargetRoutes from "./http/routes/goal-targets.js";
 import taskRoutes from "./http/routes/tasks.js";
+import insightRoutes from "./http/routes/insights.js";
 import alertRoutes from "./http/routes/alerts.js";
 import popupRoutes from "./http/routes/popups.js";
 import popupPublicRoutes from "./http/routes/popups-public.js";
@@ -265,6 +266,7 @@ app.use("/api/workspaces/:wid/markers", dashboardCors, requireUnlocked, markerRo
 app.use("/api/workspaces/:wid/dashboards", dashboardCors, requireUnlocked, dashboardRoutes);
 app.use("/api/workspaces/:wid/targets", dashboardCors, requireUnlocked, goalTargetRoutes);
 app.use("/api/workspaces/:wid/tasks", dashboardCors, requireUnlocked, taskRoutes);
+app.use("/api/workspaces/:wid/insights", dashboardCors, requireUnlocked, insightRoutes);
 app.use("/api/workspaces/:wid/alerts", dashboardCors, requireUnlocked, alertRoutes);
 app.use("/api/workspaces/:wid/popups", dashboardCors, requireUnlocked, popupRoutes);
 app.use("/api/workspaces/:wid/bio", dashboardCors, requireUnlocked, bioRoutes);

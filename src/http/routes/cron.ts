@@ -10,6 +10,7 @@ import { syncDue } from "../../modules/reviews/sync.service.js";
 import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
+import { runDueInsights } from "../../modules/insights/insights.service.js";
 import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 import { markServerErrorReported } from "../middleware/report-server-errors.js";
 
@@ -103,20 +104,36 @@ router.get("/fx-sync", async (req: Request, res: Response) => {
  * job itself is broken, and a single bad recipient address is not that; the
  * failures are in the body and the logs instead.
  */
+async function runInsights() {
+  const summary = await runDueInsights();
+  if (summary.generated || summary.failed)
+    console.log(`[cron] insights: ${summary.generated} generated, ${summary.failed} failed`);
+  if (summary.errors.length) console.error("[cron] insight errors:", summary.errors.join(" | "));
+  return summary;
+}
+
 router.get("/reports", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
-  try {
-    const summary = await runDueSchedules();
-    console.log(`[cron] reports: ${summary.attempted} due, ${summary.sent} sent, ${summary.failed} failed`);
-    if (summary.errors.length) console.error("[cron] report errors:", summary.errors.join(" | "));
-    res.json({ ok: true, ...summary });
-  } catch (e) {
-    const message = (e as Error).message;
+  const [reports, insights] = await Promise.allSettled([runDueSchedules(), runInsights()]);
+  const insightResult =
+    insights.status === "fulfilled" ? insights.value : { error: (insights.reason as Error)?.message ?? "insights failed" };
+  if (insights.status === "rejected") {
+    console.error("[cron] insight run failed:", insightResult);
+    await alertCronFailure("insights", (insights.reason as Error)?.message ?? "insights failed");
+  }
+
+  if (reports.status === "rejected") {
+    const message = (reports.reason as Error)?.message ?? "report run failed";
     console.error("[cron] report run failed:", message);
     await alertCronFailure("reports", message);
-    res.status(500).json({ ok: false, error: message });
+    return res.status(500).json({ ok: false, error: message, insights: insightResult });
   }
+
+  const summary = reports.value;
+  console.log(`[cron] reports: ${summary.attempted} due, ${summary.sent} sent, ${summary.failed} failed`);
+  if (summary.errors.length) console.error("[cron] report errors:", summary.errors.join(" | "));
+  res.json({ ok: true, ...summary, insights: insightResult });
 });
 
 /**

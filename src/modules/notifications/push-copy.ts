@@ -100,6 +100,11 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
       };
     }
 
+    case "insights.ready": {
+      const count = Number(data.count ?? 0);
+      return { title: "Weekly insights ready", body: `${count} ${count === 1 ? "change" : "changes"} worth a look this week.` };
+    }
+
     case "task.assigned": {
       const title = str(data, "title", "a task");
       return { title: "Task assigned to you", body: `You were assigned “${title}”.` };

@@ -1155,3 +1155,11 @@ export async function compareBreakdown(
   rows.sort((a, b) => Math.max(b.count, b.previous) - Math.max(a.count, a.previous));
   return rows.slice(0, limit);
 }
+
+export async function periodTotals(siteIds: string[], win: Window) {
+  const [current, previous] = await Promise.all([
+    totals(siteIds, win.since, win.until),
+    totals(siteIds, win.prevSince, win.prevUntil),
+  ]);
+  return { current, previous };
+}

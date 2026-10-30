@@ -31,6 +31,7 @@ const NUMERIC_LIMITS = [
   "maxPopups",
   "maxBioPages",
   "maxOpenTasks",
+  "insightWeeks",
   "alertCheckHours",
   "auditLogDays",
 ] as const;
@@ -42,6 +43,7 @@ const BOOLEAN_FEATURES = [
   "formFileUploads",
   "formBranding",
   "searchPageViews",
+  "insightRefresh",
 ] as const;
 
 describe("currency", () => {

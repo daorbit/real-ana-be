@@ -97,6 +97,11 @@ const workspaceSchema = new Schema(
         enabledAt: { type: Date },
         seq: { type: Number, default: 0 },
       },
+      insights: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+        nextRunAt: { type: Date, default: null },
+      },
     },
 
     /**
@@ -168,5 +173,7 @@ const workspaceSchema = new Schema(
   },
   { timestamps: true }
 );
+
+workspaceSchema.index({ "apps.insights.nextRunAt": 1 }, { sparse: true });
 
 export const Workspace = mongoose.model("Workspace", workspaceSchema);
