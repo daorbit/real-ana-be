@@ -22,7 +22,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
   Raw Bot API calls live in `infra/messaging/telegram.ts`. Reports and forms both send through `sendToChats`.
 - `src/shared/utils/*`: generic helpers (`ttl-cache.ts`, `crypto-box.ts`, `forms-workspace-token.ts`, ...). `src/infra/*`: DB, mail, payments, storage, outbound HTTP (`infra/http-client/forms-service.ts` calls da-forms).
 - `src/tracker/tracker.src.js` is the customer tracking script. `npm run build:tracker` (run by `dev` and `build`) writes `public/tracker.js`; never edit that file directly.
-- Public and partner surfaces, all with open CORS where needed: `/api/track`, `/api/collect`, `/api/ingest` (ingest), `/v1` (public API, `http/routes/v1.ts`), `/api/share`, `/api/embed`, `/api/popups`, `/api/public/*`.
+- Public and partner surfaces, all with open CORS where needed: `/api/track`, `/api/collect`, `/api/ingest` (ingest), `/v1` (public API, `http/routes/v1.ts`), `/api/share`, `/api/embed`, `/api/popups`, `/api/experiments` (A/B test config, read only by tags with `data-experiments="on"`), `/api/public/*`.
 - `/api/internal/forms/*` (`http/routes/forms-internal.ts`) serves da-forms only, behind `Bearer FORMS_SERVICE_SECRET`: limits, branding, AI generate and edit (`modules/forms-ai`), bell notify, Telegram, WhatsApp, audit and submissions.
 - `/api/internal/invoices/*` (`http/routes/invoices-internal.ts`) serves invoice-generator only, behind `Bearer INVOICE_SERVICE_SECRET`: `email/:workspaceId` sends a quotation or invoice email (template in `modules/invoicing/document-email.ts`, 8mb body for the PDF, 200 a day per workspace, refused while the Invoicing app is off). `sendOne` takes `{ cc, replyTo, fromName }` for it.
 - The remote MCP server for Claude and ChatGPT is `/mcp` (`modules/mcp`) with OAuth at `/oauth`, `/.well-known` and `/api/oauth` (`modules/mcp-oauth`). All of it is off unless `MCP_ENABLED=true` (`requireMcpEnabled`). Details, scopes and tools are in `../CLAUDE.md` under Apps.
@@ -49,6 +49,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 | `social` | Scheduled posts for `linkedin` and `instagram` (`POST_PROVIDERS`), post runner, stats refresh |
 | `reviews` | Google Business Profile sync, with a Places API fallback (`places.service.ts`) |
 | `telegram`, `whatsapp` | Messaging connections shared by reports, alerts and form alerts |
+| `experiments` | Quantalog A/B Tests: tests, public config, results aggregation and stats |
 | `popups`, `media`, `notes`, `branding`, `referrals`, `audit`, `admin`, `onboarding-ai` | As named |
 | `mcp`, `mcp-oauth` | The remote MCP connector for Claude and ChatGPT, see `../CLAUDE.md` |
 

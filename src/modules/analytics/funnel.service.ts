@@ -20,7 +20,7 @@ function stepCond(step: FunnelStep) {
     : { $and: [{ $eq: ["$type", "pageview"] }, { $eq: ["$path", step.value] }] };
 }
 
-function stepMatch(step: FunnelStep) {
+export function stepMatch(step: FunnelStep) {
   return step.type === "event" ? { type: "custom", name: step.value } : { type: "pageview", path: step.value };
 }
 

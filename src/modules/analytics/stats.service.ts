@@ -6,7 +6,7 @@ import { computeLiveAudience, EMPTY_AUDIENCE } from "./live-audience.js";
  * serving an older script. Bump this with `VERSION` in the tracker itself —
  * left behind, every site reads as up to date and the prompt never appears.
  */
-export const TRACKER_VERSION = 10;
+export const TRACKER_VERSION = 11;
 
 export const RANGES: Record<string, number> = {
   "1h": 60 * 60 * 1000,

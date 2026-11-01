@@ -60,6 +60,12 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "DELETE", pattern: route(`/bio/${ID}`), action: "bio.deleted", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
 
   { method: "POST", pattern: route("/insights/refresh"), action: null },
+  { method: "POST", pattern: route("/experiments"), action: null },
+  { method: "PUT", pattern: route(`/experiments/${ID}`), action: null },
+  { method: "DELETE", pattern: route(`/experiments/${ID}`), action: null },
+  { method: "POST", pattern: route(`/experiments/${ID}/start`), action: null },
+  { method: "POST", pattern: route(`/experiments/${ID}/pause`), action: null },
+  { method: "POST", pattern: route(`/experiments/${ID}/end`), action: null },
   { method: "POST", pattern: route("/tasks/buckets"), action: null },
   { method: "PATCH", pattern: route(`/tasks/buckets/${ID}`), action: null },
   { method: "DELETE", pattern: route(`/tasks/buckets/${ID}`), action: null },

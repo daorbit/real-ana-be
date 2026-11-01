@@ -2,7 +2,7 @@
   "use strict";
 
 
-  var VERSION = 10;
+  var VERSION = 11;
 
 
   function findScript() {
@@ -567,7 +567,198 @@
   window.addEventListener("touchstart", onTrusted("touch"), passiveOpts);
   window.addEventListener("wheel", onTrusted("scroll"), passiveOpts);
 
-  var routeHook = null;
+  var routeHooks = [];
+
+  var experimentsOn = opt("experiments") === "on" && typeof fetch === "function" && !botSignals();
+  var expBase = opt("popups-api") || origin;
+  var expList = null;
+  var expWaiters = [];
+  var expHideStyle = null;
+  var EXP_CACHE = "_va_exp_" + siteId;
+  var EXP_ASSIGN = "_va_ab_";
+  var EXP_SEEN = "_va_abs_";
+  var EXP_CACHE_MS = 5 * 60 * 1000;
+  var EXP_HIDE_MAX_MS = 800;
+
+  function expRead(store, key) {
+    try {
+      return JSON.parse(window[store].getItem(key) || "null");
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function expWrite(store, key, value) {
+    try {
+      window[store].setItem(key, JSON.stringify(value));
+    } catch (e) {}
+  }
+
+  function expPageAllowed(exp, path) {
+    var mode = exp.pages && exp.pages.mode;
+    if (!mode || mode === "all") return true;
+    var bare = path.split("?")[0];
+    var hit = false;
+    for (var n = 0; n < exp.pages.patterns.length; n++) {
+      var escaped = exp.pages.patterns[n].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+      if (new RegExp("^" + escaped + "$").test(bare)) hit = true;
+    }
+    return mode === "include" ? hit : !hit;
+  }
+
+  function expDeviceAllowed(exp) {
+    if (exp.devices === "all") return true;
+    var phone = false;
+    try {
+      phone = window.matchMedia("(max-width: 767px)").matches;
+    } catch (e) {}
+    return exp.devices === "mobile" ? phone : !phone;
+  }
+
+  function expPick(exp) {
+    var stored = expRead("localStorage", EXP_ASSIGN + exp.id);
+    var n;
+    for (n = 0; n < exp.variants.length; n++) {
+      if (exp.variants[n].key === stored) return exp.variants[n];
+    }
+    var total = 0;
+    for (n = 0; n < exp.variants.length; n++) total += exp.variants[n].weight;
+    var roll = Math.random() * total;
+    var chosen = exp.variants[exp.variants.length - 1];
+    for (n = 0; n < exp.variants.length; n++) {
+      roll -= exp.variants[n].weight;
+      if (roll < 0) {
+        chosen = exp.variants[n];
+        break;
+      }
+    }
+    if (!exp.final) expWrite("localStorage", EXP_ASSIGN + exp.id, chosen.key);
+    return chosen;
+  }
+
+  function expExpose(exp, variant, immediate) {
+    if (exp.final) return;
+    var sid = session().id;
+    if (expRead("sessionStorage", EXP_SEEN + exp.id) === sid) return;
+    expWrite("sessionStorage", EXP_SEEN + exp.id, sid);
+    var payload = {
+      siteId: siteId,
+      type: "experiment",
+      name: "expose",
+      path: currentPath(),
+      sessionId: sid,
+      props: { experimentId: exp.id, variant: variant.key },
+    };
+    if (immediate) sendNow(payload);
+    else post(payload);
+  }
+
+  function expApplyChange(change) {
+    var nodes;
+    try {
+      nodes = document.querySelectorAll(change.selector);
+    } catch (e) {
+      return;
+    }
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      if (change.action === "text") node.textContent = change.value;
+      else if (change.action === "hide") node.style.setProperty("display", "none", "important");
+      else if (change.action === "attr" && change.attr) node.setAttribute(change.attr, change.value);
+      else if (change.action === "style") node.style.cssText += ";" + change.value;
+    }
+  }
+
+  function expApplyVariant(variant) {
+    var apply = function () {
+      for (var n = 0; n < variant.changes.length; n++) expApplyChange(variant.changes[n]);
+    };
+    apply();
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", apply);
+  }
+
+  function expRedirect(exp, variant) {
+    var target;
+    try {
+      target = new URL(variant.redirectUrl, location.href);
+    } catch (e) {
+      return false;
+    }
+    if (target.origin === location.origin && target.pathname === location.pathname) return false;
+    if (!target.search && location.search) target.search = location.search;
+    expExpose(exp, variant, true);
+    location.replace(target.href);
+    return true;
+  }
+
+  function runExperiments(path) {
+    if (!expList) return;
+    for (var n = 0; n < expList.length; n++) {
+      var exp = expList[n];
+      if (exp.type === "code" || !expDeviceAllowed(exp) || !expPageAllowed(exp, path)) continue;
+      var variant = expPick(exp);
+      if (exp.type === "split" && variant.redirectUrl && expRedirect(exp, variant)) return;
+      expExpose(exp, variant, false);
+      if (exp.type === "changes") expApplyVariant(variant);
+    }
+  }
+
+  function expShowPage() {
+    if (expHideStyle && expHideStyle.parentNode) expHideStyle.parentNode.removeChild(expHideStyle);
+    expHideStyle = null;
+  }
+
+  function expHidePage() {
+    expHideStyle = document.createElement("style");
+    expHideStyle.setAttribute("data-quantalog", "experiments");
+    expHideStyle.appendChild(document.createTextNode("body{opacity:0 !important}"));
+    (document.head || document.documentElement).appendChild(expHideStyle);
+    setTimeout(expShowPage, EXP_HIDE_MAX_MS);
+  }
+
+  function expReady(list) {
+    expList = list;
+    runExperiments(currentPath());
+    expShowPage();
+    var waiting = expWaiters;
+    expWaiters = [];
+    for (var n = 0; n < waiting.length; n++) waiting[n]();
+  }
+
+  function expVariantFor(key) {
+    if (!expList) return null;
+    for (var n = 0; n < expList.length; n++) {
+      var exp = expList[n];
+      if (exp.key !== key) continue;
+      if (!expDeviceAllowed(exp)) return null;
+      var variant = expPick(exp);
+      expExpose(exp, variant, false);
+      return variant.key;
+    }
+    return null;
+  }
+
+  if (experimentsOn && expBase) {
+    var expCached = expRead("sessionStorage", EXP_CACHE);
+    if (expCached && expCached.list && Date.now() - expCached.at < EXP_CACHE_MS) {
+      expReady(expCached.list);
+    } else {
+      expHidePage();
+      fetch(expBase + "/api/experiments/" + encodeURIComponent(siteId), { credentials: "omit", mode: "cors" })
+        .then(function (r) {
+          return r.ok ? r.json() : null;
+        })
+        .then(function (data) {
+          var list = (data && data.experiments) || [];
+          expWrite("sessionStorage", EXP_CACHE, { at: Date.now(), list: list });
+          expReady(list);
+        })
+        .catch(function () {
+          expReady([]);
+        });
+    }
+    routeHooks.push(runExperiments);
+  }
 
   /* ------------------------------------------------------------------
    * Pageview
@@ -634,7 +825,7 @@
       utm: utm(),
     });
 
-    if (routeHook) routeHook(path);
+    for (var h = 0; h < routeHooks.length; h++) routeHooks[h](path);
   }
 
   pageview();
@@ -1062,7 +1253,7 @@
         .then(function (data) {
           if (!data || !data.popups || !data.popups.length) return;
           popupList = data.popups;
-          routeHook = armPopup;
+          routeHooks.push(armPopup);
           armPopup(currentPath());
         })
         .catch(function () {});
@@ -1088,6 +1279,24 @@
 
     reset: function () {
       appUserId = "";
+    },
+
+    variant: function (key, callback) {
+      if (!experimentsOn) {
+        if (callback) callback(null);
+        return null;
+      }
+      if (expList) {
+        var known = expVariantFor(String(key));
+        if (callback) callback(known);
+        return known;
+      }
+      if (callback) {
+        expWaiters.push(function () {
+          callback(expVariantFor(String(key)));
+        });
+      }
+      return null;
     },
 
 

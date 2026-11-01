@@ -11,7 +11,7 @@ import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 import { runAfterResponse } from "../../shared/utils/after-response.js";
 import { cleanProps } from "../../modules/analytics/event-props.js";
 
-const UNBILLED_TYPES = new Set(["interact", "popup"]);
+const UNBILLED_TYPES = new Set(["interact", "popup", "experiment"]);
 
 const router = Router();
 

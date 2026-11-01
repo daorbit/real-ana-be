@@ -17,6 +17,7 @@ export const WORKSPACE_APPS = [
   "invoicing",
   "tasks",
   "insights",
+  "experiments",
 ] as const;
 export type WorkspaceApp = (typeof WORKSPACE_APPS)[number];
 
@@ -36,6 +37,7 @@ export const APP_DISABLED_MESSAGE: Record<WorkspaceApp, string> = {
   invoicing: "Quantalog Invoicing is off for this workspace. Turn it on in Apps.",
   tasks: "Quantalog Tasks is off for this workspace. Turn it on in Apps.",
   insights: "Quantalog Insights is off for this workspace. Turn it on in Apps.",
+  experiments: "Quantalog A/B Tests is off for this workspace. Turn it on in Apps.",
 };
 
 export function appEnabledFilter(app: WorkspaceApp): Record<string, unknown> {

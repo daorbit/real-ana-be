@@ -107,6 +107,11 @@ const workspaceSchema = new Schema(
         paidAt: { type: Date },
         nextRunAt: { type: Date, default: null },
       },
+      experiments: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+        paidAt: { type: Date },
+      },
     },
 
     /**

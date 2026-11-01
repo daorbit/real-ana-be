@@ -37,6 +37,7 @@ import { BioStat } from "../bio/models/BioStat.js";
 import { Task } from "../tasks/models/Task.js";
 import { TaskBucket } from "../tasks/models/TaskBucket.js";
 import { InsightDigest } from "../insights/models/InsightDigest.js";
+import { Experiment } from "../experiments/models/Experiment.js";
 import { invalidateSite } from "../billing/event-quota.js";
 import { deleteWorkspaceDashboards } from "../dashboards/cleanup.js";
 import { deleteWorkspaceMedia } from "../media/cleanup.js";
@@ -120,6 +121,7 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
     Task.deleteMany(byWorkspace),
     TaskBucket.deleteMany(byWorkspace),
     InsightDigest.deleteMany(byWorkspace),
+    Experiment.deleteMany(byWorkspace),
   ]);
 
   await Site.deleteMany(byWorkspace);
