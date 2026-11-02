@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const TOOL_TIMEOUT_MS = 15_000;
 export const CALLS_PER_MINUTE = 60;
+export const WRITES_PER_MINUTE = 20;
 export const MAX_RESPONSE_CHARS = 60_000;
 export const MAX_PAGE = 100;
 export const MAX_PAGE_SIZE = 25;
@@ -23,6 +24,12 @@ export const formIdArg = z
   .string()
   .regex(/^[a-f0-9]{24}$/i, "formId must be the 24-character id returned by list_forms")
   .describe("Form id from list_forms");
+export function objectIdArg(source: string) {
+  return z
+    .string()
+    .regex(/^[a-f0-9]{24}$/i, `must be the 24-character id returned by ${source}`)
+    .describe(`Id from ${source}`);
+}
 export const isoDateArg = z
   .string()
   .max(40)
@@ -39,8 +46,10 @@ export function clip(value: unknown, max = MAX_TEXT): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-export function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export { escapeRegex } from "../../shared/utils/escape-regex.js";
+
+export function definedOnly<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
 export function paging(page: number, limit: number, total: number) {

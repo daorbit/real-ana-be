@@ -4,6 +4,10 @@ export const MCP_SCOPES = {
   "submissions:read": "Read form responses and lead pipeline summaries",
   "bookings:read": "See booking counts and upcoming booked slots",
   "analytics:read": "See website traffic summaries",
+  "tasks:read": "See tasks, buckets and who they are assigned to",
+  "tasks:write": "Create and update tasks",
+  "notes:read": "Read your personal notes",
+  "notes:write": "Create and update your personal notes",
 } as const;
 
 export type McpScope = keyof typeof MCP_SCOPES;

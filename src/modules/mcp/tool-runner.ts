@@ -1,18 +1,22 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { McpAuthContext } from "../mcp-oauth/token.service.js";
 import type { McpScope } from "../mcp-oauth/scopes.js";
 import { revokeGrant } from "../mcp-oauth/grant.service.js";
 import { isDenied, resolveAccessFor, type Access } from "../workspace/access.service.js";
+import { APP_DISABLED_MESSAGE, appEnabled, type WorkspaceApp } from "../workspace/apps.service.js";
+import { ROLE_RANK, type WorkspaceRole } from "../workspace/models/Membership.js";
 import { overRateLimit } from "../security/rate-limit.service.js";
 import { FormsServiceError } from "../../infra/http-client/forms-service.js";
 import { captureServerError } from "../../infra/monitoring/sentry.js";
 import { isAppError } from "../../shared/errors/index.js";
 import { ToolError, ToolTimeoutError } from "./errors.js";
-import { CALLS_PER_MINUTE, MAX_RESPONSE_CHARS, TOOL_TIMEOUT_MS } from "./limits.js";
+import { CALLS_PER_MINUTE, MAX_RESPONSE_CHARS, TOOL_TIMEOUT_MS, WRITES_PER_MINUTE } from "./limits.js";
 
 export type ToolContext = McpAuthContext & Access;
+
+export type ToolWrite = "create" | "update";
 
 export type ToolDef<S extends z.ZodRawShape> = {
   name: string;
@@ -20,7 +24,17 @@ export type ToolDef<S extends z.ZodRawShape> = {
   description: string;
   scope: McpScope;
   input: S;
+  app?: WorkspaceApp;
+  minimumRole?: WorkspaceRole;
+  writes?: ToolWrite;
   run: (ctx: ToolContext, args: z.objectOutputType<S, z.ZodTypeAny>) => Promise<unknown>;
+};
+
+const READ_ANNOTATIONS: ToolAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
+const WRITE_ANNOTATIONS: Record<ToolWrite, ToolAnnotations> = {
+  create: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  update: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 };
 
 function textResult(text: string, isError = false): CallToolResult {
@@ -62,7 +76,7 @@ function describeFailure(err: unknown): { message: string; outcome: string; unex
     return { message: "The forms service is temporarily unavailable. Try again shortly.", outcome: "upstream_error", unexpected: err.status >= 500 };
   }
   if (isAppError(err) && err.status < 500) return { message: err.message, outcome: "refused", unexpected: false };
-  return { message: "Something went wrong while reading Quantalog data.", outcome: "error", unexpected: true };
+  return { message: "Something went wrong in Quantalog. Try again shortly.", outcome: "error", unexpected: true };
 }
 
 export async function runTool<S extends z.ZodRawShape>(
@@ -82,11 +96,26 @@ export async function runTool<S extends z.ZodRawShape>(
       return textResult(`Rate limit reached (${CALLS_PER_MINUTE} calls per minute). Wait a minute and try again.`, true);
     }
 
+    if (def.writes && (await overRateLimit(`mcp-write:${auth.grantId}`, WRITES_PER_MINUTE, 60_000))) {
+      logCall(auth, def.name, started, "rate_limited");
+      return textResult(`Rate limit reached (${WRITES_PER_MINUTE} changes per minute). Wait a minute and try again.`, true);
+    }
+
     const access = await resolveAccessFor(auth.userId, auth.workspaceId, "viewer");
     if (isDenied(access)) {
       await revokeGrant(auth.grantId, "membership_removed");
       logCall(auth, def.name, started, "membership_removed");
       return textResult("This connection no longer has access to its workspace. Reconnect Quantalog in Claude.", true);
+    }
+
+    if (def.minimumRole && ROLE_RANK[access.role] < ROLE_RANK[def.minimumRole]) {
+      logCall(auth, def.name, started, "forbidden");
+      return textResult(`This needs ${def.minimumRole} access to the workspace. You have ${access.role} access.`, true);
+    }
+
+    if (def.app && !appEnabled(access.workspace, def.app)) {
+      logCall(auth, def.name, started, "app_disabled");
+      return textResult(APP_DISABLED_MESSAGE[def.app], true);
     }
 
     const data = await withTimeout(def.run({ ...auth, ...access }, args), TOOL_TIMEOUT_MS);
@@ -116,7 +145,7 @@ export function registerTool<S extends z.ZodRawShape>(server: McpServer, auth: M
       title: def.title,
       description: def.description,
       inputSchema: def.input,
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: def.writes ? WRITE_ANNOTATIONS[def.writes] : READ_ANNOTATIONS,
     },
     ((args: z.objectOutputType<S, z.ZodTypeAny>) => runTool(auth, def, args)) as never,
   );

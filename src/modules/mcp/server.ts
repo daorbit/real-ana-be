@@ -9,10 +9,15 @@ import { getFormDetailsTool, listFormsTool } from "./tools/forms.tools.js";
 import { listSubmissionsTool } from "./tools/submissions.tool.js";
 import { getBookingSummaryTool, getLeadSummaryTool } from "./tools/summaries.tools.js";
 import { getAnalyticsSummaryTool } from "./tools/analytics.tool.js";
+import { createTaskTool, getTaskBoardTool, getTaskTool, listTasksTool, updateTaskTool } from "./tools/tasks.tools.js";
+import { createNoteTool, getNoteTool, listNotesTool, updateNoteTool } from "./tools/notes.tools.js";
 
 const INSTRUCTIONS =
-  "Read-only access to one Quantalog workspace: forms, form responses, lead pipeline, bookings and website analytics. " +
+  "Access to one Quantalog workspace. Read forms, form responses, lead pipeline, bookings and website analytics. " +
+  "Read, create and update tasks on the workspace's Tasks board, and the user's own personal notes. Nothing can be deleted. " +
   "Start with get_workspace. Use list_forms to find form ids before calling get_form_details or list_submissions. " +
+  "Call get_task_board before creating or assigning tasks, to get column and member ids. " +
+  "Confirm with the user before creating or changing several tasks or notes at once. " +
   "Results are paginated; request further pages only when needed.";
 
 export function buildMcpServer(auth: McpAuthContext): McpServer {
@@ -34,6 +39,15 @@ export function buildMcpServer(auth: McpAuthContext): McpServer {
   registerTool(server, auth, getLeadSummaryTool);
   registerTool(server, auth, getBookingSummaryTool);
   registerTool(server, auth, getAnalyticsSummaryTool);
+  registerTool(server, auth, getTaskBoardTool);
+  registerTool(server, auth, listTasksTool);
+  registerTool(server, auth, getTaskTool);
+  registerTool(server, auth, createTaskTool);
+  registerTool(server, auth, updateTaskTool);
+  registerTool(server, auth, listNotesTool);
+  registerTool(server, auth, getNoteTool);
+  registerTool(server, auth, createNoteTool);
+  registerTool(server, auth, updateNoteTool);
 
   return server;
 }
