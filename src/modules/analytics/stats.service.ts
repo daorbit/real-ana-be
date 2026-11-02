@@ -856,9 +856,12 @@ export async function exportEvents(
   }));
 }
  
+const IS_PAGEVIEW = { $eq: ["$type", "pageview"] };
+const IS_ENGAGEMENT = { $eq: ["$type", "engagement"] };
+
 async function timeseriesFor(match: Match, windowMs: number) {
   return Event.aggregate([
-    { $match: match },
+    { $match: { ...match, type: { $in: ["pageview", "engagement"] } } },
     {
       $group: {
         _id: {
@@ -867,17 +870,37 @@ async function timeseriesFor(match: Match, windowMs: number) {
             date: "$ts",
           },
         },
-        views: { $sum: 1 },
-        visitors: { $addToSet: "$visitorHash" },
+        views: { $sum: { $cond: [IS_PAGEVIEW, 1, 0] } },
+        visitors: { $addToSet: { $cond: [IS_PAGEVIEW, "$visitorHash", "$$REMOVE"] } },
+        sessionIds: { $addToSet: { $cond: [IS_PAGEVIEW, "$sessionId", "$$REMOVE"] } },
+        totalMs: { $sum: { $cond: [IS_ENGAGEMENT, { $ifNull: ["$durationMs", 0] }, 0] } },
+        samples: { $sum: { $cond: [IS_ENGAGEMENT, 1, 0] } },
+        bounces: { $sum: { $cond: [{ $and: [IS_ENGAGEMENT, "$bounce"] }, 1, 0] } },
+        exits: { $sum: { $cond: [{ $and: [IS_ENGAGEMENT, "$isExit"] }, 1, 0] } },
       },
     },
+    { $match: { views: { $gt: 0 } } },
     { $sort: { _id: 1 } },
+    { $addFields: { sessions: { $size: "$sessionIds" } } },
     {
       $project: {
         _id: 0,
         bucket: "$_id",
         views: 1,
         visitors: { $size: "$visitors" },
+        sessions: 1,
+        bounceRate: {
+          $cond: [{ $gt: ["$exits", 0] }, { $round: [{ $multiply: [{ $divide: ["$bounces", "$exits"] }, 100] }, 0] }, 0],
+        },
+        avgTimeOnPageMs: {
+          $cond: [{ $gt: ["$samples", 0] }, { $round: [{ $divide: ["$totalMs", "$samples"] }, 0] }, 0],
+        },
+        avgSessionMs: {
+          $cond: [{ $gt: ["$sessions", 0] }, { $round: [{ $divide: ["$totalMs", "$sessions"] }, 0] }, 0],
+        },
+        pagesPerSession: {
+          $cond: [{ $gt: ["$sessions", 0] }, { $round: [{ $divide: ["$views", "$sessions"] }, 1] }, 0],
+        },
       },
     },
   ]);
@@ -950,7 +973,7 @@ export async function computeStats(
     topBy(entryBase, "utm.campaign"),
     topClicks(base),
     Event.countDocuments({ ...base, type: "click" }),
-    timeseriesFor(pageviewBase, windowMs),
+    timeseriesFor(base, windowMs),
     livePages(siteIds),
     scrollDepth(base),
     newVsReturning(siteIds, since, until, fMatch),
@@ -963,7 +986,7 @@ export async function computeStats(
     topErrors(base),
     withCompareSeries
       ? timeseriesFor(
-          { siteId: inSites, ts: { $gte: prevSince, $lt: prevUntil }, ...fMatch, type: "pageview" },
+          { siteId: inSites, ts: { $gte: prevSince, $lt: prevUntil }, ...fMatch },
           windowMs,
         )
       : Promise.resolve(null),
