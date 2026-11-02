@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Request, Response, NextFunction } from "express";
 import { User } from "../../modules/identity/models/User.js";
 import { Session } from "../../modules/identity/models/Session.js";
+import { SESSION_TTL_SECONDS } from "../../modules/identity/session-lifetime.js";
 import { sessionInfoFor } from "../../shared/utils/session-info.js";
 import { asyncHandler } from "./async-handler.js";
 import { forbidden } from "../../shared/errors/index.js";
@@ -52,7 +53,7 @@ function isSessionPayload(payload: Payload): boolean {
 type Pending2faPayload = { userId: string; pending2fa: true };
 
 export async function signToken(userId: string, req?: Request): Promise<string> {
-  if (!req) return jwt.sign({ userId }, jwtSecret(), { expiresIn: "7d" });
+  if (!req) return jwt.sign({ userId }, jwtSecret(), { expiresIn: SESSION_TTL_SECONDS });
 
   const jti = randomUUID();
   const info = sessionInfoFor(req);
@@ -63,7 +64,7 @@ export async function signToken(userId: string, req?: Request): Promise<string> 
     console.error("[auth] could not record session:", e instanceof Error ? e.message : e);
   });
 
-  return jwt.sign({ userId, jti }, jwtSecret(), { expiresIn: "7d" });
+  return jwt.sign({ userId, jti }, jwtSecret(), { expiresIn: SESSION_TTL_SECONDS });
 }
 
 export function signPending2faToken(userId: string): string {

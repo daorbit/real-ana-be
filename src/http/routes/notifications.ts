@@ -199,6 +199,7 @@ router.post("/push/subscribe", async (req: AuthedRequest, res: Response) => {
         auth,
         userAgent: String(req.headers["user-agent"] ?? "").slice(0, 200),
         origin: String(req.headers.origin ?? "").slice(0, 200),
+        sessionJti: req.sessionJti ?? null,
       },
     },
     { upsert: true },

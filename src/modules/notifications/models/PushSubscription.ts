@@ -8,6 +8,7 @@ const pushSubscriptionSchema = new Schema(
     auth: { type: String, required: true },
     userAgent: { type: String, default: "" },
     origin: { type: String, default: "" },
+    sessionJti: { type: String, default: null },
     lastSuccessAt: { type: Date, default: null },
   },
   { timestamps: true }

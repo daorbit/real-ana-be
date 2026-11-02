@@ -1,5 +1,6 @@
 import webPushLib from "web-push";
 import { PushSubscription } from "./models/PushSubscription.js";
+import { liveSessionJtis, sessionCutoff } from "../identity/session-lifetime.js";
 import { NOTIFICATION_SPECS, type NotificationType } from "./types.js";
 
 
@@ -51,6 +52,33 @@ function deliverable(origin: string): boolean {
   return process.env.PUSH_INCLUDE_LOCAL === "true" || !isLocalOrigin(origin);
 }
 
+type SubscriptionRow = InstanceType<typeof PushSubscription>;
+
+function signedInWithin(sub: SubscriptionRow, live: Set<string>, cutoff: Date): boolean {
+  const jti = sub.get("sessionJti") as string | null;
+  if (jti) return live.has(jti);
+  return (sub.get("updatedAt") as Date) > cutoff;
+}
+
+async function liveSubscriptions(userId: string): Promise<SubscriptionRow[]> {
+  const rows = await PushSubscription.find({ userId });
+  const jtis = rows.map((sub) => sub.get("sessionJti") as string | null).filter((jti): jti is string => Boolean(jti));
+  const live = await liveSessionJtis([...new Set(jtis)]);
+  const cutoff = sessionCutoff();
+
+  const [kept, signedOut] = rows.reduce<[SubscriptionRow[], SubscriptionRow[]]>(
+    (acc, sub) => {
+      acc[signedInWithin(sub, live, cutoff) ? 0 : 1].push(sub);
+      return acc;
+    },
+    [[], []],
+  );
+  if (signedOut.length) {
+    await PushSubscription.deleteMany({ _id: { $in: signedOut.map((sub) => sub._id) } }).catch(() => {});
+  }
+  return kept;
+}
+
 export type PushPayload = {
   type: NotificationType | "test";
   title: string;
@@ -72,7 +100,7 @@ async function sendToAll(userId: string, payload: PushPayload): Promise<PushResu
   const mod = webPush();
   if (!mod) return result;
 
-  const subscriptions = (await PushSubscription.find({ userId })).filter((sub) =>
+  const subscriptions = (await liveSubscriptions(userId)).filter((sub) =>
     deliverable(String(sub.get("origin") ?? "")),
   );
   result.subscriptions = subscriptions.length;
