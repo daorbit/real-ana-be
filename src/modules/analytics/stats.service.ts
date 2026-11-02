@@ -1100,8 +1100,10 @@ export async function computeStats(
   };
 }
 
-const COMPARABLE_DIMENSIONS: Record<string, { field: string; type?: string; entry?: boolean }> = {
+const COMPARABLE_DIMENSIONS: Record<string, { field: string; type?: string; entry?: boolean; exit?: boolean }> = {
   path: { field: "path", type: "pageview" },
+  entryPath: { field: "path", type: "pageview", entry: true },
+  exitPath: { field: "path", type: "engagement", exit: true },
   referrer: { field: "referrer", type: "pageview", entry: true },
   device: { field: "device", type: "pageview" },
   browser: { field: "browser", type: "pageview" },
@@ -1134,7 +1136,11 @@ export async function compareBreakdown(
 
   const fMatch = filterMatch(filters);
   const inSites = { $in: siteIds };
-  const typeMatch = { ...(dim.type ? { type: dim.type } : {}), ...(dim.entry ? { isEntry: true } : {}) };
+  const typeMatch = {
+    ...(dim.type ? { type: dim.type } : {}),
+    ...(dim.entry ? { isEntry: true } : {}),
+    ...(dim.exit ? { isExit: true } : {}),
+  };
 
 
   const [currentRows, previousRows] = await Promise.all([
