@@ -14,6 +14,7 @@ import {
 import { encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
+import { cookieSessionToken } from "../session-cookie.js";
 import { requireAuth, blockDemoWrites, jwtSecret, verifySessionToken, AuthedRequest } from "../middleware/auth.js";
 import {
   SOCIAL_CONNECT_ROLE, assertSocialAccess, canManageSocial, connectionTakenElsewhere,
@@ -221,7 +222,7 @@ router.get(
       return closePopup(res, "error", "not_configured");
     }
 
-    const token = String(req.query.token ?? "");
+    const token = cookieSessionToken(req);
     if (!token) return closePopup(res, "error", "not_signed_in");
 
     const session = await verifySessionToken(token);

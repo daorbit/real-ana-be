@@ -31,6 +31,7 @@ import { connectPlaceLocation } from "../../modules/reviews/places.service.js";
 import type { LocationSource } from "../../modules/reviews/models/GoogleLocation.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
+import { cookieSessionToken } from "../session-cookie.js";
 import {
   AuthedRequest,
   blockDemoWrites,
@@ -148,7 +149,7 @@ router.get(
       return closePopup(res, "error", "not_configured");
     }
 
-    const token = String(req.query.token ?? "");
+    const token = cookieSessionToken(req);
     const workspaceId = String(req.query.workspaceId ?? "");
     if (!token) return closePopup(res, "error", "not_signed_in");
     if (!workspaceId) return closePopup(res, "error", "no_access");

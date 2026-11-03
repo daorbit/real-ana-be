@@ -1,6 +1,6 @@
 import cors from "cors";
 
- 
+
 const dashboardOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
@@ -8,11 +8,20 @@ const dashboardOrigins = [
   "https://studio-quantalog.daorbit.in",
 ];
 
+export function isDashboardOrigin(origin: string | undefined): boolean {
+  return Boolean(origin) && dashboardOrigins.includes(origin as string);
+}
+
 export const dashboardCors = cors({
   origin: (origin, cb) => {
     if (!origin || dashboardOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`Origin not allowed: ${origin}`));
   },
+  credentials: true,
+});
+
+export const publicCors = cors((req, cb) => {
+  cb(null, isDashboardOrigin(req.headers.origin) ? { origin: true, credentials: true } : { origin: "*" });
 });
 
 export const connectorCors = cors({
@@ -36,6 +45,6 @@ export const orbitCors = cors((req, cb) => {
     dashboardOrigins.includes(origin) ||
     origin.startsWith("chrome-extension://") ||
     sameHost(origin, req.headers.host);
-  if (allowed) return cb(null, { origin: true });
+  if (allowed) return cb(null, { origin: true, credentials: true });
   cb(new Error(`Origin not allowed: ${origin}`));
 });

@@ -23,6 +23,7 @@ import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
 import { workersAiUsage, workersAiTrend } from "../../modules/orbit/cloudflare-ai.js";
 import { requireAuth, requireAdmin, requireSuperAdmin, signImpersonationToken, AuthedRequest } from "../middleware/auth.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
+import { sessionTokenFrom, startSession, stashAdminSession } from "../session-cookie.js";
 import { adminUserOverview } from "../../modules/admin/user-overview.service.js";
 import { getOpsAlertSettings, setOpsAlertSettings } from "../../modules/admin/ops-alert-settings.js";
 import { DEFAULT_DB_LIMIT_BYTES, readDbStorage } from "../../modules/admin/db-stats.service.js";
@@ -215,8 +216,10 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
 
   console.log(`[impersonate] admin ${req.userId} -> user ${target.id} (${target.email})`);
 
+  const own = sessionTokenFrom(req);
+  if (own) stashAdminSession(res, own.token);
   res.json({
-    token,
+    ...startSession(res, token),
     user: { id: target.id, email: target.email, name: target.name, role: target.role },
   });
 });

@@ -15,6 +15,7 @@ import { safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { signToken, signPending2faToken, jwtSecret } from "../middleware/auth.js";
 import { studioBase } from "../oauth-popup.js";
+import { startSession } from "../session-cookie.js";
 
 const router = Router();
 
@@ -23,10 +24,9 @@ const STATE_KIND = "google-oauth";
 
 type StatePayload = { nonce: string; kind: typeof STATE_KIND };
 
-function loginUrl(status: string, extra: { reason?: string; token?: string; pendingToken?: string } = {}): string {
+function loginUrl(status: string, extra: { reason?: string; pendingToken?: string } = {}): string {
   const params = new URLSearchParams({ googleLogin: status });
   if (extra.reason) params.set("reason", extra.reason);
-  if (extra.token) params.set("token", extra.token);
   if (extra.pendingToken) params.set("pendingToken", extra.pendingToken);
   return `${studioBase()}/login?${params.toString()}`;
 }
@@ -67,7 +67,8 @@ export async function handleGoogleLoginCallback(req: Request, res: Response): Pr
     if (user.totpEnabled) {
       return res.redirect(loginUrl("2fa", { pendingToken: signPending2faToken(user.id) }));
     }
-    return res.redirect(loginUrl(created ? "created" : "ok", { token: await signToken(user.id, req) }));
+    startSession(res, await signToken(user.id, req));
+    return res.redirect(loginUrl(created ? "created" : "ok"));
   } catch (e) {
     console.error("[google] login failed:", e instanceof Error ? e.message : e);
     return res.redirect(loginUrl("error", { reason: "login_failed" }));

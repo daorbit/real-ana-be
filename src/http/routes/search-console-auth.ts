@@ -17,6 +17,7 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { AuthedRequest, jwtSecret, verifySessionToken } from "../middleware/auth.js";
 import { isDenied, resolveAccess } from "../../modules/workspace/access.service.js";
 import { renderOAuthPopup, studioBase } from "../oauth-popup.js";
+import { cookieSessionToken } from "../session-cookie.js";
 import { handleGoogleLoginCallback, isGoogleLoginState } from "./google-login.js";
 
 const router = Router();
@@ -84,7 +85,7 @@ router.get(
       return closePopup(res, "error", "not_configured");
     }
 
-    const token = String(req.query.token ?? "");
+    const token = cookieSessionToken(req);
     const workspaceId = String(req.query.workspaceId ?? "");
     if (!token) return closePopup(res, "error", "not_signed_in");
     if (!workspaceId) return closePopup(res, "error", "no_access");

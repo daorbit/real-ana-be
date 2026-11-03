@@ -1,6 +1,5 @@
 import "express-async-errors";
 import express, { Request, Response } from "express";
-import cors from "cors";
 import compression from "compression";
 import helmet from "helmet";
 import path from "path";
@@ -78,7 +77,7 @@ import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
 import { errorHandler, notFoundHandler } from "./http/middleware/index.js";
-import { connectorCors, dashboardCors, orbitCors } from "./http/middleware/cors.js";
+import { connectorCors, dashboardCors, orbitCors, publicCors } from "./http/middleware/cors.js";
 import { requireMcpEnabled } from "./http/middleware/mcp-guards.js";
 import { requireUnlocked } from "./http/middleware/auth.js";
 import { requireApiKeyOrAuth } from "./http/middleware/orbit-access.js";
@@ -133,31 +132,28 @@ app.use(express.json());
 
 app.use(express.text({ type: ["text/plain", "text/*"] }));
 
-// Open CORS: tracker + collect run on arbitrary customer domains
-const openCors = cors({ origin: "*" });
 
-
-app.get("/api/health", openCors, (_req: Request, res: Response) => {
+app.get("/api/health", publicCors, (_req: Request, res: Response) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
 
-app.get("/", openCors, (_req: Request, res: Response) => {
+app.get("/", publicCors, (_req: Request, res: Response) => {
   res.type("html").send(renderStatusPage(process.uptime()));
 });
 
 // Public tracking surface (any origin)
-app.use(["/api/collect", "/api/ingest"], openCors, collectRoutes);
-app.use("/api/track", openCors, trackRoutes);
-app.use("/api/popups", openCors, popupPublicRoutes);
-app.use("/api/experiments", openCors, experimentPublicRoutes);
-app.use("/api/public/bio", openCors, bioPublicRoutes);
+app.use(["/api/collect", "/api/ingest"], publicCors, collectRoutes);
+app.use("/api/track", publicCors, trackRoutes);
+app.use("/api/popups", publicCors, popupPublicRoutes);
+app.use("/api/experiments", publicCors, experimentPublicRoutes);
+app.use("/api/public/bio", publicCors, bioPublicRoutes);
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "..", "public");
 app.get(
   "/tracker.js",
-  openCors,
+  publicCors,
   compression(),
   (_req, res) => {
     res.type("application/javascript");
@@ -168,19 +164,19 @@ app.get(
 );
 
 
-app.get(["/favicon.ico", "/favicon.png"], openCors, (_req, res) => {
+app.get(["/favicon.ico", "/favicon.png"], publicCors, (_req, res) => {
   res.type("image/png");
   res.set("Cache-Control", "public, max-age=86400");
   res.sendFile(path.join(publicDir, "favicon.png"));
 });
 
 const openApiSpec = buildOpenApiSpec();
-app.get("/openapi.json", openCors, (_req: Request, res: Response) => {
+app.get("/openapi.json", publicCors, (_req: Request, res: Response) => {
   res.json(openApiSpec);
 });
 app.use(
   "/docs",
-  openCors,
+  publicCors,
   swaggerUi.serve,
   swaggerUi.setup(openApiSpec, {
     customSiteTitle: "Quantalog API reference",
@@ -203,19 +199,19 @@ app.use(
   }),
 );
 
-app.use("/v1", openCors, v1Routes);
+app.use("/v1", publicCors, v1Routes);
 
 
-app.use("/api/share", openCors, shareRoutes);
+app.use("/api/share", publicCors, shareRoutes);
 // Public per-report SEO audits. Same unauthenticated, token-in-path model as
 // the shared dashboards above.
-app.use("/api/public/seo", openCors, seoPublicRoutes);
-app.use("/api/public/plans", openCors, plansPublicRoutes);
+app.use("/api/public/seo", publicCors, seoPublicRoutes);
+app.use("/api/public/plans", publicCors, plansPublicRoutes);
 
-app.use("/api/public/reports", openCors, reportsPublicRoutes);
+app.use("/api/public/reports", publicCors, reportsPublicRoutes);
 
-app.use("/api/public/orbit", openCors, orbitPublicRoutes);
-app.use("/api/embed", openCors, embedPublicRoutes);
+app.use("/api/public/orbit", publicCors, orbitPublicRoutes);
+app.use("/api/embed", publicCors, embedPublicRoutes);
 
 app.use("/api/auth/linkedin", linkedinRoutes);
 

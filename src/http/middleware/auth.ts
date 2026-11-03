@@ -7,6 +7,8 @@ import { SESSION_TTL_SECONDS } from "../../modules/identity/session-lifetime.js"
 import { sessionInfoFor } from "../../shared/utils/session-info.js";
 import { asyncHandler } from "./async-handler.js";
 import { forbidden } from "../../shared/errors/index.js";
+import { isDashboardOrigin } from "./cors.js";
+import { sessionTokenFrom } from "../session-cookie.js";
 
  
 export function jwtSecret(): string {
@@ -107,10 +109,17 @@ export async function verifySessionToken(token: string): Promise<{ userId: strin
   return { userId: payload.userId, demo: payload.demo === true };
 }
 
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+export function isTrustedWrite(req: Request): boolean {
+  return SAFE_METHODS.has(req.method) || isDashboardOrigin(req.headers.origin);
+}
+
 export const requireAuth = asyncHandler<AuthedRequest>(async (req, res, next) => {
-  const header = req.headers.authorization ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "no token" });
+  const source = sessionTokenFrom(req);
+  if (!source) return res.status(401).json({ error: "no token" });
+  if (source.viaCookie && !isTrustedWrite(req)) return res.status(403).json({ error: "untrusted origin" });
+  const { token } = source;
 
   let payload: Payload;
   try {

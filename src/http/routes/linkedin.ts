@@ -24,6 +24,7 @@ import { checkImageDataUrl } from "../../infra/storage/cloudinary.js";
 import { decryptSecret, encryptSecret, safeEqual } from "../../shared/utils/crypto-box.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { dashboardCors } from "../middleware/cors.js";
+import { cookieSessionToken, startSession } from "../session-cookie.js";
 import {
   requireAuth, blockDemoWrites, signToken, signPending2faToken, jwtSecret, verifySessionToken, AuthedRequest,
 } from "../middleware/auth.js";
@@ -230,11 +231,10 @@ function escapeHtml(value: string): string {
  * Where a sign-in attempt returns to: the login page, which knows how to store
  * a token and route onward.
  */
-function loginUrl(status: string, detail?: string, token?: string, pendingToken?: string): string {
+function loginUrl(status: string, detail?: string, pendingToken?: string): string {
   const base = studioBase();
   const params = new URLSearchParams({ linkedinLogin: status });
   if (detail) params.set("reason", detail);
-  if (token) params.set("token", token);
   if (pendingToken) params.set("pendingToken", pendingToken);
   return `${base}/login?${params.toString()}`;
 }
@@ -382,7 +382,7 @@ router.get(
     let workspaceId: string | undefined;
 
     if (mode === "connect") {
-      const token = String(req.query.token ?? "");
+      const token = cookieSessionToken(req);
       if (!token) return closePopup(res, "error", "not_signed_in");
 
       const session = await verifySessionToken(token);
@@ -561,8 +561,11 @@ router.get(
       }
     }
 
-    if (issuedToken) return res.redirect(loginUrl("ok", undefined, issuedToken));
-    if (pending2faToken) return res.redirect(loginUrl("2fa", undefined, undefined, pending2faToken));
+    if (issuedToken) {
+      startSession(res, issuedToken);
+      return res.redirect(loginUrl("ok"));
+    }
+    if (pending2faToken) return res.redirect(loginUrl("2fa", undefined, pending2faToken));
 
     if (!(await canManageSocial(userId!, workspaceId!))) {
       return closePopup(res, "error", "no_workspace");

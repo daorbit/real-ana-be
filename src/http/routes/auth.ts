@@ -31,8 +31,12 @@ import { captureServerError } from "../../infra/monitoring/sentry.js";
 import { recordAudit, accountAuditPage, parseCursor } from "../../modules/audit/audit.service.js";
 import {
   signToken, signDemoToken, requireAuth, requireUnlocked, blockDemoWrites, AuthedRequest,
-  signPending2faToken, verifyPending2faToken,
+  signPending2faToken, verifyPending2faToken, verifySessionToken, isTrustedWrite,
 } from "../middleware/auth.js";
+import {
+  ADMIN_SESSION_COOKIE, bearerToken, clearAdminSession, cookieSessionToken, endSession,
+  readCookie, sessionHint, startSession, type SessionHint,
+} from "../session-cookie.js";
 
 const router = Router();
 
@@ -397,7 +401,7 @@ router.post("/signup/verify", async (req, res) => {
     welcomeInBackground(user.email, user.name);
 
     const token = await signToken(user.id, req);
-    res.status(201).json({ token, user: await publicUser(user) });
+    res.status(201).json({ ...startSession(res, token), user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "verification failed" });
   }
@@ -554,7 +558,7 @@ router.post("/login", async (req, res) => {
       publicUser(user),
       recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "password" } }),
     ]);
-    res.json({ token, user: profile });
+    res.json({ ...startSession(res, token), user: profile });
   } catch {
     res.status(500).json({ error: "login failed" });
   }
@@ -589,7 +593,7 @@ router.post("/2fa/verify", async (req, res) => {
         clearAttempts(throttleKey),
         recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "2fa" } }),
       ]);
-      return res.json({ token, user: await publicUser(user) });
+      return res.json({ ...startSession(res, token), user: await publicUser(user) });
     }
 
     // Not a valid live code — try it as a backup code instead. Each one is
@@ -612,7 +616,7 @@ router.post("/2fa/verify", async (req, res) => {
       recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "backup_code" } }),
     ]);
     const token = await signToken(user.id, req);
-    res.json({ token, user: await publicUser(user), backupCodeUsed: true });
+    res.json({ ...startSession(res, token), user: await publicUser(user), backupCodeUsed: true });
   } catch {
     res.status(500).json({ error: "verification failed" });
   }
@@ -854,16 +858,20 @@ router.post("/google", async (req, res) => {
       signToken(user.id, req),
       recordAudit(req, { action: "account.login", actorId: user.id, meta: { method: "google" } }),
     ]);
-    res.status(created ? 201 : 200).json({ token, user: await publicUser(user), created });
+    res.status(created ? 201 : 200).json({ ...startSession(res, token), user: await publicUser(user), created });
   } catch (e) {
     console.error("[auth] google sign-in failed:", e instanceof Error ? e.message : e);
     res.status(500).json({ error: "Google sign-in failed" });
   }
 });
 
+function sessionOf(req: AuthedRequest): SessionHint {
+  return { id: req.sessionJti ?? "", demo: Boolean(req.isDemo), impersonating: Boolean(req.impersonatorId) };
+}
+
 router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
 
-  if (req.isDemo) return res.json(demoUser());
+  if (req.isDemo) return res.json({ ...demoUser(), session: sessionOf(req) });
 
   const user = await User.findById(req.userId);
   if (!user) return res.status(404).json({ error: "not found" });
@@ -873,7 +881,35 @@ router.get("/me", requireAuth, async (req: AuthedRequest, res: Response) => {
     impersonating: Boolean(req.impersonatorId),
     // Lets the client switch to its read-only demo behaviour after a reload.
     demo: Boolean(req.isDemo),
+    session: sessionOf(req),
   });
+});
+
+router.post("/session", requireAuth, (req: AuthedRequest, res: Response) => {
+  const bearer = bearerToken(req);
+  if (bearer) return res.json(startSession(res, bearer));
+  res.json({ session: sessionOf(req) });
+});
+
+router.post("/logout", async (req: Request, res: Response) => {
+  if (!isTrustedWrite(req)) return res.status(403).json({ error: "untrusted origin" });
+  const token = cookieSessionToken(req);
+  const jti = token ? sessionHint(token).id : "";
+  if (jti) await Session.updateOne({ jti, revokedAt: null }, { revokedAt: new Date() }).catch(() => {});
+  endSession(res);
+  res.json({ ok: true });
+});
+
+router.post("/impersonation/exit", async (req: Request, res: Response) => {
+  if (!isTrustedWrite(req)) return res.status(403).json({ error: "untrusted origin" });
+  const adminToken = readCookie(req, ADMIN_SESSION_COOKIE) ?? "";
+  const session = adminToken ? await verifySessionToken(adminToken) : null;
+  if (!session) {
+    endSession(res);
+    return res.status(401).json({ error: "no admin session to return to" });
+  }
+  clearAdminSession(res);
+  res.json(startSession(res, adminToken));
 });
 
 
@@ -962,7 +998,7 @@ router.post("/demo", async (req: Request, res: Response) => {
       });
     }
 
-    res.json({ token: signDemoToken(DEMO_USER_ID), user: demoUser() });
+    res.json({ ...startSession(res, signDemoToken(DEMO_USER_ID)), user: demoUser() });
   } catch {
     res.status(500).json({ error: "could not start demo" });
   }
@@ -1313,7 +1349,7 @@ router.post("/reset-password", async (req, res) => {
 
 
     const token = await signToken(user.id, req);
-    res.json({ token, user: await publicUser(user) });
+    res.json({ ...startSession(res, token), user: await publicUser(user) });
   } catch {
     res.status(500).json({ error: "could not reset the password" });
   }
