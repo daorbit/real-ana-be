@@ -45,6 +45,6 @@ export const orbitCors = cors((req, cb) => {
     dashboardOrigins.includes(origin) ||
     origin.startsWith("chrome-extension://") ||
     sameHost(origin, req.headers.host);
-  if (allowed) return cb(null, { origin: true, credentials: true });
+  if (allowed) return cb(null, { origin: true, credentials: isDashboardOrigin(origin) });
   cb(new Error(`Origin not allowed: ${origin}`));
 });
