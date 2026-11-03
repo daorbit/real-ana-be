@@ -115,10 +115,16 @@ export function isTrustedWrite(req: Request): boolean {
   return SAFE_METHODS.has(req.method) || isDashboardOrigin(req.headers.origin);
 }
 
+function isNavigation(req: Request): boolean {
+  return req.headers["sec-fetch-mode"] === "navigate";
+}
+
 export const requireAuth = asyncHandler<AuthedRequest>(async (req, res, next) => {
   const source = sessionTokenFrom(req);
   if (!source) return res.status(401).json({ error: "no token" });
-  if (source.viaCookie && !isTrustedWrite(req)) return res.status(403).json({ error: "untrusted origin" });
+  if (source.viaCookie && (!isTrustedWrite(req) || isNavigation(req))) {
+    return res.status(403).json({ error: "untrusted origin" });
+  }
   const { token } = source;
 
   let payload: Payload;
