@@ -4,7 +4,7 @@ import { publicBrand } from "../../modules/branding/public-brand.js";
 import { Campaign } from "../../modules/campaigns/models/Campaign.js";
 import { CampaignRecipient } from "../../modules/campaigns/models/CampaignRecipient.js";
 import { isEmailAddress, parseCampaignDraft, sendProblem, type CampaignContact } from "../../modules/campaigns/campaign-draft.js";
-import { campaignHtml, campaignText, unsubscribeHeaders } from "../../modules/campaigns/campaign-email.js";
+import { campaignHtml, campaignText, personalize, unsubscribeHeaders } from "../../modules/campaigns/campaign-email.js";
 import { emailDelivery, leadSources, sendEmails } from "../../modules/campaigns/campaign-delivery.js";
 import {
   campaignAudience,
@@ -86,7 +86,7 @@ router.post(
     const draft = parseCampaignDraft({ ...req.body, name: "Preview" });
     if (typeof draft === "string") return res.status(400).json({ error: draft });
     const brand = await publicBrand(ws.id);
-    res.json({ html: campaignHtml(draft, { name: SAMPLE_NAME, unsubscribeUrl: "#" }, brand, String(ws.get("name") ?? "")) });
+    res.json({ html: campaignHtml(draft, { name: SAMPLE_NAME, unsubscribeUrl: "#", preview: true }, brand, String(ws.get("name") ?? "")) });
   }),
 );
 
@@ -187,7 +187,7 @@ router.post(
       const [result] = await sendEmails(ws.id, [
         {
           to: to.trim(),
-          subject: `[Test] ${content.subject}`,
+          subject: `[Test] ${personalize(content.subject, SAMPLE_NAME)}`,
           html: campaignHtml(content, info, brand, workspaceName),
           text: campaignText(content, info, brand.name || workspaceName),
           headers: unsubscribeHeaders(url),

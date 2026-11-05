@@ -158,6 +158,25 @@ export function designHasContent(design: EmailDesign): boolean {
   });
 }
 
+const PLACEHOLDER = /\[[A-Za-z][A-Za-z ]{1,40}\]/;
+
+function blockStrings(block: EmailBlock): string[] {
+  if (block.type === "heading" || block.type === "text") return [block.text];
+  if (block.type === "button") return [block.label];
+  if (block.type === "columns") return [block.leftTitle, block.leftText, block.rightTitle, block.rightText];
+  return [];
+}
+
+export function designProblem(design: EmailDesign, subject: string): string | null {
+  const strings = [subject, ...design.blocks.flatMap(blockStrings)];
+  const placeholder = strings.map((value) => PLACEHOLDER.exec(value)?.[0]).find(Boolean);
+  if (placeholder) return `Replace ${placeholder} with your own text before sending.`;
+  if (design.blocks.some((block) => block.type === "button" && block.label && !block.url)) {
+    return "Add a link to your button before sending.";
+  }
+  return null;
+}
+
 export function sanitizeCustomHtml(value: unknown): string {
   return text(value, MAX_CUSTOM_HTML)
     .replace(/<(script|iframe|object|embed|form)\b[\s\S]*?<\/\1\s*>/gi, "")

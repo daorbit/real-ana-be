@@ -24,6 +24,7 @@ export interface CampaignContent {
 export interface CampaignRecipientInfo {
   name?: string;
   unsubscribeUrl: string;
+  preview?: boolean;
 }
 
 interface RenderContext {
@@ -31,9 +32,10 @@ interface RenderContext {
   brand: PublicBrand;
   sender: string;
   name?: string;
+  preview: boolean;
 }
 
-function personalize(value: string, name?: string): string {
+export function personalize(value: string, name?: string): string {
   return value.replace(NAME_TOKEN, name?.trim() || FALLBACK_NAME);
 }
 
@@ -65,17 +67,20 @@ function brandBlock(block: Extract<EmailBlock, { type: "brand" }>, ctx: RenderCo
 }
 
 function buttonBlock(block: Extract<EmailBlock, { type: "button" }>, ctx: RenderContext): string {
-  if (!block.label || !block.url) return "";
+  if (!block.label || (!block.url && !ctx.preview)) return "";
   const width = block.fullWidth ? ' width="100%"' : "";
   return row(`<table role="presentation" cellpadding="0" cellspacing="0" border="0"${width} align="${block.align}" style="margin:4px 0"><tr>
     <td align="center" bgcolor="${ctx.theme.accentColor}" style="background:${ctx.theme.accentColor};border-radius:12px">
-      <a href="${escapeAttr(block.url)}" style="display:block;padding:14px 26px;font-size:16px;font-weight:600;line-height:1.2;color:${ctx.theme.buttonTextColor} !important;text-decoration:none !important">${escapeHtml(personalize(block.label, ctx.name))}</a>
+      <a href="${escapeAttr(block.url || "#")}" style="display:block;padding:14px 26px;font-size:16px;font-weight:600;line-height:1.2;color:${ctx.theme.buttonTextColor} !important;text-decoration:none !important">${escapeHtml(personalize(block.label, ctx.name))}</a>
     </td>
   </tr></table>`);
 }
 
-function imageBlock(block: Extract<EmailBlock, { type: "image" }>): string {
-  if (!block.url) return "";
+function imageBlock(block: Extract<EmailBlock, { type: "image" }>, ctx: RenderContext): string {
+  if (!block.url) {
+    if (!ctx.preview) return "";
+    return row(`<div style="padding:72px 16px;border-radius:${block.radius}px;background:${ctx.theme.mutedColor}22;font-size:14px;text-align:center;color:${ctx.theme.mutedColor}">Your image</div>`);
+  }
   const image = `<img src="${escapeAttr(block.url)}" alt="${escapeAttr(block.alt)}" width="${block.width}%" style="display:inline-block;width:${block.width}%;max-width:100%;height:auto;border:0;border-radius:${block.radius}px">`;
   const linked = block.link ? `<a href="${escapeAttr(block.link)}">${image}</a>` : image;
   return row(`<div style="text-align:center">${linked}</div>`);
@@ -111,7 +116,7 @@ function renderBlock(block: EmailBlock, ctx: RenderContext): string {
     case "button":
       return buttonBlock(block, ctx);
     case "image":
-      return imageBlock(block);
+      return imageBlock(block, ctx);
     case "divider":
       return row(`<div style="height:1px;font-size:0;line-height:0;background:${ctx.theme.mutedColor};opacity:0.3">&nbsp;</div>`, "6px 0 22px");
     case "spacer":
@@ -180,7 +185,13 @@ export function campaignHtml(
 ): string {
   const sender = brand.name || workspaceName;
   if (content.mode === "html") return customHtml(content, recipient, sender);
-  return designHtml(content, recipient, { theme: content.design.theme, brand, sender, name: recipient.name });
+  return designHtml(content, recipient, {
+    theme: content.design.theme,
+    brand,
+    sender,
+    name: recipient.name,
+    preview: recipient.preview === true,
+  });
 }
 
 function blockText(block: EmailBlock): string {

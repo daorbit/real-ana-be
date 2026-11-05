@@ -6,7 +6,7 @@ import { cronDeadline } from "../../shared/utils/time-budget.js";
 import { Campaign } from "./models/Campaign.js";
 import { CampaignRecipient } from "./models/CampaignRecipient.js";
 import { parseEmailDesign } from "./campaign-design.js";
-import { campaignHtml, campaignText, unsubscribeHeaders, type CampaignContent } from "./campaign-email.js";
+import { campaignHtml, campaignText, personalize, unsubscribeHeaders, type CampaignContent } from "./campaign-email.js";
 import { sendEmails, type OutgoingEmail } from "./campaign-delivery.js";
 import { unsubscribeUrl } from "./unsubscribe-token.js";
 
@@ -66,7 +66,7 @@ function buildEmail(active: Active, recipient: { email: string; name?: string | 
   const info = { name: recipient.name ?? "", unsubscribeUrl: url };
   return {
     to: recipient.email,
-    subject: active.content.subject,
+    subject: personalize(active.content.subject, recipient.name ?? ""),
     html: campaignHtml(active.content, info, active.brand, active.workspaceName),
     text: campaignText(active.content, info, active.brand.name || active.workspaceName),
     headers: unsubscribeHeaders(url),

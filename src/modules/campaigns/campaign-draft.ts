@@ -1,5 +1,6 @@
 import {
   designHasContent,
+  designProblem,
   parseEmailDesign,
   sanitizeCustomHtml,
   type EmailDesign,
@@ -67,6 +68,8 @@ export function sendProblem(
   if (!draft.subject) return "Add a subject line before sending.";
   const hasContent = draft.mode === "html" ? Boolean(draft.html.trim()) : designHasContent(draft.design);
   if (!hasContent) return "Add some content to the email before sending.";
+  const problem = draft.mode === "design" ? designProblem(draft.design, draft.subject) : null;
+  if (problem) return problem;
   if (!draft.senderAddress) return "Add your business postal address. It appears in the email footer.";
   return null;
 }
