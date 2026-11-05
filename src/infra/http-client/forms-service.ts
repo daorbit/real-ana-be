@@ -39,6 +39,32 @@ export async function purgeFormsWorkspace(workspaceId: string): Promise<void> {
   }
 }
 
+export async function callFormsInternal<T>(
+  method: "GET" | "POST",
+  workspaceId: string,
+  path: string,
+  timeoutMs: number,
+  body?: unknown,
+): Promise<T> {
+  const base = formsBase();
+  const secret = process.env.FORMS_SERVICE_SECRET;
+  if (!base || !secret) throw new FormsServiceError(503, "forms integration is not configured");
+
+  const { status, data } = await axios({
+    method,
+    url: `${base}/api/internal/workspaces/${encodeURIComponent(workspaceId)}${path}`,
+    data: body,
+    headers: { Authorization: `Bearer ${secret}` },
+    timeout: timeoutMs,
+    validateStatus: () => true,
+  }).catch((e: unknown) => {
+    throw new FormsServiceError(502, e instanceof Error ? e.message : "forms service unreachable");
+  });
+
+  if (status < 200 || status >= 300) throw new FormsServiceError(status >= 500 ? 502 : status, `forms service answered ${status}`);
+  return data as T;
+}
+
 export async function readFormsWorkspace<T>(
   workspaceId: string,
   actorId: string,

@@ -11,6 +11,7 @@ import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
 import { runDueInsights } from "../../modules/insights/insights.service.js";
+import { runCampaignSends } from "../../modules/campaigns/campaign-runner.js";
 import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 import { markServerErrorReported } from "../middleware/report-server-errors.js";
 
@@ -174,9 +175,15 @@ async function runAlerts() {
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
-  const [posts, alerts] = await Promise.allSettled([runDuePosts(), runAlerts()]);
+  const [posts, alerts, campaigns] = await Promise.allSettled([runDuePosts(), runAlerts(), runCampaignSends()]);
   const alertResult =
     alerts.status === "fulfilled" ? alerts.value : { error: (alerts.reason as Error)?.message ?? "alerts failed" };
+  const campaignResult =
+    campaigns.status === "fulfilled" ? campaigns.value : { error: (campaigns.reason as Error)?.message ?? "campaigns failed" };
+  if (campaigns.status === "rejected") {
+    console.error("[cron] campaign run failed:", campaignResult);
+    await alertCronFailure("campaigns", (campaigns.reason as Error)?.message ?? "campaigns failed");
+  }
   if (alerts.status === "rejected") {
     console.error("[cron] alert run failed:", alertResult);
     await alertCronFailure("alerts", (alerts.reason as Error)?.message ?? "alerts failed");
@@ -186,7 +193,7 @@ router.get("/social-posts", async (req: Request, res: Response) => {
     const message = (posts.reason as Error)?.message ?? "social posts failed";
     console.error("[cron] social post run failed:", message);
     await alertCronFailure("social-posts", message);
-    return res.status(500).json({ ok: false, error: message, alerts: alertResult });
+    return res.status(500).json({ ok: false, error: message, alerts: alertResult, campaigns: campaignResult });
   }
 
   const summary = posts.value;
@@ -194,7 +201,7 @@ router.get("/social-posts", async (req: Request, res: Response) => {
     console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
   }
   if (summary.errors.length) console.error("[cron] social errors:", summary.errors.join(" | "));
-  res.json({ ok: true, ...summary, alerts: alertResult });
+  res.json({ ok: true, ...summary, alerts: alertResult, campaigns: campaignResult });
 });
 
 router.get("/alerts", async (req: Request, res: Response) => {

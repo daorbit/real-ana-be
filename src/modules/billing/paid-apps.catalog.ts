@@ -13,6 +13,7 @@ export const PAID_APPS = [
   "tasks",
   "invoicing",
   "experiments",
+  "campaigns",
 ] as const satisfies readonly WorkspaceApp[];
 export type PaidApp = (typeof PAID_APPS)[number];
 
@@ -31,6 +32,7 @@ export const PAID_APP_NAMES: Record<PaidApp, string> = {
   tasks: "Quantalog Tasks",
   invoicing: "Quantalog Invoicing",
   experiments: "Quantalog A/B Tests",
+  campaigns: "Quantalog Campaigns",
 };
 
 export const PAYMENT_ONLY_APPS: readonly PaidApp[] = [
@@ -41,6 +43,7 @@ export const PAYMENT_ONLY_APPS: readonly PaidApp[] = [
   "tasks",
   "invoicing",
   "experiments",
+  "campaigns",
 ];
 
 type AppsCarrier = { get: (path: string) => unknown };

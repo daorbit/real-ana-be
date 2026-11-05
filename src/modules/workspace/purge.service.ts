@@ -38,6 +38,9 @@ import { Task } from "../tasks/models/Task.js";
 import { TaskBucket } from "../tasks/models/TaskBucket.js";
 import { InsightDigest } from "../insights/models/InsightDigest.js";
 import { Experiment } from "../experiments/models/Experiment.js";
+import { Campaign } from "../campaigns/models/Campaign.js";
+import { CampaignRecipient } from "../campaigns/models/CampaignRecipient.js";
+import { EmailSuppression } from "../campaigns/models/EmailSuppression.js";
 import { invalidateSite } from "../billing/event-quota.js";
 import { deleteWorkspaceDashboards } from "../dashboards/cleanup.js";
 import { deleteWorkspaceMedia } from "../media/cleanup.js";
@@ -93,6 +96,9 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
       disconnectSearchConsole(id),
       deleteWorkspaceDashboards(id),
     ]),
+    Campaign.deleteMany(byWorkspace),
+    CampaignRecipient.deleteMany(byWorkspace),
+    EmailSuppression.deleteMany(byWorkspace),
     Funnel.deleteMany(byWorkspace),
     Segment.deleteMany(byWorkspace),
     Marker.deleteMany(byWorkspace),

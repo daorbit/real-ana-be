@@ -57,6 +57,7 @@ export type PlanCatalogEntry = {
   insightWeeks: number;
   insightRefresh: boolean;
   maxRunningExperiments: number;
+  monthlyCampaignEmails: number;
   alertCheckHours: number;
   auditLogDays: number;
 };
@@ -122,6 +123,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     insightWeeks: 4,
     insightRefresh: false,
     maxRunningExperiments: 1,
+    monthlyCampaignEmails: 200,
     alertCheckHours: 6,
     auditLogDays: 7,
   },
@@ -177,6 +179,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     insightWeeks: 12,
     insightRefresh: true,
     maxRunningExperiments: 3,
+    monthlyCampaignEmails: 5_000,
     alertCheckHours: 1,
     auditLogDays: 30,
   },
@@ -232,6 +235,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     insightWeeks: 52,
     insightRefresh: true,
     maxRunningExperiments: 10,
+    monthlyCampaignEmails: 25_000,
     alertCheckHours: 1,
     auditLogDays: 365,
   },

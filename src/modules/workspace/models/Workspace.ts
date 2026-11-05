@@ -112,6 +112,11 @@ const workspaceSchema = new Schema(
         enabledAt: { type: Date },
         paidAt: { type: Date },
       },
+      campaigns: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+        paidAt: { type: Date },
+      },
     },
 
     /**

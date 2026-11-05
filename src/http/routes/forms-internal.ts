@@ -20,6 +20,7 @@ import { sendFormAlert } from "../../modules/telegram/form-alert.js";
 import { TelegramError, importOwnBot, telegramSummary } from "../../modules/telegram/telegram.service.js";
 import { Types } from "mongoose";
 import { parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
+import { suppressEmails } from "../../modules/campaigns/suppression.service.js";
 
 
 const router = Router();
@@ -50,6 +51,19 @@ router.get(
   }),
 );
 
+
+router.post(
+  "/email-suppressions/:workspaceId",
+  asyncHandler(async (req: Request<{ workspaceId: string }>, res: Response) => {
+    if (!authorize(req, res)) return;
+    const { emails, reason } = req.body ?? {};
+    if (!Array.isArray(emails) || (reason !== "bounced" && reason !== "complained")) {
+      return res.status(400).json({ error: "emails and reason are required" });
+    }
+    await suppressEmails(req.params.workspaceId, emails.filter((e): e is string => typeof e === "string").slice(0, 100), reason);
+    res.status(204).end();
+  }),
+);
 
 router.post(
   "/submissions/:workspaceId",

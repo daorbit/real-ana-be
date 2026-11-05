@@ -63,6 +63,8 @@ import insightRoutes from "./http/routes/insights.js";
 import alertRoutes from "./http/routes/alerts.js";
 import popupRoutes from "./http/routes/popups.js";
 import popupPublicRoutes from "./http/routes/popups-public.js";
+import campaignRoutes from "./http/routes/campaigns.js";
+import campaignPublicRoutes from "./http/routes/campaigns-public.js";
 import experimentRoutes from "./http/routes/experiments.js";
 import experimentPublicRoutes from "./http/routes/experiments-public.js";
 import bioRoutes from "./http/routes/bio.js";
@@ -147,6 +149,7 @@ app.use("/api/track", publicCors, trackRoutes);
 app.use("/api/popups", publicCors, popupPublicRoutes);
 app.use("/api/experiments", publicCors, experimentPublicRoutes);
 app.use("/api/public/bio", publicCors, bioPublicRoutes);
+app.use("/api/public/campaigns", publicCors, campaignPublicRoutes);
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -269,6 +272,7 @@ app.use("/api/workspaces/:wid/insights", dashboardCors, requireUnlocked, insight
 app.use("/api/workspaces/:wid/alerts", dashboardCors, requireUnlocked, alertRoutes);
 app.use("/api/workspaces/:wid/popups", dashboardCors, requireUnlocked, popupRoutes);
 app.use("/api/workspaces/:wid/experiments", dashboardCors, requireUnlocked, experimentRoutes);
+app.use("/api/workspaces/:wid/campaigns", dashboardCors, requireUnlocked, campaignRoutes);
 app.use("/api/workspaces/:wid/bio", dashboardCors, requireUnlocked, bioRoutes);
 app.use("/api/workspaces/:wid/embeds", dashboardCors, requireUnlocked, embedRoutes);
 // Who else can reach this workspace, and pending invitations to it.
