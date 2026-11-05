@@ -10,7 +10,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 
 - **Vercel free plan.** It includes 1,000,000 function calls and 4 active CPU hours a month, and functions run for at most 300s. Every request that misses the CDN is a call, so new polling, tracker sends and uncached public routes spend that allowance.
 - **Indexes are not built on deploy.** Production connects with `autoIndex` and `autoCreate` off, so cold starts send no index commands. After adding or changing an index or a model, run `npm run db:indexes` (dry run) and then `npm run db:indexes -- --write` against production, before the code that needs it goes live. It only creates, never drops.
-- **Time limits.** Reads and aggregations stop after 25s in production (`infra/db/connection.ts`), and each instance holds at most 15 Mongo connections. Long cron loops stop starting new work at `cronDeadline()` (`shared/utils/time-budget.ts`, 240s, `CRON_TIME_BUDGET_MS`). Runners claim a row by pushing its due time forward before doing the work, so overlapping ticks can't repeat it.
+- **Time limits.** Reads and aggregations stop after 25s in production (`infra/db/connection.ts`), and each instance holds at most 15 Mongo connections. Long cron loops stop starting new work at `cronDeadline()` (`shared/utils/time-budget.ts`, `CRON_TIME_BUDGET_MS`): 45s by default and 100s for reports, because the Cloudflare workers give up on a request after 60s (120s for reports) and retry it. Runners claim a row by pushing its due time forward before doing the work, so overlapping ticks can't repeat it.
 
 ## Structure
 
@@ -54,6 +54,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 | `reviews` | Google Business Profile sync, with a Places API fallback (`places.service.ts`) |
 | `telegram`, `whatsapp` | Messaging connections shared by reports, alerts and form alerts |
 | `experiments` | Quantalog A/B Tests: tests, public config, results aggregation and stats |
+| `campaigns` | Quantalog Campaigns: drafts, recipients, suppressions, unsubscribe links and the sender, which runs inside the `social-posts` cron tick. Leads and sending go through da-forms' `/api/internal/workspaces/:id/leads/*` and `/email/*` (`campaign-delivery.ts`), because the email provider keys stay in da-forms |
 | `popups`, `media`, `notes`, `branding`, `referrals`, `audit`, `admin`, `onboarding-ai` | As named |
 | `mcp`, `mcp-oauth` | The remote MCP connector for Claude and ChatGPT, see `../CLAUDE.md` |
 

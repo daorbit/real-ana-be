@@ -20,6 +20,7 @@ import { cronDeadline } from "../../shared/utils/time-budget.js";
 
 const BATCH_LIMIT = 25;
 const CLAIM_MS = 15 * 60 * 1000;
+const RUN_BUDGET_MS = 100_000;
 
 
 type ReportInclude = {
@@ -482,7 +483,7 @@ async function runDueSchedule(
 }
 
 export async function runDueSchedules(now: Date = new Date()): Promise<RunSummary> {
-  const outOfTime = cronDeadline();
+  const outOfTime = cronDeadline(RUN_BUDGET_MS);
   const seen: Types.ObjectId[] = [];
   const summary: RunSummary = {
     due: 0,
