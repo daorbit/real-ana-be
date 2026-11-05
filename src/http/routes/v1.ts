@@ -10,11 +10,16 @@ import { GoogleReview } from "../../modules/reviews/models/GoogleReview.js";
 import { requireApiKey, ApiKeyRequest } from "../middleware/api-key.js";
 import { ApiKey } from "../../modules/identity/models/ApiKey.js";
 import { computeStats, parseFilters } from "../../modules/analytics/stats.service.js";
+import { sharedStats } from "../../modules/analytics/stats-cache.js";
+import { overRateLimit } from "../../modules/security/rate-limit.service.js";
 import { invalidateSite } from "../../modules/billing/event-quota.js";
 import { guardSiteCreation } from "../site-limit.js";
 
 const router = Router();
 router.use(requireApiKey);
+
+const STATS_REQUESTS_PER_MINUTE = 60;
+const STATS_TTL_MS = 60_000;
 
 const BASE = process.env.PUBLIC_BASE_URL ?? "http://localhost:4000";
 const snippetFor = (siteId: string) =>
@@ -87,8 +92,14 @@ router.get("/sites/:siteId/stats", async (req: ApiKeyRequest, res: Response) => 
   const siteId = String(req.params.siteId);
   const site = await ownedSite(req.workspaceId!, siteId);
   if (!site) return res.status(404).json({ error: "site not found" });
+  if (await overRateLimit(`v1-stats:${req.apiKeyId}`, STATS_REQUESTS_PER_MINUTE, 60_000)) {
+    return res.status(429).set("Retry-After", "60").json({ error: "too many requests" });
+  }
   const filters = parseFilters(req.query.filter);
-  const stats = await computeStats([siteId], String(req.query.range ?? "24h"), filters);
+  const rangeKey = String(req.query.range ?? "24h");
+  const stats = await sharedStats(["v1", siteId, rangeKey, filters], STATS_TTL_MS, () =>
+    computeStats([siteId], rangeKey, filters),
+  );
   res.json(stats);
 });
 

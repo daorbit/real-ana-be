@@ -1,3 +1,4 @@
+import type { Types } from "mongoose";
 import { ReportSchedule, computeNextRun, rangeForFrequency, MIN_INTERVAL_MS, type Frequency } from "./models/ReportSchedule.js";
 import { Workspace } from "../workspace/models/Workspace.js";
 import { Site } from "../analytics/models/Site.js";
@@ -14,9 +15,11 @@ import { emit } from "../notifications/notify.service.js";
 import { buildTelegramReport, type TelegramReportInput } from "./report-telegram.js";
 import { deliveryFor, sendToChats } from "../telegram/telegram.service.js";
 import { appEnabled } from "../workspace/apps.service.js";
+import { cronDeadline } from "../../shared/utils/time-budget.js";
 
 
 const BATCH_LIMIT = 25;
+const CLAIM_MS = 15 * 60 * 1000;
 
 
 type ReportInclude = {
@@ -415,13 +418,74 @@ export type RunSummary = {
 };
 
 
-export async function runDueSchedules(now: Date = new Date()): Promise<RunSummary> {
-  const due = await ReportSchedule.find({ enabled: true, nextRunAt: { $lte: now } })
-    .sort({ nextRunAt: 1 })
-    .limit(BATCH_LIMIT);
+async function runDueSchedule(
+  schedule: InstanceType<typeof ReportSchedule>,
+  now: Date,
+  summary: RunSummary,
+): Promise<void> {
+  const lastSentAt = schedule.get("lastSentAt") as Date | undefined;
 
+  if (lastSentAt && now.getTime() - lastSentAt.getTime() < MIN_INTERVAL_MS) {
+    summary.skipped++;
+    return;
+  }
+
+  const claim = await ReportSchedule.updateOne(
+    { _id: schedule._id, enabled: true, nextRunAt: { $lte: now } },
+    { $set: { nextRunAt: new Date(now.getTime() + CLAIM_MS) } },
+  );
+  if (!claim.modifiedCount) return;
+
+  summary.attempted++;
+  const frequency = schedule.get("frequency") as Frequency;
+
+  try {
+    const outcome = await runSchedule(schedule);
+    summary.sent += outcome.sent.length;
+    summary.failed += outcome.failed.length + outcome.whatsappFailed.length + outcome.telegramFailed.length;
+    summary.whatsappSent += outcome.whatsappSent.length;
+    summary.telegramSent += outcome.telegramSent.length;
+
+    const problems = [
+      ...outcome.failed.map((f) => `${f.email} (${f.error})`),
+      ...outcome.whatsappFailed.map((f) => `${f.phone} (${f.error})`),
+      ...outcome.telegramFailed.map((f) => `Telegram ${f.chat} (${f.error})`),
+    ];
+    if (problems.length) summary.errors.push(`${outcome.scheduleName}: ${problems.join(", ")}`);
+    schedule.set("lastError", problems.length ? problems[0] : undefined);
+
+    // Raised only when the report actually reached someone. A run that failed
+    // every recipient has nothing to announce, and "your report is ready"
+    // above an empty inbox is worse than silence.
+    const reached = outcome.sent.length + outcome.whatsappSent.length + outcome.telegramSent.length;
+    if (reached) {
+      await emit({
+        type: "report.ready",
+        workspaceId: String(schedule.get("workspaceId")),
+        data: {
+          reportName: outcome.scheduleName,
+          frequency,
+          recipientCount: reached,
+        },
+        link: `/app/reports`,
+      });
+    }
+  } catch (e) {
+    summary.failed++;
+    summary.errors.push(`${schedule.get("name")}: ${(e as Error).message}`);
+    schedule.set("lastError", (e as Error).message);
+  }
+
+  schedule.set("lastSentAt", now);
+  schedule.set("nextRunAt", computeNextRun(frequency, now));
+  await schedule.save();
+}
+
+export async function runDueSchedules(now: Date = new Date()): Promise<RunSummary> {
+  const outOfTime = cronDeadline();
+  const seen: Types.ObjectId[] = [];
   const summary: RunSummary = {
-    due: due.length,
+    due: 0,
     attempted: 0,
     sent: 0,
     failed: 0,
@@ -431,57 +495,18 @@ export async function runDueSchedules(now: Date = new Date()): Promise<RunSummar
     errors: [],
   };
 
-  for (const schedule of due) {
-    const lastSentAt = schedule.get("lastSentAt") as Date | undefined;
+  while (!outOfTime()) {
+    const due = await ReportSchedule.find({ enabled: true, nextRunAt: { $lte: now }, _id: { $nin: seen } })
+      .sort({ nextRunAt: 1 })
+      .limit(BATCH_LIMIT);
+    if (!due.length) break;
 
-    if (lastSentAt && now.getTime() - lastSentAt.getTime() < MIN_INTERVAL_MS) {
-      summary.skipped++;
-      continue;
+    summary.due += due.length;
+    for (const schedule of due) {
+      if (outOfTime()) return summary;
+      seen.push(schedule._id);
+      await runDueSchedule(schedule, now, summary);
     }
-
-    summary.attempted++;
-    const frequency = schedule.get("frequency") as Frequency;
-
-    try {
-      const outcome = await runSchedule(schedule);
-      summary.sent += outcome.sent.length;
-      summary.failed += outcome.failed.length + outcome.whatsappFailed.length + outcome.telegramFailed.length;
-      summary.whatsappSent += outcome.whatsappSent.length;
-      summary.telegramSent += outcome.telegramSent.length;
-
-      const problems = [
-        ...outcome.failed.map((f) => `${f.email} (${f.error})`),
-        ...outcome.whatsappFailed.map((f) => `${f.phone} (${f.error})`),
-        ...outcome.telegramFailed.map((f) => `Telegram ${f.chat} (${f.error})`),
-      ];
-      if (problems.length) summary.errors.push(`${outcome.scheduleName}: ${problems.join(", ")}`);
-      schedule.set("lastError", problems.length ? problems[0] : undefined);
-
-      // Raised only when the report actually reached someone. A run that failed
-      // every recipient has nothing to announce, and "your report is ready"
-      // above an empty inbox is worse than silence.
-      const reached = outcome.sent.length + outcome.whatsappSent.length + outcome.telegramSent.length;
-      if (reached) {
-        await emit({
-          type: "report.ready",
-          workspaceId: String(schedule.get("workspaceId")),
-          data: {
-            reportName: outcome.scheduleName,
-            frequency,
-            recipientCount: reached,
-          },
-          link: `/app/reports`,
-        });
-      }
-    } catch (e) {
-      summary.failed++;
-      summary.errors.push(`${schedule.get("name")}: ${(e as Error).message}`);
-      schedule.set("lastError", (e as Error).message);
-    }
-
-    schedule.set("lastSentAt", now);
-    schedule.set("nextRunAt", computeNextRun(frequency, now));
-    await schedule.save();
   }
 
   return summary;

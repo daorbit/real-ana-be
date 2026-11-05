@@ -18,6 +18,7 @@ import {
   createStoryPost,
 } from "../../infra/http-client/instagram-post.js";
 import { canPublish as canPublishInstagram } from "../../infra/http-client/instagram-auth.js";
+import { cronDeadline } from "../../shared/utils/time-budget.js";
 
 /**
  * Every image on a post, in publish order.
@@ -47,6 +48,7 @@ function imagesOf(post: { imageUrl?: string; extraImages?: { url: string }[] }):
 
 /** Cap per tick, so one run cannot outlive the platform's function timeout. */
 const MAX_PER_RUN = 20;
+const CLAIM_MS = 15 * 60 * 1000;
 /** Refuse anything larger; LinkedIn's own ceiling is well above this. */
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -372,9 +374,19 @@ export async function runDuePosts(now: Date = new Date()): Promise<RunSummary> {
     .sort({ nextRunAt: 1 })
     .limit(MAX_PER_RUN);
 
-  const summary: RunSummary = { attempted: due.length, posted: 0, failed: 0, errors: [] };
+  const summary: RunSummary = { attempted: 0, posted: 0, failed: 0, errors: [] };
+  const outOfTime = cronDeadline();
 
   for (const post of due) {
+    if (outOfTime()) break;
+
+    const claim = await ScheduledPost.updateOne(
+      { _id: post._id, status: "active", nextRunAt: { $lte: now } },
+      { $set: { nextRunAt: new Date(now.getTime() + CLAIM_MS) } },
+    );
+    if (!claim.modifiedCount) continue;
+    summary.attempted++;
+
     try {
       const result = await publish(post);
       await recordRun(post, "schedule", { status: "published", ...result }, now);
@@ -419,7 +431,7 @@ export async function runDuePosts(now: Date = new Date()): Promise<RunSummary> {
       await post.save();
     } catch (e) {
       // Losing the bookkeeping write is worth a line in the log: the schedule
-      // stays due and will be attempted again on the next tick.
+      // comes due again when its claim runs out.
       console.error(`[social] could not save schedule ${post.id}:`, (e as Error).message);
     }
   }

@@ -7,6 +7,7 @@ import {
   resolveWindow,
   parseCompareMode,
 } from "../../modules/analytics/stats.service.js";
+import { sharedStats, statsTtlFor } from "../../modules/analytics/stats-cache.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -39,7 +40,19 @@ router.get("/:siteId/stats", async (req: AuthedRequest, res: Response) => {
     req.query.compareFrom,
     req.query.compareTo,
   );
-  const stats = await computeStats([siteId], rangeKey, undefined, win, win.compare !== "previous");
+  const cacheParts = [
+    "site",
+    siteId,
+    rangeKey,
+    win.compare,
+    req.query.from ?? null,
+    req.query.to ?? null,
+    req.query.compareFrom ?? null,
+    req.query.compareTo ?? null,
+  ];
+  const stats = await sharedStats(cacheParts, statsTtlFor(rangeKey), () =>
+    computeStats([siteId], rangeKey, undefined, win, win.compare !== "previous"),
+  );
   res.json(stats);
 });
 

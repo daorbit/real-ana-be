@@ -27,6 +27,11 @@ let pending: Promise<unknown> | null = null;
 const CONNECTED = 1;
 const CONNECTING = 2;
 
+const MAX_POOL_SIZE = 15;
+const POOL_WAIT_LIMIT_MS = 20_000;
+const IDLE_CONNECTION_LIMIT_MS = 60_000;
+const QUERY_TIME_LIMIT_MS = 25_000;
+
 export async function connectDB(): Promise<void> {
   if (mongoose.connection.readyState === CONNECTED) return;
 
@@ -45,10 +50,18 @@ export async function connectDB(): Promise<void> {
   // `bufferCommands: false` makes a query on a dead connection fail at once
   // rather than queueing for ten seconds and then throwing a timeout that says
   // nothing about the real cause.
+  const isProduction = process.env.NODE_ENV === "production";
+  if (isProduction) mongoose.set("maxTimeMS", QUERY_TIME_LIMIT_MS);
+
   pending = mongoose.connect(uri, {
     dbName: DB_NAME,
     bufferCommands: false,
     serverSelectionTimeoutMS: 10000,
+    maxPoolSize: MAX_POOL_SIZE,
+    waitQueueTimeoutMS: POOL_WAIT_LIMIT_MS,
+    maxIdleTimeMS: IDLE_CONNECTION_LIMIT_MS,
+    autoIndex: !isProduction,
+    autoCreate: !isProduction,
   });
 
   try {

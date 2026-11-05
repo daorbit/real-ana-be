@@ -11,6 +11,7 @@ import { whatsappStatus } from "../whatsapp/whatsapp.service.js";
 import { ALERT_CHANNELS, ALERT_RULES, defaultConfig, parseConfig, type AlertConfig } from "./rules.js";
 import { evaluateAlerts, type AlertCondition, type AlertSite } from "./checks.js";
 import { deliverAlerts, type DeliveryReport } from "./deliver.js";
+import { cronDeadline } from "../../shared/utils/time-budget.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -245,7 +246,7 @@ async function checkWorkspace(
   }
 }
 
-export async function runDueAlerts(now = new Date()) {
+async function checkDueBatch(now: Date) {
   const due = await AlertSettings.find({ nextCheckAt: { $ne: null, $lte: now } })
     .sort({ nextCheckAt: 1 })
     .limit(BATCH_SIZE)
@@ -285,4 +286,20 @@ export async function runDueAlerts(now = new Date()) {
     fired: results.reduce((sum, r) => sum + r.fired, 0),
     errors: results.flatMap((r) => (r.error ? [r.error] : [])),
   };
+}
+
+export async function runDueAlerts(now = new Date()) {
+  const outOfTime = cronDeadline();
+  const totals = { checked: 0, fired: 0, errors: [] as string[] };
+
+  let batchSize: number;
+  do {
+    const batch = await checkDueBatch(now);
+    batchSize = batch.checked;
+    totals.checked += batch.checked;
+    totals.fired += batch.fired;
+    totals.errors.push(...batch.errors);
+  } while (batchSize === BATCH_SIZE && !outOfTime());
+
+  return totals;
 }

@@ -238,7 +238,7 @@
   }
 
  
-  var BATCH_MS = 1000;
+  var BATCH_MS = 5000;
   var BATCH_MAX = 10;
 
   var queue = [];

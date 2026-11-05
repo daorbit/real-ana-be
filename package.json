@@ -10,6 +10,7 @@
     "build:tracker": "node scripts/build-tracker.mjs",
     "start": "npm run build && node dist/index.js",
     "start:dist": "node dist/index.js",
+    "db:indexes": "tsx scripts/sync-indexes.ts",
     "backfill:events": "tsx scripts/backfill-event-usage.ts",
     "report:media-over-cap": "tsx scripts/report-media-over-cap.ts",
     "backfill:compare-app": "tsx scripts/backfill-compare-app.ts",

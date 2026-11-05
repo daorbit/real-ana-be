@@ -10,6 +10,7 @@ import {
 import { createTtlCache } from "../../shared/utils/ttl-cache.js";
 import { runAfterResponse } from "../../shared/utils/after-response.js";
 import { cleanProps } from "../../modules/analytics/event-props.js";
+import { overIngestBurst } from "../../modules/analytics/ingest-guard.js";
 
 const UNBILLED_TYPES = new Set(["interact", "popup", "experiment"]);
 
@@ -175,6 +176,7 @@ router.post("/", async (req, res) => {
     const siteId = body?.siteId;
     if (!siteId) return res.status(400).json({ error: "siteId required" });
     if (!items.length) return res.status(204).end();
+    if (overIngestBurst(req, siteId)) return res.status(429).json({ error: "too many requests" });
 
 
     const { allowed, workspaceId } = await canIngest(String(siteId));

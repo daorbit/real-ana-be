@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { canIngest, countEvents } from "../../modules/billing/event-quota.js";
 import { cleanProps } from "../../modules/analytics/event-props.js";
+import { overIngestBurst } from "../../modules/analytics/ingest-guard.js";
 
 const router = Router();
 
@@ -23,6 +24,7 @@ router.post("/", async (req, res) => {
     if (!siteId) return res.status(400).json({ error: "siteId required" });
     if (!appUserId) return res.status(400).json({ error: "appUserId required" });
     if (!action) return res.status(400).json({ error: "action required" });
+    if (overIngestBurst(req, siteId)) return res.status(429).json({ error: "too many requests" });
 
     const { allowed, workspaceId } = await canIngest(String(siteId));
     if (!workspaceId) return res.status(404).json({ error: "unknown siteId" });

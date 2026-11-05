@@ -822,7 +822,7 @@ export async function exportEvents(
   siteIds: string[],
   win: Window,
   filters?: StatsFilter,
-  limit = 50_000
+  limit = 20_000
 ): Promise<ExportRow[]> {
   const fMatch = filterMatch(filters);
   const rows = await Event.find({
@@ -830,6 +830,7 @@ export async function exportEvents(
     ts: { $gte: win.since, $lt: win.until },
     ...fMatch,
   })
+    .select("ts type name path referrer device os browser country language utm durationMs scrollDepth")
     .sort({ ts: -1 })
     .limit(limit)
     .lean();

@@ -8,6 +8,10 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 - **Scheduled work** runs through `/api/cron/*` (`http/routes/cron.ts`), called by Cloudflare Workers in `workers/*-cron` with `Authorization: Bearer CRON_SECRET`, not by Vercel Cron. Routes: `fx-sync`, `reports`, `reviews`, `social-posts` (also runs Alerts), `alerts`, `social-stats`, `backlinks`, `plan-expiry`, `event-retention`, and `run` for a manual run of everything. The Cloudflare account is at its trigger limit, so new work goes inside an existing route rather than a new worker. `.github/workflows/social-posts-cron.yml` is a 25-minute backup for `social-posts`.
 - Responses are gzipped by `compression()` on `/api` and `/v1` (`src/app.ts`). Before adding any streaming or SSE response, exclude it from compression or flush explicitly.
 
+- **Vercel free plan.** It includes 1,000,000 function calls and 4 active CPU hours a month, and functions run for at most 300s. Every request that misses the CDN is a call, so new polling, tracker sends and uncached public routes spend that allowance.
+- **Indexes are not built on deploy.** Production connects with `autoIndex` and `autoCreate` off, so cold starts send no index commands. After adding or changing an index or a model, run `npm run db:indexes` (dry run) and then `npm run db:indexes -- --write` against production, before the code that needs it goes live. It only creates, never drops.
+- **Time limits.** Reads and aggregations stop after 25s in production (`infra/db/connection.ts`), and each instance holds at most 15 Mongo connections. Long cron loops stop starting new work at `cronDeadline()` (`shared/utils/time-budget.ts`, 240s, `CRON_TIME_BUDGET_MS`). Runners claim a row by pushing its due time forward before doing the work, so overlapping ticks can't repeat it.
+
 ## Structure
 
 - `src/app.ts`: middleware order and route mounting.
@@ -65,7 +69,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 - Paid Quantalog apps (`modules/billing/paid-apps.catalog.ts`: Notes, Reviews, Alerts, Links, Link-in-bio, Popups, Funnels) are a one-time unlock per workspace, ₹599 by default. Prices live in `AppPrice` (INR is the base; the FX reprice derives USD and reports apps in its email). `POST /api/billing/apps/:appId/purchase` opens an order, or, when a coupon brings the price to 0, claims the coupon, records a `gateway: "coupon"` purchase and unlocks straight away (`{ free: true }`, no ₹1 minimum, which only applies to auto-renew plans and paid orders), `AppPurchase` is credited by the shared confirm and webhook path, and `unlockApp` sets `apps.<id>.paidAt` and turns the app on. `PUT /workspaces/:wid/apps/:appId` refuses to enable a locked paid app with 402 `app_payment_required`. A workspace that had turned an app on before it became paid (`enabledAt` set) keeps it free, except for `PAYMENT_ONLY_APPS` (Notes, Popups), which need `paidAt`. `appEnabled` and the dashboard's `useWorkspaceApps` treat a locked paid app as off even if its `enabled` flag is still set.
 - Orbit AI is included in every analytics plan (`ORBIT_TIER_BY_PLAN` in `modules/orbit/orbit-host.ts`). Orbit tiers are not sold separately.
 - `auditTrail` on `/api/workspaces/:wid` records every mutating request. `modules/audit/route-registry.ts` gives routes a named action and a "before" snapshot; `action: null` skips one. Register new write routes there.
-- Rate limits that must hold across serverless instances use `overRateLimit` from `modules/security/rate-limit.service.ts`, not an in-memory counter.
+- Rate limits that must hold across serverless instances use `overRateLimit` from `modules/security/rate-limit.service.ts`, not an in-memory counter. The one exception is ingest (`modules/analytics/ingest-guard.ts`): it is a per-instance burst guard, because a database write per beacon would cost more than it protects.
 
 ## Orbit AI
 
@@ -98,14 +102,14 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 5. **Keep heavy work out of hot paths.**
    - `quotaSummary` is expensive (rolls the usage month, runs several queries, does a dynamic import). Don't call it per request outside billing and usage routes. `GET /api/workspaces` already includes it per workspace.
    - `computeStats` runs about 30 aggregations. Never call it from an endpoint that is polled on a short interval.
-6. **Polled endpoints stay cheap:** `/:wid/live` (polled every 10s) and `/api/notifications/unread-count` (every 30s) only read small time windows or counts.
+6. **Polled endpoints stay cheap:** `/:wid/live` (polled every 30s) and `/api/notifications/unread-count` (every 60s) only read small time windows or counts.
 7. **Ingest paths** (`/api/collect`, `/api/ingest`, `/api/track`) carry customer traffic. Keep each one to the minimum write. Never make them wait on mail, AI, or other non-essential calls.
 
 ## Caching
 
 - Use `createTtlCache(ttlMs, maxEntries)` from `src/shared/utils/ttl-cache.ts`. It caches the promise, so concurrent identical requests share one computation, and failures are evicted.
 - Current caches:
-  - stats payload: 10s (`http/routes/workspaces.ts`)
+  - stats payload: 10s per instance (`http/routes/workspaces.ts`), plus `sharedStats` (`modules/analytics/stats-cache.ts`), kept in Mongo so every instance shares it: 1h 30s, 24h 2 min, 7d 5 min, 30d 10 min, public share and `/v1` 60s
   - goal-target readings: 60s
   - embeds (`modules/dashboards/embed.service.ts`)
 - **The cache key must include every input that changes the output:** workspace id, site ids, range, filters, compare mode, custom dates, and relevant definitions such as goals.

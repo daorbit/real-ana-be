@@ -137,6 +137,7 @@ export const platformPaths = {
         200: json("Figures for the window.", ref("Stats")),
         401: unauthorized,
         404: notFound,
+        429: errorResponse("More than 60 requests a minute with this key."),
       },
     },
   },

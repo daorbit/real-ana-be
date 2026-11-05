@@ -54,6 +54,7 @@ import {
 } from "../../modules/analytics/heatmap.service.js";
 import { recordAudit } from "../../modules/audit/audit.service.js";
 import { bareDomain } from "../../modules/backlinks/domains.js";
+import { sharedStats, statsTtlFor } from "../../modules/analytics/stats-cache.js";
 
 const STATS_CACHE_MS = 10_000;
 const statsCache = createTtlCache<Record<string, unknown>>(STATS_CACHE_MS, 500);
@@ -562,7 +563,7 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
     req.query.compareTo ?? null,
   ]);
 
-  const payload = await statsCache(cacheKey, async () => {
+  const payload = await statsCache(cacheKey, () => sharedStats([cacheKey], statsTtlFor(rangeKey), async () => {
     const win = resolveWindow(
       rangeKey,
       req.query.from,
@@ -586,7 +587,7 @@ router.get("/:wid/stats", async (req: AuthedRequest, res: Response) => {
       // about what is on screen.
       compare: win.compare,
     };
-  });
+  }));
 
   res.json({ ...payload, siteCount: ids.length, outdatedSites });
 });

@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { computeStats, resolveWindow } from "../../modules/analytics/stats.service.js";
+import { sharedStats } from "../../modules/analytics/stats-cache.js";
 import { renderShareCardPng } from "../../modules/analytics/share-card.js";
 import { publicBrand } from "../../modules/branding/public-brand.js";
 import { appEnabledFilter } from "../../modules/workspace/apps.service.js";
@@ -11,6 +12,13 @@ const router = Router();
 
 /** Ranges a public viewer may request. Anything else falls back to 30 days. */
 const PUBLIC_RANGES = new Set(["24h", "7d", "30d"]);
+const PUBLIC_STATS_TTL_MS = 60_000;
+
+function publicStats(workspaceId: string, siteIds: string[], rangeKey: string) {
+  return sharedStats(["share", workspaceId, siteIds, rangeKey], PUBLIC_STATS_TTL_MS, () =>
+    computeStats(siteIds, rangeKey, {}, resolveWindow(rangeKey)),
+  );
+}
 
 /** Where the dashboard itself lives, for canonical links and redirects. */
 function appOrigin(): string {
@@ -41,7 +49,7 @@ async function loadShared(token: string) {
   // number the dashboard itself withholds.
   const stats =
     totals && siteIds.length
-      ? await computeStats(siteIds, "30d", {}, resolveWindow("30d"))
+      ? await publicStats(String(ws.id), siteIds, "30d")
       : null;
 
   return {
@@ -306,9 +314,9 @@ router.get("/:token", async (req: Request, res: Response) => {
     });
   }
 
-  const win = resolveWindow(rangeKey);
-  const stats = await computeStats(siteIds, rangeKey, {}, win);
+  const stats = await publicStats(String(ws.id), siteIds, rangeKey);
 
+  res.set("Cache-Control", "public, max-age=60, s-maxage=60");
   // Explicit allowlist — not a spread. Adding a field to the dashboard's stats
   // must never silently publish it here.
   res.json({
