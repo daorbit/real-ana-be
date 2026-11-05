@@ -2,7 +2,8 @@ import { currentPlan } from "../billing/quota.service.js";
 import { getPlanCatalogEntry } from "../billing/plans.catalog.js";
 import { Campaign } from "./models/Campaign.js";
 import { CampaignRecipient } from "./models/CampaignRecipient.js";
-import type { CampaignContact } from "./campaign-draft.js";
+import { parseEmailDesign } from "./campaign-design.js";
+import type { CampaignContact, CampaignMode } from "./campaign-draft.js";
 import { leadContacts } from "./campaign-delivery.js";
 import { suppressedAmong } from "./suppression.service.js";
 
@@ -15,9 +16,10 @@ export function presentCampaign(doc: InstanceType<typeof Campaign>, withContacts
     id: String(doc._id),
     name: doc.get("name") as string,
     subject: doc.get("subject") as string,
-    body: doc.get("body") as string,
-    ctaLabel: doc.get("ctaLabel") as string,
-    ctaUrl: doc.get("ctaUrl") as string,
+    preheader: doc.get("preheader") as string,
+    mode: doc.get("mode") as CampaignMode,
+    design: parseEmailDesign(doc.get("design")),
+    html: (doc.get("html") ?? "") as string,
     senderAddress: doc.get("senderAddress") as string,
     formIds: doc.get("formIds") as string[],
     importedCount: imported.length,
@@ -51,7 +53,7 @@ export async function campaignUsage(workspaceId: string) {
 
 export async function listCampaigns(workspaceId: string) {
   const [docs, usage] = await Promise.all([
-    Campaign.find({ workspaceId }).select("-imported").sort({ createdAt: -1 }).limit(LIST_LIMIT),
+    Campaign.find({ workspaceId }).select("-imported -html -design").sort({ createdAt: -1 }).limit(LIST_LIMIT),
     campaignUsage(workspaceId),
   ]);
   return { campaigns: docs.map((doc) => presentCampaign(doc)), usage };

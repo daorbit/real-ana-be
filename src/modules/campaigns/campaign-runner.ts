@@ -5,6 +5,7 @@ import { appEnabled } from "../workspace/apps.service.js";
 import { cronDeadline } from "../../shared/utils/time-budget.js";
 import { Campaign } from "./models/Campaign.js";
 import { CampaignRecipient } from "./models/CampaignRecipient.js";
+import { parseEmailDesign } from "./campaign-design.js";
 import { campaignHtml, campaignText, unsubscribeHeaders, type CampaignContent } from "./campaign-email.js";
 import { sendEmails, type OutgoingEmail } from "./campaign-delivery.js";
 import { unsubscribeUrl } from "./unsubscribe-token.js";
@@ -130,7 +131,7 @@ async function sendBatch(active: Active, now: Date): Promise<BatchOutcome> {
 
 async function loadActive(): Promise<Active[]> {
   const campaigns = await Campaign.find({ status: "sending" })
-    .select("workspaceId subject body ctaLabel ctaUrl senderAddress")
+    .select("workspaceId subject preheader mode design html senderAddress")
     .sort({ startedAt: 1 })
     .limit(ACTIVE_LIMIT)
     .lean();
@@ -158,9 +159,10 @@ async function loadActive(): Promise<Active[]> {
       brand: brands.get(id)!,
       content: {
         subject: String(campaign.subject ?? ""),
-        body: String(campaign.body ?? ""),
-        ctaLabel: String(campaign.ctaLabel ?? ""),
-        ctaUrl: String(campaign.ctaUrl ?? ""),
+        preheader: String(campaign.preheader ?? ""),
+        mode: campaign.mode === "html" ? "html" : "design",
+        design: parseEmailDesign(campaign.design),
+        html: String(campaign.html ?? ""),
         senderAddress: String(campaign.senderAddress ?? ""),
       },
     });

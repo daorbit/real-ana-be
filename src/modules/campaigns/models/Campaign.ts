@@ -9,9 +9,10 @@ const campaignSchema = new Schema(
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     name: { type: String, required: true, trim: true },
     subject: { type: String, default: "" },
-    body: { type: String, default: "" },
-    ctaLabel: { type: String, default: "" },
-    ctaUrl: { type: String, default: "" },
+    preheader: { type: String, default: "" },
+    mode: { type: String, enum: ["design", "html"], default: "design" },
+    design: { type: Schema.Types.Mixed, default: () => ({}) },
+    html: { type: String, default: "" },
     senderAddress: { type: String, default: "" },
     formIds: { type: [String], default: [] },
     imported: {

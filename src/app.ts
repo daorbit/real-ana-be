@@ -119,6 +119,7 @@ app.use("/api/social/posts", express.json({ limit: "12mb" }));
 app.use("/api/workspaces/:wid/media", express.json({ limit: "40mb" }));
 // An Orbit question can carry an attached image as a base64 data URL.
 app.use("/api/workspaces/:wid/orbit/ask", express.json({ limit: "8mb" }));
+app.use("/api/workspaces/:wid/campaigns", express.json({ limit: "2mb" }));
 // A form-generation request can carry a photo of the form being recreated.
 app.use("/api/internal/forms/generate/:workspaceId", express.json({ limit: "8mb" }));
 app.use("/api/internal/invoices/email/:workspaceId", express.json({ limit: "8mb" }));
