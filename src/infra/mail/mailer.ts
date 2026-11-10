@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import nodemailer, { type Transporter } from "nodemailer";
 import { LOGO_DATA_URI } from "../../modules/seo/logo.js";
-import { bannerAttachment, type BannerName } from "./templates/shared.js";
+import { FONT, FONT_LINK, bannerAttachment, type BannerName } from "./templates/shared.js";
 import { verificationCodeHtml, verificationCodeText } from "./templates/verification-code.js";
 import { passwordResetHtml, passwordResetText } from "./templates/password-reset.js";
 import { passwordChangeHtml, passwordChangeText } from "./templates/password-change.js";
@@ -517,7 +517,7 @@ export function button(label: string, href: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:${S.section}px 0 0"><tr><td align="center">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
       <td align="center" style="background:${C.accentDeep};border-radius:8px;mso-padding-alt:11px 22px">
-        <a href="${href}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:600;line-height:1;color:#ffffff !important;text-decoration:none !important;letter-spacing:-0.1px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">${label}</a>
+        <a href="${href}" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:600;line-height:1;color:#ffffff !important;text-decoration:none !important;letter-spacing:-0.1px;font-family:${FONT}">${label}</a>
       </td>
     </tr></table>
   </td></tr></table>`;
@@ -534,7 +534,7 @@ export function shell(
   reason: string = DEFAULT_REASON,
   footer: ShellFooter = "product",
 ): string {
-  const body = `<div bgcolor="${C.page}" style="background:${C.page};padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+  const body = `<div bgcolor="${C.page}" style="background:${C.page};padding:40px 16px;font-family:${FONT}">
   <!--[if mso]>
   <style>
     /* Outlook's Word engine drops border-radius and renders every background
@@ -602,6 +602,7 @@ function docShell(body: string): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light only">
+${FONT_LINK}
 <style>
   :root { color-scheme: light only; supported-color-schemes: light only; }
   body { background-color:${C.page} !important; }

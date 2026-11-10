@@ -1,4 +1,5 @@
 import type { SeoRow } from "./report-xlsx.js";
+import { FONT, FONT_LINK } from "../../infra/mail/templates/shared.js";
 
 /**
  * The report as a standalone HTML page.
@@ -110,10 +111,11 @@ export function renderReportPage(input: ReportPageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(input.reportName)} — ${escapeHtml(input.workspaceName)}</title>
+${FONT_LINK}
 <style>
   *{box-sizing:border-box}
   body{margin:0;background:#f6f7f9;color:${INK};
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    font-family:${FONT};
     font-size:14px;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   .sheet{max-width:820px;margin:32px auto;background:#fff;border:1px solid ${LINE};
     border-radius:14px;padding:40px 44px}

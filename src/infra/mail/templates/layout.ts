@@ -1,6 +1,4 @@
-import { LINKS, LOGO_ATTACHMENT, escapeHtml } from "./shared.js";
-
-const FONT = `-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif`;
+import { FONT, FONT_LINK, LINKS, LOGO_ATTACHMENT, escapeHtml } from "./shared.js";
 
 export const P = {
   band: "#3730a3",
@@ -65,6 +63,7 @@ export function layout(opts: { preheader: string; label: string; head: string; b
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light only">
 <meta name="x-apple-disable-message-reformatting">
+${FONT_LINK}
 <style>
   :root { color-scheme: light only; supported-color-schemes: light only; }
   body { background-color:${P.page} !important; }

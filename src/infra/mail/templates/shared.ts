@@ -15,7 +15,11 @@ export const LINKS = {
   },
 };
 
-export const FONT = `Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif`;
+export const FONT = `'Google Sans Flex','Google Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif`;
+
+export const FONT_LINK = `<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&display=swap" rel="stylesheet">`;
 
 export const C = {
   page: "#f5f6f8",
@@ -205,6 +209,7 @@ function docShell(body: string): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light only">
 <meta name="supported-color-schemes" content="light only">
+${FONT_LINK}
 <style>
   :root { color-scheme: light only; supported-color-schemes: light only; }
   body { background-color:${C.page} !important; }

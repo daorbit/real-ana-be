@@ -1,5 +1,5 @@
 import { C } from "../../infra/mail/mailer.js";
-import { escapeHtml } from "../../infra/mail/templates/shared.js";
+import { FONT, FONT_LINK, escapeHtml } from "../../infra/mail/templates/shared.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_RECIPIENTS = 5;
@@ -103,8 +103,9 @@ export function documentEmailHtml(email: DocumentEmail, logoCid: string): string
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light only">
+${FONT_LINK}
 </head><body bgcolor="${C.page}" style="margin:0;padding:0;background-color:${C.page}">
-<div style="background:${C.page};padding:40px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+<div style="background:${C.page};padding:40px 16px;font-family:${FONT}">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:0 auto">
     <tr><td bgcolor="${C.card}" style="background:${C.card};border:1px solid ${C.line};border-radius:14px;padding:32px">
       <p style="margin:0 0 4px;font-size:12px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:${C.faint}">${sender}</p>
