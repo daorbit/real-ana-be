@@ -67,7 +67,16 @@ const firstEventRecorded = createTtlCache<unknown>(FIRST_EVENT_RECHECK_MS, 5_000
 function buildEvent(
   body: any,
   siteId: string,
-  shared: { vh: string; device: string; os: string; browser: string; country: string; request: TrafficVerdict | null },
+  shared: {
+    vh: string;
+    device: string;
+    os: string;
+    browser: string;
+    deviceBrand?: string;
+    deviceModel?: string;
+    country: string;
+    request: TrafficVerdict | null;
+  },
 ) {
   const traffic = classifyTraffic(shared.request, parseClientSignals(body.bot));
   return {
@@ -95,6 +104,8 @@ function buildEvent(
     device: shared.device,
     os: shared.os,
     browser: shared.browser,
+    deviceBrand: shared.deviceBrand,
+    deviceModel: shared.deviceModel,
     country: shared.country,
     language: str(body.language, 20),
     timezone: str(body.timezone, 60),
@@ -191,11 +202,11 @@ router.post("/", async (req, res) => {
     const ua = req.headers["user-agent"] ?? "";
     const ip = clientIp(req);
     const vh = visitorHash(ip, ua, siteId);
-    const { device, os, browser } = parseUA(ua);
+    const { device, os, browser, deviceBrand, deviceModel } = parseUA(ua);
 
     // Derived from the request, so every event in a batch shares them — one
     // UA parse and one geo lookup per request rather than per event.
-    const shared = { vh, device, os, browser, country: country(req), request: classifyRequest(ua, req.headers) };
+    const shared = { vh, device, os, browser, deviceBrand, deviceModel, country: country(req), request: classifyRequest(ua, req.headers) };
 
     const validItems = items.slice(0, MAX_BATCH).filter((item) => item && typeof item === "object");
 

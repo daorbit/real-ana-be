@@ -89,6 +89,8 @@ export const schemas = {
       devices: { type: "array", items: ref("Breakdown") },
       browsers: { type: "array", items: ref("Breakdown") },
       operatingSystems: { type: "array", items: ref("Breakdown") },
+      deviceBrands: { type: "array", items: ref("Breakdown") },
+      deviceModels: { type: "array", items: ref("Breakdown") },
       timeseries: {
         type: "array",
         description: "One bucket per interval across the window.",

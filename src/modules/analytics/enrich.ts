@@ -37,12 +37,26 @@ export function country(req: Request): string {
   return typeof c === "string" && c ? c : "unknown";
 }
 
+const APPLE_OS = new Set(["macOS", "Mac OS", "iOS", "iPadOS"]);
+const MIN_MODEL_LENGTH = 3;
+
+function deviceIdentity(vendor: string | undefined, model: string | undefined, os: string | undefined, device: string) {
+  const brand = vendor || (os && APPLE_OS.has(os) ? "Apple" : undefined);
+  const realModel = model && model.length >= MIN_MODEL_LENGTH ? model : undefined;
+  const label = realModel ?? (brand === "Apple" && device === "desktop" ? "Mac" : undefined);
+  return {
+    deviceBrand: brand,
+    deviceModel: brand && label ? `${brand} ${label}` : undefined,
+  };
+}
+
 export function parseUA(ua: string) {
   const p = new UAParser(ua).getResult();
-  const type = p.device.type; // undefined for desktop
+  const device = p.device.type ?? "desktop";
   return {
-    device: type ?? "desktop", // mobile | tablet | desktop
+    device,
     os: p.os.name ?? "unknown",
     browser: p.browser.name ?? "unknown",
+    ...deviceIdentity(p.device.vendor, p.device.model, p.os.name, device),
   };
 }

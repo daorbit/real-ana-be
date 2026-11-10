@@ -31,6 +31,8 @@ const eventSchema = new Schema({
   device: { type: String, default: "unknown" }, // desktop | mobile | tablet
   os: { type: String, default: "unknown" },
   browser: { type: String, default: "unknown" },
+  deviceBrand: { type: String },
+  deviceModel: { type: String },
   country: { type: String, default: "unknown" },
   language: { type: String, default: "" },
   timezone: { type: String, default: "" },
