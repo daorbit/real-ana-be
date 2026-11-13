@@ -54,6 +54,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 | `reviews` | Google Business Profile sync, with a Places API fallback (`places.service.ts`) |
 | `telegram`, `whatsapp` | Messaging connections shared by reports, alerts and form alerts |
 | `experiments` | Quantalog A/B Tests: tests, public config, results aggregation and stats |
+| `growth-radar` | Quantalog Growth Radar: source adapters, versioned detectors, opportunity lifecycle, outcome readings, scans (inside the `reports` cron tick) |
 | `campaigns` | Quantalog Campaigns: drafts, recipients, suppressions, unsubscribe links and the sender, which runs inside the `social-posts` cron tick. Leads and sending go through da-forms' `/api/internal/workspaces/:id/leads/*` and `/email/*` (`campaign-delivery.ts`), because the email provider keys stay in da-forms |
 | `popups`, `media`, `notes`, `branding`, `referrals`, `audit`, `admin`, `onboarding-ai` | As named |
 | `mcp`, `mcp-oauth` | The remote MCP connector for Claude and ChatGPT, see `../CLAUDE.md` |

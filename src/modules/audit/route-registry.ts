@@ -13,6 +13,7 @@ import { Backlink } from "../backlinks/models/Backlink.js";
 import { SeoReport } from "../seo/models/SeoReport.js";
 import { BioPage } from "../bio/models/BioPage.js";
 import { Task } from "../tasks/models/Task.js";
+import { RadarOpportunity } from "../growth-radar/models/RadarOpportunity.js";
 
 type Params = Record<string, string>;
 type Snapshot = (workspaceId: string, params: Params) => Promise<string | undefined>;
@@ -60,6 +61,28 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "DELETE", pattern: route(`/bio/${ID}`), action: "bio.deleted", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
 
   { method: "POST", pattern: route("/insights/refresh"), action: null },
+  { method: "POST", pattern: route("/growth-radar/scan"), action: null },
+  { method: "POST", pattern: route(`/growth-radar/opportunities/${ID}/notes`), action: null },
+  {
+    method: "PATCH",
+    pattern: route(`/growth-radar/opportunities/${ID}`),
+    action: "radar.opportunity_updated",
+    kind: "radar_opportunity",
+    snapshot: byWorkspace(RadarOpportunity, "title"),
+    meta: (body) => ({
+      ...(typeof body.status === "string" ? { status: body.status } : {}),
+      ...(body.snoozedUntil !== undefined ? { snoozedUntil: body.snoozedUntil } : {}),
+      ...(body.assigneeId !== undefined ? { assigneeId: body.assigneeId } : {}),
+    }),
+  },
+  {
+    method: "POST",
+    pattern: route(`/growth-radar/opportunities/${ID}/action`),
+    action: "radar.action_recorded",
+    kind: "radar_opportunity",
+    snapshot: byWorkspace(RadarOpportunity, "title"),
+  },
+  { method: "PUT", pattern: route("/growth-radar/settings"), action: "radar.settings_updated", kind: "growth_radar" },
   { method: "POST", pattern: route("/campaigns"), action: null },
   { method: "POST", pattern: route("/campaigns/preview"), action: null },
   { method: "PUT", pattern: route(`/campaigns/${ID}`), action: null },

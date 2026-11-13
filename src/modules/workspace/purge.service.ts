@@ -37,6 +37,9 @@ import { BioStat } from "../bio/models/BioStat.js";
 import { Task } from "../tasks/models/Task.js";
 import { TaskBucket } from "../tasks/models/TaskBucket.js";
 import { InsightDigest } from "../insights/models/InsightDigest.js";
+import { RadarOpportunity } from "../growth-radar/models/RadarOpportunity.js";
+import { RadarScan } from "../growth-radar/models/RadarScan.js";
+import { RadarSettings } from "../growth-radar/models/RadarSettings.js";
 import { Experiment } from "../experiments/models/Experiment.js";
 import { Campaign } from "../campaigns/models/Campaign.js";
 import { CampaignRecipient } from "../campaigns/models/CampaignRecipient.js";
@@ -127,6 +130,9 @@ export async function purgeWorkspaces(workspaceIds: string[]): Promise<void> {
     Task.deleteMany(byWorkspace),
     TaskBucket.deleteMany(byWorkspace),
     InsightDigest.deleteMany(byWorkspace),
+    RadarOpportunity.deleteMany(byWorkspace),
+    RadarScan.deleteMany(byWorkspace),
+    RadarSettings.deleteMany(byWorkspace),
     Experiment.deleteMany(byWorkspace),
   ]);
 

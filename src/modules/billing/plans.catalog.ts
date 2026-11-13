@@ -56,6 +56,8 @@ export type PlanCatalogEntry = {
   maxOpenTasks: number;
   insightWeeks: number;
   insightRefresh: boolean;
+  radarHistoryDays: number;
+  radarRescan: boolean;
   maxRunningExperiments: number;
   monthlyCampaignEmails: number;
   alertCheckHours: number;
@@ -122,6 +124,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxOpenTasks: 50,
     insightWeeks: 4,
     insightRefresh: false,
+    radarHistoryDays: 30,
+    radarRescan: false,
     maxRunningExperiments: 1,
     monthlyCampaignEmails: 200,
     alertCheckHours: 6,
@@ -178,6 +182,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxOpenTasks: 500,
     insightWeeks: 12,
     insightRefresh: true,
+    radarHistoryDays: 180,
+    radarRescan: true,
     maxRunningExperiments: 3,
     monthlyCampaignEmails: 5_000,
     alertCheckHours: 1,
@@ -234,6 +240,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxOpenTasks: 5_000,
     insightWeeks: 52,
     insightRefresh: true,
+    radarHistoryDays: 365,
+    radarRescan: true,
     maxRunningExperiments: 10,
     monthlyCampaignEmails: 25_000,
     alertCheckHours: 1,

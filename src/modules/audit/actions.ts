@@ -74,6 +74,9 @@ export const AUDIT_ACTIONS = {
   "funnel.created": "analytics",
   "funnel.updated": "analytics",
   "funnel.deleted": "analytics",
+  "radar.opportunity_updated": "analytics",
+  "radar.action_recorded": "analytics",
+  "radar.settings_updated": "analytics",
 
   "seo.audit_run": "seo",
   "seo.crawl_run": "seo",

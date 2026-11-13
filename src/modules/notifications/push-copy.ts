@@ -105,6 +105,14 @@ export function pushCopy(type: NotificationType, data: Data): { title: string; b
       return { title: "Weekly insights ready", body: `${count} ${count === 1 ? "change" : "changes"} worth a look this week.` };
     }
 
+    case "radar.opportunity": {
+      const count = Number(data.count ?? 0);
+      const title = str(data, "title", "A new opportunity");
+      return count > 1
+        ? { title: "Growth Radar found new opportunities", body: `${count} high-priority findings, starting with “${title}”.` }
+        : { title: "Growth Radar found an opportunity", body: title };
+    }
+
     case "task.assigned": {
       const title = str(data, "title", "a task");
       return { title: "Task assigned to you", body: `You were assigned “${title}”.` };

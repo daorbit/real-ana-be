@@ -32,6 +32,7 @@ const NUMERIC_LIMITS = [
   "maxBioPages",
   "maxOpenTasks",
   "insightWeeks",
+  "radarHistoryDays",
   "maxRunningExperiments",
   "monthlyCampaignEmails",
   "alertCheckHours",
@@ -46,6 +47,7 @@ const BOOLEAN_FEATURES = [
   "formBranding",
   "searchPageViews",
   "insightRefresh",
+  "radarRescan",
 ] as const;
 
 describe("currency", () => {

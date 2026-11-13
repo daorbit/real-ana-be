@@ -117,6 +117,11 @@ const workspaceSchema = new Schema(
         enabledAt: { type: Date },
         paidAt: { type: Date },
       },
+      growthRadar: {
+        enabled: { type: Boolean, default: false },
+        enabledAt: { type: Date },
+        nextScanAt: { type: Date, default: null },
+      },
     },
 
     /**
@@ -190,5 +195,6 @@ const workspaceSchema = new Schema(
 );
 
 workspaceSchema.index({ "apps.insights.nextRunAt": 1 }, { sparse: true });
+workspaceSchema.index({ "apps.growthRadar.nextScanAt": 1 }, { sparse: true });
 
 export const Workspace = mongoose.model("Workspace", workspaceSchema);

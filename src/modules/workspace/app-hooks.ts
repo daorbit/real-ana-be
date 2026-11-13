@@ -1,6 +1,7 @@
 import { scheduleAlertChecks } from "../alerts/alerts.service.js";
 import { syncPublicDashboard } from "../analytics/public-dashboard.service.js";
 import { scheduleInsights } from "../insights/insights.service.js";
+import { scheduleGrowthRadar } from "../growth-radar/scan.service.js";
 import { Task } from "../tasks/models/Task.js";
 import type { WorkspaceApp } from "./apps.service.js";
 
@@ -8,6 +9,7 @@ const HOOKS: Partial<Record<WorkspaceApp, (workspaceId: string, enabled: boolean
   alerts: scheduleAlertChecks,
   publicDashboard: syncPublicDashboard,
   insights: scheduleInsights,
+  growthRadar: scheduleGrowthRadar,
   tasks: async (workspaceId, enabled) => {
     if (!enabled) await Task.deleteMany({ workspaceId });
   },

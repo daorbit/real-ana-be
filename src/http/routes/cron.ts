@@ -11,6 +11,7 @@ import { recheckDue } from "../../modules/backlinks/backlinks.service.js";
 import { sweepExpiredEvents } from "../../modules/analytics/retention.service.js";
 import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
 import { runDueInsights } from "../../modules/insights/insights.service.js";
+import { runDueRadarScans } from "../../modules/growth-radar/scan.service.js";
 import { runCampaignSends } from "../../modules/campaigns/campaign-runner.js";
 import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 import { markServerErrorReported } from "../middleware/report-server-errors.js";
@@ -113,28 +114,42 @@ async function runInsights() {
   return summary;
 }
 
+async function runGrowthRadar() {
+  const summary = await runDueRadarScans();
+  if (summary.scanned || summary.failed)
+    console.log(`[cron] growth radar: ${summary.scanned} scanned, ${summary.failed} failed`);
+  if (summary.errors.length) console.error("[cron] growth radar errors:", summary.errors.join(" | "));
+  return summary;
+}
+
 router.get("/reports", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
-  const [reports, insights] = await Promise.allSettled([runDueSchedules(), runInsights()]);
+  const [reports, insights, radar] = await Promise.allSettled([runDueSchedules(), runInsights(), runGrowthRadar()]);
   const insightResult =
     insights.status === "fulfilled" ? insights.value : { error: (insights.reason as Error)?.message ?? "insights failed" };
   if (insights.status === "rejected") {
     console.error("[cron] insight run failed:", insightResult);
     await alertCronFailure("insights", (insights.reason as Error)?.message ?? "insights failed");
   }
+  const radarResult =
+    radar.status === "fulfilled" ? radar.value : { error: (radar.reason as Error)?.message ?? "growth radar failed" };
+  if (radar.status === "rejected") {
+    console.error("[cron] growth radar run failed:", radarResult);
+    await alertCronFailure("growth-radar", (radar.reason as Error)?.message ?? "growth radar failed");
+  }
 
   if (reports.status === "rejected") {
     const message = (reports.reason as Error)?.message ?? "report run failed";
     console.error("[cron] report run failed:", message);
     await alertCronFailure("reports", message);
-    return res.status(500).json({ ok: false, error: message, insights: insightResult });
+    return res.status(500).json({ ok: false, error: message, insights: insightResult, growthRadar: radarResult });
   }
 
   const summary = reports.value;
   console.log(`[cron] reports: ${summary.attempted} due, ${summary.sent} sent, ${summary.failed} failed`);
   if (summary.errors.length) console.error("[cron] report errors:", summary.errors.join(" | "));
-  res.json({ ok: true, ...summary, insights: insightResult });
+  res.json({ ok: true, ...summary, insights: insightResult, growthRadar: radarResult });
 });
 
 /**
