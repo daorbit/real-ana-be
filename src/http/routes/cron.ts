@@ -13,6 +13,7 @@ import { runDueAlerts } from "../../modules/alerts/alerts.service.js";
 import { runDueInsights } from "../../modules/insights/insights.service.js";
 import { runDueRadarScans } from "../../modules/growth-radar/scan.service.js";
 import { runCampaignSends } from "../../modules/campaigns/campaign-runner.js";
+import { runStatusTick } from "../../modules/status/status-tick.js";
 import { alertCronFailure, parseRelayedAlert, sendOpsAlert } from "../../infra/monitoring/ops-alert.js";
 import { markServerErrorReported } from "../middleware/report-server-errors.js";
 
@@ -190,7 +191,13 @@ async function runAlerts() {
 router.get("/social-posts", async (req: Request, res: Response) => {
   if (!authorizeCron(req, res)) return;
 
-  const [posts, alerts, campaigns] = await Promise.allSettled([runDuePosts(), runAlerts(), runCampaignSends()]);
+  const [posts, alerts, campaigns, status] = await Promise.allSettled([runDuePosts(), runAlerts(), runCampaignSends(), runStatusTick()]);
+  const statusResult =
+    status.status === "fulfilled" ? status.value : { error: (status.reason as Error)?.message ?? "status checks failed" };
+  if (status.status === "rejected") {
+    console.error("[cron] status checks failed:", statusResult);
+    await alertCronFailure("status", (status.reason as Error)?.message ?? "status checks failed");
+  }
   const alertResult =
     alerts.status === "fulfilled" ? alerts.value : { error: (alerts.reason as Error)?.message ?? "alerts failed" };
   const campaignResult =
@@ -208,7 +215,7 @@ router.get("/social-posts", async (req: Request, res: Response) => {
     const message = (posts.reason as Error)?.message ?? "social posts failed";
     console.error("[cron] social post run failed:", message);
     await alertCronFailure("social-posts", message);
-    return res.status(500).json({ ok: false, error: message, alerts: alertResult, campaigns: campaignResult });
+    return res.status(500).json({ ok: false, error: message, alerts: alertResult, campaigns: campaignResult, status: statusResult });
   }
 
   const summary = posts.value;
@@ -216,7 +223,7 @@ router.get("/social-posts", async (req: Request, res: Response) => {
     console.log(`[cron] social: ${summary.attempted} due, ${summary.posted} posted, ${summary.failed} failed`);
   }
   if (summary.errors.length) console.error("[cron] social errors:", summary.errors.join(" | "));
-  res.json({ ok: true, ...summary, alerts: alertResult, campaigns: campaignResult });
+  res.json({ ok: true, ...summary, alerts: alertResult, campaigns: campaignResult, status: statusResult });
 });
 
 router.get("/alerts", async (req: Request, res: Response) => {

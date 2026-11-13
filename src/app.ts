@@ -21,6 +21,8 @@ import trackRoutes from "./http/routes/track.js";
 import statsRoutes from "./http/routes/stats.js";
 import v1Routes from "./http/routes/v1.js";
 import adminRoutes from "./http/routes/admin.js";
+import adminStatusRoutes from "./http/routes/admin-status.js";
+import statusPublicRoutes from "./http/routes/status-public.js";
 import adminReferralRoutes from "./http/routes/admin-referrals.js";
 import referralRoutes from "./http/routes/referrals.js";
 import shareRoutes from "./http/routes/share.js";
@@ -212,6 +214,7 @@ app.use("/api/share", publicCors, shareRoutes);
 // the shared dashboards above.
 app.use("/api/public/seo", publicCors, seoPublicRoutes);
 app.use("/api/public/plans", publicCors, plansPublicRoutes);
+app.use("/api/public/status", publicCors, statusPublicRoutes);
 
 app.use("/api/public/reports", publicCors, reportsPublicRoutes);
 
@@ -289,6 +292,7 @@ app.use("/api/notifications", dashboardCors, requireUnlocked, notificationRoutes
 app.use("/api/notes", dashboardCors, requireUnlocked, noteRoutes);
 app.use("/api/sites", dashboardCors, requireUnlocked, statsRoutes);
 app.use("/api/admin/referrals", dashboardCors, requireUnlocked, adminReferralRoutes);
+app.use("/api/admin/status", dashboardCors, requireUnlocked, adminStatusRoutes);
 app.use("/api/admin", dashboardCors, requireUnlocked, adminRoutes);
 app.use("/api/billing", dashboardCors, requireUnlocked, billingRoutes);
 app.use("/api/referrals", dashboardCors, requireUnlocked, referralRoutes);
