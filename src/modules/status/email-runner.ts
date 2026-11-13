@@ -62,6 +62,10 @@ async function runJob(job: JobRow, outOfTime: () => boolean): Promise<number> {
 }
 
 export async function runStatusEmails(): Promise<{ sent: number }> {
+  if (!(await StatusSubscriber.exists({ confirmedAt: { $ne: null } }))) {
+    await StatusEmailJob.updateMany({ done: false }, { $set: { done: true } });
+    return { sent: 0 };
+  }
   if (!mailConfigured()) return { sent: 0 };
   const outOfTime = cronDeadline(BUDGET_MS);
   let sent = 0;

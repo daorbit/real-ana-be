@@ -3,11 +3,11 @@ import { asyncHandler } from "../middleware/async-handler.js";
 import { clientIp } from "../../modules/analytics/enrich.js";
 import { incidentHistory, publicIncident, statusSummary } from "../../modules/status/summary.service.js";
 import { confirmSubscription, subscribe, unsubscribe } from "../../modules/status/subscribers.service.js";
-import { siteUrl } from "../../modules/status/emails.js";
+import { siteUrl } from "../../modules/status/urls.js";
 
 const router = Router();
 
-const CACHE = "public, max-age=30, s-maxage=60, stale-while-revalidate=300";
+const CACHE = "public, max-age=0, s-maxage=15, stale-while-revalidate=15";
 
 function cached(res: Response) {
   res.set("Cache-Control", CACHE);

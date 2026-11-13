@@ -3,6 +3,7 @@ import { badRequest, notFound } from "../../shared/errors/index.js";
 import { StatusIncident } from "./models/StatusIncident.js";
 import { StatusEmailJob } from "./models/StatusEmailJob.js";
 import { StatusComponentState } from "./models/StatusComponentState.js";
+import { StatusSubscriber } from "./models/StatusSubscriber.js";
 import {
   CLOSED_STATUSES,
   INCIDENT_IMPACTS,
@@ -48,6 +49,7 @@ function componentsOf(value: unknown): StatusComponentId[] {
 
 async function queueEmail(incidentId: Types.ObjectId, updateId: Types.ObjectId, notify: unknown): Promise<void> {
   if (notify === false) return;
+  if (!(await StatusSubscriber.exists({ confirmedAt: { $ne: null } }))) return;
   await StatusEmailJob.create({ incidentId, updateId });
 }
 

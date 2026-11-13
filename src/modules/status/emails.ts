@@ -1,17 +1,10 @@
 import { button, footnote, heading, paragraph, shell } from "../../infra/mail/mailer.js";
 import { STATUS_LABEL, type IncidentStatus } from "./components.js";
+import { apiUrl, siteUrl } from "./urls.js";
 
 const REASON = "You get this because you subscribed to Quantalog status updates.";
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-export function siteUrl(): string {
-  return (process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in").replace(/\/+$/, "");
-}
-
-export function apiUrl(): string {
-  return (process.env.PUBLIC_BASE_URL || "https://quantalog-be.daorbit.in").replace(/\/+$/, "");
-}
 
 export function unsubscribeUrl(token: string): string {
   return `${apiUrl()}/api/public/status/unsubscribe?token=${encodeURIComponent(token)}`;

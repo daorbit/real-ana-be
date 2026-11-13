@@ -5,7 +5,8 @@ import { prioritise } from "./priority.js";
 import { DAY_MS } from "./windows.js";
 import type { DetectorId, Reading, Signal } from "./types.js";
 
-type WriteOps = Parameters<typeof RadarOpportunity.bulkWrite>[0];
+type WriteOps = { updateOne: { filter: Record<string, unknown>; update: Record<string, unknown> } }[];
+type BulkOps = Parameters<typeof RadarOpportunity.bulkWrite>[0];
 
 const ARCHIVE_AFTER_MS = 14 * DAY_MS;
 const ACTIVITY_KEPT = 100;
@@ -159,7 +160,7 @@ export async function applySignals(
 
   await Promise.all([
     inserts.length ? RadarOpportunity.insertMany(inserts, { ordered: false }) : null,
-    ops.length ? RadarOpportunity.bulkWrite(ops, { ordered: false }) : null,
+    ops.length ? RadarOpportunity.bulkWrite(ops as BulkOps, { ordered: false }) : null,
   ]);
   return applied;
 }
@@ -170,5 +171,5 @@ export async function saveExplanations(explanations: Map<string, string>, applie
     .map((a) => ({
       updateOne: { filter: { _id: new Types.ObjectId(a.id) }, update: { $set: { aiSummary: explanations.get(a.signal.fingerprint) } } },
     }));
-  if (ops.length) await RadarOpportunity.bulkWrite(ops, { ordered: false });
+  if (ops.length) await RadarOpportunity.bulkWrite(ops as BulkOps, { ordered: false });
 }

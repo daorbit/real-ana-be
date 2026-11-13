@@ -2,6 +2,7 @@ import axios from "axios";
 import mongoose from "mongoose";
 import { Event } from "../analytics/models/Event.js";
 import type { StatusComponentId } from "./components.js";
+import { apiUrl, dashboardUrl, serviceUrl } from "./urls.js";
 
 const TIMEOUT_MS = 6_000;
 const SLOW_MS = 3_000;
@@ -10,8 +11,6 @@ const EVENT_WINDOW_MS = 60 * 60 * 1000;
 export type ProbeResult = { ok: boolean; slow: boolean; latencyMs: number | null; message: string };
 
 type Probe = { id: StatusComponentId; run: () => Promise<ProbeResult | null> };
-
-const trim = (value: string | undefined) => (value ?? "").replace(/\/+$/, "");
 
 async function timed(work: () => Promise<string>): Promise<ProbeResult> {
   const started = Date.now();
@@ -35,9 +34,7 @@ function probeUrl(base: string, path: string): () => Promise<ProbeResult | null>
 }
 
 async function trackingProbe(): Promise<ProbeResult | null> {
-  const base = trim(process.env.PUBLIC_BASE_URL);
-  if (!base) return null;
-  const result = await timed(() => httpOk(`${base}/tracker.js`));
+  const result = await timed(() => httpOk(`${apiUrl()}/tracker.js`));
   if (!result.ok) return result;
 
   const siteIds = (process.env.STATUS_TRACKING_SITE_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -57,9 +54,9 @@ async function apiProbe(): Promise<ProbeResult> {
 
 export const PROBES: Probe[] = [
   { id: "api", run: apiProbe },
-  { id: "dashboard", run: probeUrl(trim(process.env.PUBLIC_APP_URL || process.env.STUDIO_BASE_URL), "/") },
+  { id: "dashboard", run: probeUrl(dashboardUrl(), "/") },
   { id: "tracking", run: trackingProbe },
-  { id: "forms", run: probeUrl(trim(process.env.FORMS_API_BASE), "/api/health") },
-  { id: "invoicing", run: probeUrl(trim(process.env.INVOICES_API_BASE), "/api/health") },
+  { id: "forms", run: probeUrl(serviceUrl(process.env.FORMS_API_BASE), "/api/health") },
+  { id: "invoicing", run: probeUrl(serviceUrl(process.env.INVOICES_API_BASE), "/api/health") },
   { id: "jobs", run: async () => ({ ok: true, slow: false, latencyMs: null, message: "The scheduler ran" }) },
 ];
