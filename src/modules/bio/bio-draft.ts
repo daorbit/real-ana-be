@@ -97,6 +97,37 @@ export function linkUrl(raw: unknown): string | null {
   }
 }
 
+const PHONE = /^\+?[\d\s().-]{6,24}$/;
+const TELEGRAM_USERNAME = /^@?([a-z][a-z0-9_]{4,31})$/i;
+
+const CONTACT_PROBLEM: Record<string, string> = {
+  whatsapp: "add a WhatsApp number with its country code",
+  telegram: "add a Telegram username, number or link",
+};
+
+function phoneDigits(value: string): string | null {
+  if (!PHONE.test(value)) return null;
+  const digits = value.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15 ? digits : null;
+}
+
+function serviceUrl(service: string, raw: unknown): string | null {
+  const value = String(raw ?? "").trim();
+  const digits = phoneDigits(value);
+  if (service === "whatsapp" && digits) return `https://wa.me/${digits}`;
+  if (service === "telegram") {
+    if (digits) return `https://t.me/+${digits}`;
+    const user = TELEGRAM_USERNAME.exec(value);
+    if (user) return `https://t.me/${user[1]}`;
+  }
+  return linkUrl(value);
+}
+
+function socialUrl(network: BioSocialNetwork, value: string): string | null {
+  if (network === "email" && !value.startsWith("mailto:")) return linkUrl(`mailto:${value}`);
+  return serviceUrl(network, value);
+}
+
 function imageUrl(raw: unknown, what: string): string | { error: string } {
   const value = String(raw ?? "").trim();
   if (value && !/^https:\/\//i.test(value)) return { error: `the ${what} must be an https address` };
@@ -134,8 +165,8 @@ function parseSocials(raw: unknown): BioSocialDraft[] | string {
     const network = oneOf(entry.network, BIO_SOCIAL_NETWORKS, "website");
     if (!network) return "unknown social network";
     const value = String(entry.url ?? "").trim();
-    const url = network === "email" && !value.startsWith("mailto:") ? linkUrl(`mailto:${value}`) : linkUrl(value);
-    if (!url) return `the ${network} link needs a valid address`;
+    const url = socialUrl(network, value);
+    if (!url) return CONTACT_PROBLEM[network] ?? `the ${network} link needs a valid address`;
     socials.push({ ...idOf(entry.id), network, url, label: String(entry.label ?? "").trim().slice(0, 40) });
   }
   return socials;
@@ -152,8 +183,8 @@ function parseRows(raw: unknown): BioRowDraft[] | string {
     if (!isBioService(service)) return "unknown service";
     const name = String(entry.name ?? "").trim().slice(0, 40);
     if (!name) return "every service needs a name";
-    const url = linkUrl(entry.url);
-    if (!url) return `add a valid link for ${name}`;
+    const url = serviceUrl(service, entry.url);
+    if (!url) return CONTACT_PROBLEM[service] ?? `add a valid link for ${name}`;
     const action = String(entry.action ?? "").trim().slice(0, 16);
     if (!action) return `add a button label for ${name}`;
     rows.push({ ...idOf(entry.id), service, name, url, action, enabled: entry.enabled === undefined ? true : Boolean(entry.enabled) });
