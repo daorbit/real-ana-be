@@ -6,7 +6,7 @@ import { BioPage } from "../bio/models/BioPage.js";
 import { Task } from "../tasks/models/Task.js";
 import type { PlanCatalogEntry } from "./plans.catalog.js";
 
-export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups" | "bioPages" | "tasks";
+export type CountedFeature = "dashboards" | "embeds" | "goalTargets" | "popups" | "bioPages" | "smartLinks" | "tasks";
 
 type FeatureSpec = {
   kind: string;
@@ -52,11 +52,19 @@ export const COUNTED_FEATURES: Record<CountedFeature, FeatureSpec> = {
   },
   bioPages: {
     kind: "bio_pages",
-    label: "Link-in-bio pages",
-    noun: "link-in-bio page",
-    plural: "link-in-bio pages",
+    label: "Bio pages",
+    noun: "bio page",
+    plural: "bio pages",
     limit: (p) => p.maxBioPages,
-    count: (workspaceId) => BioPage.countDocuments({ workspaceId }),
+    count: (workspaceId) => BioPage.countDocuments({ workspaceId, kind: { $ne: "release" } }),
+  },
+  smartLinks: {
+    kind: "smart_links",
+    label: "Smart links",
+    noun: "smart link",
+    plural: "smart links",
+    limit: (p) => p.maxSmartLinks,
+    count: (workspaceId) => BioPage.countDocuments({ workspaceId, kind: "release" }),
   },
   tasks: {
     kind: "tasks",

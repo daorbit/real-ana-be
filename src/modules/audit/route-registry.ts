@@ -56,6 +56,7 @@ const SITE = "/sites/(?<siteId>[^/]+)";
 const route = (path: string) => new RegExp(`^${path}/?$`);
 
 export const ROUTE_RULES: RouteRule[] = [
+  { method: "POST", pattern: route("/bio/resolve"), action: null },
   { method: "POST", pattern: route("/bio"), action: "bio.created", kind: "bio_page" },
   { method: "PUT", pattern: route(`/bio/${ID}`), action: "bio.updated", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },
   { method: "DELETE", pattern: route(`/bio/${ID}`), action: "bio.deleted", kind: "bio_page", snapshot: byWorkspace(BioPage, "title") },

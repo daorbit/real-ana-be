@@ -20,13 +20,14 @@ describe("COUNTED_FEATURES", () => {
     assert.equal(COUNTED_FEATURES.goalTargets.limit(pro), pro.maxGoalTargets);
     assert.equal(COUNTED_FEATURES.popups.limit(pro), pro.maxPopups);
     assert.equal(COUNTED_FEATURES.bioPages.limit(pro), pro.maxBioPages);
+    assert.equal(COUNTED_FEATURES.smartLinks.limit(pro), pro.maxSmartLinks);
     assert.equal(COUNTED_FEATURES.tasks.limit(pro), pro.maxOpenTasks);
   });
 
   test("uses the kinds the upgrade dialog and da-forms expect", () => {
     assert.deepEqual(
       Object.values(COUNTED_FEATURES).map((f) => f.kind),
-      ["dashboards", "embeds", "goal_targets", "popups", "bio_pages", "tasks"],
+      ["dashboards", "embeds", "goal_targets", "popups", "bio_pages", "smart_links", "tasks"],
     );
   });
 });
@@ -47,6 +48,7 @@ describe("featureUsage", () => {
       goalTargets: { quota: starter.maxGoalTargets, used: 4 },
       popups: { quota: starter.maxPopups, used: 0 },
       bioPages: { quota: starter.maxBioPages, used: 2 },
+      smartLinks: { quota: starter.maxSmartLinks, used: 2 },
       tasks: { quota: starter.maxOpenTasks, used: 7 },
     });
     assert.deepEqual(dashboards.mock.calls[0].arguments[0], { workspaceId: WID });

@@ -53,6 +53,8 @@ export type PlanCatalogEntry = {
   maxGoalTargets: number;
   maxPopups: number;
   maxBioPages: number;
+  maxSmartLinks: number;
+  bioStatsDays: number;
   maxOpenTasks: number;
   insightWeeks: number;
   insightRefresh: boolean;
@@ -121,6 +123,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxGoalTargets: 2,
     maxPopups: 1,
     maxBioPages: 1,
+    maxSmartLinks: 3,
+    bioStatsDays: 30,
     maxOpenTasks: 50,
     insightWeeks: 4,
     insightRefresh: false,
@@ -179,6 +183,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxGoalTargets: 10,
     maxPopups: 5,
     maxBioPages: 3,
+    maxSmartLinks: 25,
+    bioStatsDays: 90,
     maxOpenTasks: 500,
     insightWeeks: 12,
     insightRefresh: true,
@@ -237,6 +243,8 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     maxGoalTargets: 30,
     maxPopups: 25,
     maxBioPages: 20,
+    maxSmartLinks: 200,
+    bioStatsDays: 365,
     maxOpenTasks: 5_000,
     insightWeeks: 52,
     insightRefresh: true,

@@ -30,6 +30,8 @@ const NUMERIC_LIMITS = [
   "maxGoalTargets",
   "maxPopups",
   "maxBioPages",
+  "maxSmartLinks",
+  "bioStatsDays",
   "maxOpenTasks",
   "insightWeeks",
   "radarHistoryDays",

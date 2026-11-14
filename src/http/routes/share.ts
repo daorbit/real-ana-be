@@ -6,6 +6,7 @@ import { sharedStats } from "../../modules/analytics/stats-cache.js";
 import { renderShareCardPng } from "../../modules/analytics/share-card.js";
 import { publicBrand } from "../../modules/branding/public-brand.js";
 import { appEnabledFilter } from "../../modules/workspace/apps.service.js";
+import { appOrigin, escapeHtml, isScraper, publicApiOrigin } from "../../shared/utils/link-preview.js";
 
 
 const router = Router();
@@ -18,11 +19,6 @@ function publicStats(workspaceId: string, siteIds: string[], rangeKey: string) {
   return sharedStats(["share", workspaceId, siteIds, rangeKey], PUBLIC_STATS_TTL_MS, () =>
     computeStats(siteIds, rangeKey, {}, resolveWindow(rangeKey)),
   );
-}
-
-/** Where the dashboard itself lives, for canonical links and redirects. */
-function appOrigin(): string {
-  return process.env.PUBLIC_APP_URL || process.env.PUBLIC_SITE_URL || "https://quantalog.daorbit.in";
 }
 
 /**
@@ -91,26 +87,6 @@ router.get("/:token/card.png", async (req: Request, res: Response) => {
     res.status(500).json({ error: "could not render card" });
   }
 });
-
-/**
- * Social and chat-app link scrapers, by user agent.
- *
- * LinkedIn is the strict one and the reason this list exists: its crawler
- * reads the raw HTML and treats a zero-delay `<meta http-equiv="refresh">` as
- * a redirect to follow, landing it on the single-page app — whose generic tags
- * are exactly what this route exists to avoid serving. Facebook, X, Slack and
- * WhatsApp are matched too so all of them read one consistent head.
- *
- * Matched loosely on purpose: a crawler that renames itself and falls through
- * to the human path still gets a page whose head is correct, just with the
- * refresh tag attached.
- */
-const SCRAPER_UA =
-  /linkedinbot|facebookexternalhit|facebookcatalog|twitterbot|slackbot|slack-imgproxy|whatsapp|telegrambot|discordbot|embedly|quora link preview|pinterest|redditbot|applebot|skypeuripreview|bingbot|googlebot|vkshare|w3c_validator/i;
-
-function isScraper(req: Request): boolean {
-  return SCRAPER_UA.test(String(req.headers["user-agent"] ?? ""));
-}
 
 /**
  * The link-preview page for a shared dashboard.
@@ -200,29 +176,6 @@ ${bot ? "" : `<meta http-equiv="refresh" content="0; url=${escapeHtml(target)}" 
   res.set("Cache-Control", "public, max-age=600, s-maxage=600");
   res.send(html);
 });
-
-/** Escape text bound for an HTML attribute or text node. */
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/**
- * This API's own public origin, for building the `og:image` URL.
- *
- * Read from the request rather than configuration so the tags are correct
- * behind whichever host actually served them, with the proxy headers honoured
- * because the scraper's fetch arrives through one.
- */
-function publicApiOrigin(req: Request): string {
-  if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL;
-  const proto = String(req.headers["x-forwarded-proto"] ?? req.protocol ?? "https").split(",")[0];
-  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "");
-  return `${proto}://${host}`;
-}
 
 router.get("/:token", async (req: Request, res: Response) => {
   const token = String(req.params.token ?? "");
