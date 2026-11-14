@@ -3,7 +3,7 @@ import mongoose, { Schema } from "mongoose";
 export const BIO_KINDS = ["profile", "release"] as const;
 export const BIO_APPEARANCES = ["light", "dark"] as const;
 export const BIO_BUTTON_STYLES = ["rounded", "pill", "square"] as const;
-export const BIO_BACKGROUNDS = ["plain", "soft", "accent"] as const;
+export const BIO_BACKGROUNDS = ["plain", "soft", "accent", "deep"] as const;
 export const BIO_PROFILE_LAYOUTS = ["classic", "hero", "grid", "editorial", "cards"] as const;
 export const BIO_RELEASE_LAYOUTS = ["list", "poster", "tiles"] as const;
 export const BIO_FONTS = ["sans", "serif", "rounded", "mono"] as const;
