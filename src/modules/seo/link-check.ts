@@ -52,6 +52,27 @@ const LINK_TIMEOUT = 8_000;
 
 export type PageLink = { url: string; text: string; internal: boolean };
 
+const BOT_WALL_HOSTS = ["linkedin.com", "instagram.com", "facebook.com", "x.com", "twitter.com", "tiktok.com"];
+
+const BOT_WALL_NOTE = "This site blocks automated checks, so the link could not be verified. Open it in a browser to confirm.";
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function blocksAutomatedChecks(link: PageLink, status: number): boolean {
+  if (status === 999) return true;
+  if (link.internal) return false;
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  const host = hostOf(link.url);
+  return BOT_WALL_HOSTS.some((wall) => host === wall || host.endsWith(`.${wall}`));
+}
+
 /**
  * Check a page's links.
  *
@@ -119,6 +140,17 @@ async function checkOne(link: PageLink): Promise<LinkResult> {
     }
 
     const redirected = res.chain.length > 1;
+
+    if (blocksAutomatedChecks(link, res.status)) {
+      return {
+        ...base,
+        status: "skipped",
+        statusCode: res.status,
+        chain: [],
+        elapsedMs: res.elapsedMs,
+        note: BOT_WALL_NOTE,
+      };
+    }
 
     if (res.status >= 400 && res.status < 500) {
       return {
