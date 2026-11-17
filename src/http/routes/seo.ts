@@ -18,6 +18,7 @@ import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js
 import { emitTo } from "../../modules/notifications/notify.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { ensureSeoShareLinks } from "../../modules/seo/seo-share-links.js";
+import { buildPagePreview } from "../../modules/seo/page-preview.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -162,6 +163,32 @@ router.get(
       .limit(limit);
 
     res.json(reports);
+  }
+);
+
+router.get(
+  "/:wid/sites/:siteId/seo/preview",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req, "editor");
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+    const { ws, site } = found;
+
+    const url = normalizeUrl(String(req.query.url ?? "").trim() || site.domain);
+    if (!url || !urlMatchesDomain(url, site.domain))
+      return res.status(400).json({ error: `URL must be on ${site.domain}` });
+
+    const budget = rateLimit(`seo-preview:${ws.id}`, { capacity: 20, refillPerMinute: 10 });
+    if (!budget.allowed) return res.status(429).json({ error: "too many previews" });
+
+    try {
+      const html = await buildPagePreview(ws.id, url);
+      res.set("Cache-Control", "private, no-store");
+      res.json({ html });
+    } catch (e) {
+      const message = (e as Error)?.message ?? "preview failed";
+      const status = e instanceof BlockedUrlError ? 400 : 502;
+      res.status(status).json({ error: `could not preview ${url}: ${message}` });
+    }
   }
 );
 

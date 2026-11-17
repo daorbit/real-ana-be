@@ -579,6 +579,19 @@ const ADVICE: Record<string, string> = {
   canonical: "Point rel=canonical at the preferred version of this page.",
 };
 
+type PsiAuditItem = {
+  url?: string;
+  wastedBytes?: number;
+  wastedMs?: number;
+  totalBytes?: number;
+  transferSize?: number;
+  resourceType?: string;
+  requestCount?: number;
+  entity?: string | { text?: string };
+  mainThreadTime?: number;
+  blockingTime?: number;
+};
+
 type PsiAudit = {
   id?: string;
   title?: string;
@@ -590,20 +603,7 @@ type PsiAudit = {
   details?: {
     overallSavingsMs?: number;
     overallSavingsBytes?: number;
-    items?: Array<{
-      url?: string;
-      wastedBytes?: number;
-      wastedMs?: number;
-      totalBytes?: number;
-      transferSize?: number;
-      /** resource-summary rows key composition by type rather than URL. */
-      resourceType?: string;
-      requestCount?: number;
-      /** third-party-summary rows name the origin behind the cost. */
-      entity?: string | { text?: string };
-      mainThreadTime?: number;
-      blockingTime?: number;
-    }>;
+    items?: PsiAuditItem[] | Record<string, unknown>;
     data?: string;
   };
 };
@@ -627,6 +627,11 @@ const emptyScores = (): SeoScores => ({
   seo: null,
 });
 
+function auditItems(audit: PsiAudit | undefined): PsiAuditItem[] {
+  const items = audit?.details?.items;
+  return Array.isArray(items) ? items.filter((i): i is PsiAuditItem => Boolean(i) && typeof i === "object") : [];
+}
+
 function buildSuggestion(
   id: string,
   audit: PsiAudit,
@@ -643,7 +648,7 @@ function buildSuggestion(
       `Cuts about ${Math.round(audit.details.overallSavingsBytes / 1024)} KB.`,
     );
 
-  const withUrls = (audit.details?.items ?? [])
+  const withUrls = auditItems(audit)
     .filter((i): i is typeof i & { url: string } => Boolean(i.url))
     .slice(0, 5);
 
@@ -735,7 +740,7 @@ function parseCrux(
 }
 
 function parseDiagnostics(audits: Record<string, PsiAudit>): SeoDiagnostics {
-  const summaryItems = audits["resource-summary"]?.details?.items ?? [];
+  const summaryItems = auditItems(audits["resource-summary"]);
 
   const byType = summaryItems
     .filter((i) => i.resourceType && i.resourceType !== "total")
@@ -748,7 +753,7 @@ function parseDiagnostics(audits: Record<string, PsiAudit>): SeoDiagnostics {
 
   const total = summaryItems.find((i) => i.resourceType === "total");
 
-  const thirdPartyItems = audits["third-party-summary"]?.details?.items ?? [];
+  const thirdPartyItems = auditItems(audits["third-party-summary"]);
   const thirdParty = thirdPartyItems
     .map((i) => ({
       entity:
