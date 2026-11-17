@@ -21,6 +21,13 @@ const STRIPPED = [
   "link[rel=manifest]",
 ].join(",");
 
+const REVEAL_CSS = [
+  '[style*="opacity:0;"],[style*="opacity: 0;"],[style$="opacity:0"],[style$="opacity: 0"]',
+  "[data-aos],.aos-init,.aos-animate,.wow,.reveal,.fade-in,.animate-on-scroll,[data-scroll],[data-sal],[data-animate]",
+].join(",") +
+  "{opacity:1!important;visibility:visible!important;transform:none!important;filter:none!important}" +
+  "html,body{scroll-behavior:auto!important}";
+
 export class PreviewUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -51,9 +58,12 @@ async function loadPreview(url: string): Promise<string> {
     const node = $(el);
     node.attr("srcset", node.attr("data-srcset") ?? "");
   });
+  $("[crossorigin]").removeAttr("crossorigin");
+  $("[integrity]").removeAttr("integrity");
   $("head").prepend(
     `<base href="${encodeURI(res.finalUrl)}" target="_blank"><meta name="referrer" content="no-referrer">`
   );
+  $("head").append(`<style>${REVEAL_CSS}</style>`);
   return $.html();
 }
 
