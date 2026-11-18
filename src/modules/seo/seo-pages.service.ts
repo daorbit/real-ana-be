@@ -79,10 +79,11 @@ function byPath(a: SeoPage, b: SeoPage): number {
 export async function listSeoPages(siteId: string, origin: string): Promise<SeoPageList> {
   const [paths, audits] = await Promise.all([sitemapPaths(siteId, origin), latestAudits(siteId)]);
   const inSitemap = new Set(paths);
-  const all = new Set<string>(["/", ...paths, ...audits.keys()]);
-  const pages = [...all]
+  const audited = new Set<string>(audits.keys());
+  const unaudited = ["/", ...paths].filter((p, i, all) => !audited.has(p) && all.indexOf(p) === i);
+  const room = Math.max(0, MAX_PAGES - audited.size);
+  const pages = [...audited, ...unaudited.slice(0, room)]
     .map((path) => ({ path, inSitemap: inSitemap.has(path), audit: audits.get(path) ?? null }))
-    .sort(byPath)
-    .slice(0, MAX_PAGES);
+    .sort(byPath);
   return { sitemap: paths.length > 0, pages };
 }
