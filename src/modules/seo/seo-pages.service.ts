@@ -31,6 +31,18 @@ export function pagePath(url: string): string | null {
   }
 }
 
+export function urlVariants(url: string): string[] {
+  try {
+    const u = new URL(url);
+    if (u.pathname === "/") return [url];
+    const other = new URL(url);
+    other.pathname = u.pathname.endsWith("/") ? u.pathname.replace(/\/+$/, "") : `${u.pathname}/`;
+    return [url, other.href];
+  } catch {
+    return [url];
+  }
+}
+
 async function sitemapPaths(siteId: string, origin: string): Promise<string[]> {
   const hit = sitemapCache.get(siteId);
   if (hit && Date.now() - hit.at < SITEMAP_TTL_MS) return hit.paths;

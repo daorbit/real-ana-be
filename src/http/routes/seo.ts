@@ -19,7 +19,7 @@ import { emitTo } from "../../modules/notifications/notify.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { ensureSeoShareLinks } from "../../modules/seo/seo-share-links.js";
 import { buildPagePreview } from "../../modules/seo/page-preview.js";
-import { listSeoPages, siteOrigin } from "../../modules/seo/seo-pages.service.js";
+import { listSeoPages, siteOrigin, urlVariants } from "../../modules/seo/seo-pages.service.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -203,7 +203,7 @@ router.get(
     const url = req.query.url ? normalizeUrl(String(req.query.url)) : null;
     const report = await SeoReport.findOne({
       siteId: found.site.siteId,
-      ...(url ? { url } : {}),
+      ...(url ? { url: { $in: urlVariants(url) } } : {}),
     }).sort({ createdAt: -1 });
 
     if (!report) return res.status(404).json({ error: "no report yet" });
