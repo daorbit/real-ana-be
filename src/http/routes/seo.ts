@@ -19,6 +19,7 @@ import { emitTo } from "../../modules/notifications/notify.service.js";
 import { APP_DISABLED_MESSAGE, appEnabled } from "../../modules/workspace/apps.service.js";
 import { ensureSeoShareLinks } from "../../modules/seo/seo-share-links.js";
 import { buildPagePreview } from "../../modules/seo/page-preview.js";
+import { listSeoPages, siteOrigin } from "../../modules/seo/seo-pages.service.js";
 
 /**
  * SEO auditing for the sites a workspace already tracks.
@@ -279,14 +280,7 @@ router.post(
     if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
     const { ws, site } = found;
 
-    const origin = (() => {
-      const normalized = normalizeUrl(site.domain as string);
-      try {
-        return normalized ? new URL(normalized).origin : null;
-      } catch {
-        return null;
-      }
-    })();
+    const origin = siteOrigin(site.domain as string);
     if (!origin) return res.status(400).json({ error: "site has an invalid domain" });
 
     if (crawling.has(site.siteId))
@@ -355,6 +349,29 @@ router.get(
     });
     if (!report) return res.status(404).json({ error: "no crawl yet" });
     res.json(report);
+  }
+);
+
+router.get(
+  "/:wid/sites/:siteId/seo/pages",
+  async (req: AuthedRequest, res: Response) => {
+    const found = await resolveSite(req);
+    if (siteRefused(found)) return res.status(found.status).json({ error: found.error });
+    const { ws, site } = found;
+
+    const origin = siteOrigin(site.domain as string);
+    if (!origin) return res.status(400).json({ error: "site has an invalid domain" });
+
+    const budget = rateLimit(`seo-pages:${ws.id}`, { capacity: 20, refillPerMinute: 10 });
+    if (!budget.allowed) return res.status(429).json({ error: "too many page list requests" });
+
+    try {
+      res.set("Cache-Control", "private, max-age=300");
+      res.json(await listSeoPages(site.siteId, origin));
+    } catch (e) {
+      const message = (e as Error)?.message ?? "could not list pages";
+      res.status(502).json({ error: message });
+    }
   }
 );
 
