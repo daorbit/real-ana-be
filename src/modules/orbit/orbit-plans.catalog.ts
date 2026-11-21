@@ -100,7 +100,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
   {
     slug: "orbit-starter",
     name: "Orbit Starter",
-    description: "Daily use, with stronger reasoning models.",
+    description: "Daily use, with longer conversations.",
     monthlyQuota: 300,
     modelTier: "standard",
     maxHistoryTurns: 8,
@@ -109,7 +109,7 @@ export const ORBIT_PLAN_CATALOG: OrbitPlanEntry[] = [
     dataAccess: false,
     imageGeneration: false,
     sortOrder: 1,
-    features: ["Everything in Orbit Free", "Reasoning models", "Longer conversations"],
+    features: ["Everything in Orbit Free", "More questions", "Longer conversations"],
   },
   {
     slug: "orbit-pro",

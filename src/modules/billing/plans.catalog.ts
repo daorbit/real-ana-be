@@ -144,7 +144,7 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
     monthlyEventQuota: 250_000,
     features: [
       "Email support",
-      "Orbit AI: 300 questions / month with reasoning models",
+      "Orbit AI: 300 questions / month with longer conversations",
       "Scheduled reports by email",
       "Custom comparison periods",
       "Scheduled LinkedIn posts, including repeating",
@@ -264,9 +264,9 @@ const PLAN_CATALOG_INCREMENTAL: PlanCatalogEntry[] = [
  */
 const SUPERSEDES: Record<string, string[]> = {
   "Priority support": ["Email support"],
-  "Orbit AI: 300 questions / month with reasoning models": ["Orbit AI: 10 questions / month"],
+  "Orbit AI: 300 questions / month with longer conversations": ["Orbit AI: 10 questions / month"],
   "Orbit AI: 2,000 questions / month, answers from your own data": [
-    "Orbit AI: 300 questions / month with reasoning models",
+    "Orbit AI: 300 questions / month with longer conversations",
     "Orbit AI: 10 questions / month",
   ],
   "Scheduled reports by email": ["Monthly report by email"],
