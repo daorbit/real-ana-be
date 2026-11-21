@@ -1,6 +1,6 @@
 import type { ClientPatch } from "./invoice-ops.js";
 
-export const GST_RATES = [0, 0.25, 3, 5, 12, 18, 28];
+export const GST_RATES = [0, 0.25, 3, 5, 18, 28, 40];
 const MAX_CATALOG = 40;
 const MAX_CUSTOMERS = 40;
 const MAX_ITEMS = 100;

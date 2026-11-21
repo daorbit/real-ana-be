@@ -13,13 +13,14 @@ const SYSTEM_PROMPT = [
   "- Use the item ids exactly as given. One entry per item you are reasonably sure about; skip items you cannot classify.",
   "- HSN/SAC codes are 4 to 8 digits. Services use SAC codes starting with 99.",
   `- "taxRate" must be one of: ${GST_RATES.join(", ")}.`,
+  "- Use the GST rates in force since 22 September 2025: most goods and services are 5% or 18%, and luxury and sin goods are 40%. The 12% slab no longer exists, and 28% applies only to a few tobacco products.",
 ].join("\n");
 
-const EXAMPLE_USER = "line-1 | Website design and development\nline-2 | Printed brochures, A4";
+const EXAMPLE_USER = "line-1 | Website design and development\nline-2 | Laptop, 14 inch";
 const EXAMPLE_REPLY = JSON.stringify({
   items: [
     { id: "line-1", hsn: "998314", taxRate: 18 },
-    { id: "line-2", hsn: "4911", taxRate: 12 },
+    { id: "line-2", hsn: "8471", taxRate: 18 },
   ],
 });
 
