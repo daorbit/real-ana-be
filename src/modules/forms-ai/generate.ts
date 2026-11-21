@@ -17,6 +17,11 @@ function withTheme(form: GeneratedForm, previous?: GeneratedForm): GeneratedForm
   return { ...form, theme: previous?.theme ?? defaultTheme() };
 }
 
+function noteFrom(parsed: { reply?: string; adjustments: string[] }): string | undefined {
+  const note = [parsed.reply, ...parsed.adjustments].filter(Boolean).join(" ");
+  return note || undefined;
+}
+
 /**
  * Turn a sentence into a starting-point form.
  *
@@ -81,7 +86,8 @@ function systemPrompt(): string {
     '  "formDescription": string,',
     '  "submitLabel": string,',
     '  "fields": [ { "type": string, "label": string, "required": boolean, "placeholder": string, "helpText": string, "options": string[], "rows": string[], "content": string, "maxRating": number, "min": number, "max": number } ],',
-    '  "theme": { "palette": string, "accentColor": string, "fontFamily": string, "cardRadius": number, "cardShadow": string }',
+    '  "theme": { "palette": string, "pageBg": string, "cardBg": string, "cardBorder": string, "accentColor": string, "labelColor": string, "inputBg": string, "inputBorder": string, "inputTextColor": string, "fontFamily": string, "cardRadius": number, "cardShadow": string },',
+    '  "reply": string',
     "}",
     "",
     `"type" must be one of: ${GENERATABLE_FIELD_TYPES.join(", ")}.`,
@@ -95,14 +101,19 @@ function systemPrompt(): string {
     '- Mark a field required only when the form is useless without it.',
     '- "name", "email", "phone", "address", "country", "date", "rating", "signature" already know what they collect. Use them rather than a "text" field named after them.',
     "",
-    "Theme:",
-    '- "palette" is the name of one designed palette. Pick the one whose mood fits the subject:',
+    "Theme — you are the designer:",
+    '- "palette" is a designed starting point. Pick the one whose mood fits the subject:',
     paletteMenu(),
     "- Prefer a light palette. Use a dark one (midnight, graphite, coffee) only when the subject is clearly nightlife, gaming, music or a tech launch, or the request asks for dark.",
-    '- Leave "accentColor" out unless the request names a brand or colour. When set, it is a 6-digit hex string like "#2563eb".',
+    "- Every colour key you send replaces that colour in the palette. Colours are 6-digit hex strings like \"#2563eb\".",
+    "- When the request names colours, hex codes or a brand, design with them. Use your own judgement about what each colour is for, from what the person wrote and from the colour itself: a pale, near-white tint works as a page or card background; a strong colour works for buttons (\"accentColor\"); a very dark colour can carry text or a dark theme. Build the rest of the theme to go with it.",
+    "- Every colour must stay readable: labels and field text need a contrast of at least 4.5:1 with what they sit on, and the button colour at least 3:1 against the card. Never put a colour somewhere it would disappear.",
     `- "fontFamily" is one of: ${FONT_FAMILIES.join(", ")}. Use "inter" unless the subject calls for "serif" (weddings, legal, editorial) or "mono" (developer events).`,
     `- "cardShadow" is one of: ${CARD_SHADOWS.join(", ")}. Prefer "sm" or "md".`,
     '- "cardRadius" is a number of pixels, 8 to 20.',
+    "",
+    "Reply:",
+    '- "reply" is one or two plain sentences to the person: what you built, and, when they named colours, where you used each one and why. No greetings, no emoji.',
   ].join("\n");
 }
 
@@ -112,7 +123,7 @@ function systemPrompt(): string {
  * One example rather than several: these are small models on a latency budget,
  * and a long prompt costs more time than the extra examples buy in quality.
  */
-const EXAMPLE_USER = "a contact form for a design studio";
+const EXAMPLE_USER = "a contact form for a design studio, buttons in #0f766e";
 const EXAMPLE_REPLY = JSON.stringify({
   title: "Contact us",
   formDescription: "Tell us what you need and we'll come back within one business day.",
@@ -131,10 +142,13 @@ const EXAMPLE_REPLY = JSON.stringify({
   ],
   theme: {
     palette: "mono",
+    accentColor: "#0f766e",
     fontFamily: "inter",
     cardRadius: 14,
     cardShadow: "sm",
   },
+  reply:
+    "A short contact form for the studio on a clean black-and-white card, with your #0f766e teal on the button so it stands out.",
 });
 
 /**
@@ -263,7 +277,7 @@ function salvageTruncatedJson(fragment: string, depth: number, inString: boolean
 }
 
 export type GenerateResult =
-  | { ok: true; form: GeneratedForm; model: string }
+  | { ok: true; form: GeneratedForm; model: string; note?: string }
   | { ok: false; status: number; error: string };
 
 export function formsAiReady(): boolean {
@@ -367,7 +381,7 @@ export async function generateForm(
         previous && mode === "edit"
           ? reconcileRevision(previous, parsed.form, asked)
           : parsed.form;
-      return { ok: true, form: withTheme(form, previous), model };
+      return { ok: true, form: withTheme(form, previous), model, note: noteFrom(parsed) };
     }
 
     // A model that answered but not usably. Worth trying the next one: the
@@ -449,5 +463,5 @@ async function generateFormFromImage(
       ? reconcileRevision(previous, parsed.form, instruction)
       : parsed.form;
 
-  return { ok: true, form: withTheme(form, previous), model: VISION_MODEL };
+  return { ok: true, form: withTheme(form, previous), model: VISION_MODEL, note: noteFrom(parsed) };
 }

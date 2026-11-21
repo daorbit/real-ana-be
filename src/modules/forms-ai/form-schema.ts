@@ -175,20 +175,25 @@ function readField(raw: unknown): GeneratedField | null {
   return field;
 }
 
-function readColors(r: Record<string, unknown>): GeneratedTheme {
-  const palette = r.palette;
-  if (isPaletteId(palette)) {
-    const theme: GeneratedTheme = paletteColors(palette);
-    const accent = typeof r.accentColor === "string" ? r.accentColor.trim() : "";
-    if (HEX.test(accent)) theme.accentColor = accent;
-    return theme;
-  }
+type ThemeColorKey = (typeof THEME_COLOR_KEYS)[number];
 
-  const theme: GeneratedTheme = {};
+const ADJUSTABLE_COLOR_NAMES: Partial<Record<ThemeColorKey, string>> = {
+  accentColor: "button colour",
+  labelColor: "label colour",
+  inputTextColor: "field text colour",
+};
+
+function readColors(r: Record<string, unknown>): { theme: GeneratedTheme; explicit: GeneratedTheme } {
+  const palette = r.palette;
+  const theme: GeneratedTheme = isPaletteId(palette) ? paletteColors(palette) : {};
+  const explicit: GeneratedTheme = {};
+
   for (const key of THEME_COLOR_KEYS) {
     const value = r[key];
     if (typeof value === "string" && HEX.test(value.trim())) {
-      theme[key] = value.trim();
+      const hex = value.trim().toLowerCase();
+      theme[key] = hex;
+      explicit[key] = hex;
     }
   }
   if (
@@ -197,13 +202,24 @@ function readColors(r: Record<string, unknown>): GeneratedTheme {
   ) {
     theme.textMode = r.textMode as GeneratedTheme["textMode"];
   }
-  return theme;
+  return { theme, explicit };
 }
 
-function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefined {
+function readabilityAdjustments(explicit: GeneratedTheme, final: GeneratedTheme): string[] {
+  return (Object.keys(ADJUSTABLE_COLOR_NAMES) as ThemeColorKey[])
+    .filter((key) => explicit[key] && final[key] && explicit[key] !== final[key])
+    .map(
+      (key) =>
+        `I changed the ${ADJUSTABLE_COLOR_NAMES[key]} from ${explicit[key]} to ${final[key]} so it stays readable on the card.`,
+    );
+}
+
+type ReadTheme = { theme: GeneratedTheme; adjustments: string[] };
+
+function readTheme(raw: unknown, base?: GeneratedTheme): ReadTheme | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
-  const theme = readColors(r);
+  const { theme, explicit } = readColors(r);
   if (
     typeof r.fontFamily === "string" &&
     (FONT_FAMILIES as readonly string[]).includes(r.fontFamily)
@@ -223,7 +239,8 @@ function readTheme(raw: unknown, base?: GeneratedTheme): GeneratedTheme | undefi
   if (!Object.keys(theme).length) return undefined;
 
   const harmonized = harmonizeTheme(theme, base);
-  return Object.keys(harmonized).length ? harmonized : undefined;
+  if (!Object.keys(harmonized).length) return undefined;
+  return { theme: harmonized, adjustments: readabilityAdjustments(explicit, { ...base, ...harmonized }) };
 }
 
 export function defaultTheme(): GeneratedTheme {
@@ -231,11 +248,11 @@ export function defaultTheme(): GeneratedTheme {
 }
 
 export type ParseResult =
-  | { ok: true; form: GeneratedForm }
+  | { ok: true; form: GeneratedForm; reply?: string; adjustments: string[] }
   | { ok: false; reason: string };
 
 export type ParseThemeResult =
-  | { ok: true; theme: GeneratedTheme }
+  | { ok: true; theme: GeneratedTheme; adjustments: string[] }
   | { ok: false; reason: string };
 
 export function parseGeneratedTheme(raw: unknown, base?: GeneratedTheme): ParseThemeResult {
@@ -243,14 +260,19 @@ export function parseGeneratedTheme(raw: unknown, base?: GeneratedTheme): ParseT
     return { ok: false, reason: "not an object" };
   const r = raw as Record<string, unknown>;
 
-  const theme = readTheme(r.theme, base) ?? readTheme(r, base);
+  const read = readTheme(r.theme, base) ?? readTheme(r, base);
 
-  if (!theme) return { ok: false, reason: "no usable theme" };
+  if (!read) return { ok: false, reason: "no usable theme" };
 
-  const entries = Object.entries(theme).filter(([, v]) => v !== undefined);
+  const entries = Object.entries(read.theme).filter(([, v]) => v !== undefined);
   if (!entries.length) return { ok: false, reason: "no usable theme" };
 
-  return { ok: true, theme: Object.fromEntries(entries) as GeneratedTheme };
+  return { ok: true, theme: Object.fromEntries(entries) as GeneratedTheme, adjustments: read.adjustments };
+}
+
+export function readReply(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  return text((raw as Record<string, unknown>).reply, 400);
 }
 
 export const MAX_FIELDS = 25;
@@ -279,8 +301,8 @@ export function parseGeneratedForm(raw: unknown): ParseResult {
   const submitLabel = text(r.submitLabel, 40);
   if (submitLabel) form.submitLabel = submitLabel;
 
-  const theme = readTheme(r.theme);
-  if (theme) form.theme = theme;
+  const read = readTheme(r.theme);
+  if (read) form.theme = read.theme;
 
-  return { ok: true, form };
+  return { ok: true, form, reply: readReply(r), adjustments: read?.adjustments ?? [] };
 }

@@ -131,7 +131,7 @@ router.post(
 
     await spendQuota(workspaceId, "orbit");
 
-    res.json({ form: result.form, model: result.model });
+    res.json({ form: result.form, model: result.model, note: result.note });
   }),
 );
 

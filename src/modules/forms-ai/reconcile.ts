@@ -33,6 +33,8 @@ const APPEARANCE_WORDS = [
   "rounded", "radius", "accent",
 ];
 
+const HEX_CODE = /#(?:[0-9a-f]{6}|[0-9a-f]{3})\b/i;
+
 const REMOVAL_WORDS = [
   "remove", "delete", "drop", "get rid", "take out", "without", "no longer",
   "don't need", "dont need", "cut",
@@ -67,7 +69,7 @@ export function reconcileRevision(
 
   // Keep the user's theme unless they asked about appearance. If the prompt is
   // about the look and the model returned nothing, fall back to what was there.
-  if (!mentions(prompt, APPEARANCE_WORDS)) {
+  if (!mentions(prompt, APPEARANCE_WORDS) && !HEX_CODE.test(prompt)) {
     out.theme = previous.theme;
   } else if (!out.theme) {
     out.theme = previous.theme;
