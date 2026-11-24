@@ -181,6 +181,7 @@ export const ROUTE_RULES: RouteRule[] = [
   { method: "POST", pattern: route(`${SITE}/search-console/sitemaps`), action: "sitemap.submitted", kind: "sitemap" },
   { method: "DELETE", pattern: route(`${SITE}/search-console/sitemaps`), action: "sitemap.removed", kind: "sitemap" },
   { method: "POST", pattern: route(`${SITE}/search-console/refresh`), action: null },
+  { method: "POST", pattern: route(`${SITE}/search-console/indexing/check`), action: null },
 ];
 
 export const SKIPPED_PREFIXES = ["/orbit", "/audit"];

@@ -8,10 +8,12 @@ import { trackedCompetitors, type SiteRef } from "./backlinks.service.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const RECENT_DAYS = 30;
+const TOP_PAGES = 10;
 
 type StoredLink = {
   sourceUrl: string;
   sourceDomain: string;
+  targetUrl?: string | null;
   anchorText?: string | null;
   rel?: string | null;
   isImage?: boolean | null;
@@ -27,6 +29,31 @@ function toProfileLink(l: StoredLink): ProfileLink {
     isImage: Boolean(l.isImage),
     authority: l.authority ?? null,
   };
+}
+
+function pathOf(url: string): string {
+  try {
+    const { pathname, search } = new URL(url);
+    return `${pathname}${search}`;
+  } catch {
+    return url;
+  }
+}
+
+function topLinkedPages(links: StoredLink[]) {
+  const pages = new Map<string, { url: string; links: number; domains: Set<string> }>();
+  for (const { targetUrl, sourceDomain } of links) {
+    if (!targetUrl) continue;
+    const path = pathOf(targetUrl);
+    const page = pages.get(path) ?? { url: targetUrl, links: 0, domains: new Set<string>() };
+    page.links++;
+    page.domains.add(sourceDomain);
+    pages.set(path, page);
+  }
+  return [...pages]
+    .map(([path, page]) => ({ path, url: page.url, links: page.links, domains: page.domains.size }))
+    .sort((a, b) => b.domains - a.domains || b.links - a.links)
+    .slice(0, TOP_PAGES);
 }
 
 export async function buildOverview(site: SiteRef) {
@@ -47,6 +74,7 @@ export async function buildOverview(site: SiteRef) {
 
   return {
     indexAvailable: backlinkIndexConfigured(),
+    topPages: topLinkedPages(live),
     summary: {
       total: mine.length,
       live: live.length,

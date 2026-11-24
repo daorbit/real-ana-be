@@ -3,6 +3,7 @@ import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.
 import { requireWorkspace } from "../../modules/workspace/access.service.js";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { resolveBranding, saveBranding } from "../../modules/branding/branding.service.js";
+import { syncBrandLogoToSite } from "../../modules/branding/logo-sync.service.js";
 
 /**
  * How a workspace presents itself on anything its customers see — payment
@@ -52,17 +53,21 @@ router.put(
     const body = req.body ?? {};
     const str = (value: unknown) => (typeof value === "string" ? value : undefined);
 
-    res.json(
-      await saveBranding(String(ws.id), {
-        name: str(body.name),
-        logoUrl: str(body.logoUrl),
-        accentColor: str(body.accentColor),
-        hidePoweredBy:
-          typeof body.hidePoweredBy === "boolean" ? body.hidePoweredBy : undefined,
-        watermarkAiImages:
-          typeof body.watermarkAiImages === "boolean" ? body.watermarkAiImages : undefined,
-      }),
-    );
+    const saved = await saveBranding(String(ws.id), {
+      name: str(body.name),
+      logoUrl: str(body.logoUrl),
+      accentColor: str(body.accentColor),
+      hidePoweredBy:
+        typeof body.hidePoweredBy === "boolean" ? body.hidePoweredBy : undefined,
+      watermarkAiImages:
+        typeof body.watermarkAiImages === "boolean" ? body.watermarkAiImages : undefined,
+    });
+    await syncBrandLogoToSite({
+      workspaceId: String(ws.id),
+      previous: current.stored.logoUrl,
+      next: str(body.logoUrl),
+    });
+    res.json(saved);
   }),
 );
 

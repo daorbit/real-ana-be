@@ -160,7 +160,15 @@ export function deleteSearchConsoleSitemap(
   return googleSend("delete", sitemapUrl(siteUrl, feedpath), accessToken);
 }
 
-export type SearchAnalyticsDimension = "date" | "hour" | "query" | "page" | "country" | "device";
+export type SearchAnalyticsFilterDimension =
+  | "query"
+  | "page"
+  | "country"
+  | "device"
+  | "searchAppearance"
+  | "brandedClassification";
+
+export type SearchAnalyticsDimension = "date" | "hour" | SearchAnalyticsFilterDimension;
 
 export type SearchAnalyticsRow = {
   keys: string[];
@@ -170,13 +178,13 @@ export type SearchAnalyticsRow = {
   position: number;
 };
 
-export type SearchType = "web" | "image" | "video" | "news" | "discover" | "googleNews";
+export type SearchType = "web" | "webMultimodal" | "image" | "video" | "news" | "discover" | "googleNews";
 
 export type SearchDataState = "all" | "hourly_all";
 
 export type SearchAnalyticsFilter = {
-  dimension: "query" | "page" | "country" | "device";
-  operator: "equals" | "contains";
+  dimension: SearchAnalyticsFilterDimension;
+  operator: "equals" | "notEquals" | "contains" | "notContains" | "includingRegex" | "excludingRegex";
   expression: string;
 };
 

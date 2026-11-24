@@ -59,7 +59,7 @@ scripts/              One-off maintenance and seeding scripts
 | Payments | `RAZORPAY_*`, `INVOICE_SELLER_*`, `EXCHANGERATE_API_KEY`, `FX_*` |
 | Media | `CLOUDINARY_*`, `ORBIT_WATERMARK_PUBLIC_ID` |
 | Sign-in | `GOOGLE_CLIENT_ID`, `GIT_CLIENT_ID`/`GIT_CLIENT_SECRET`, `LINKEDIN_*`, `CLOUDFLARE_SECRET_KEY` (Turnstile) |
-| Integrations | `GOOGLE_GSC_*`, `INSTAGRAM_*`, `META_*`, `WIREWEB_*` (WhatsApp), `DATAFORSEO_*`, `GOOGLE_PAGESPEED_API_KEY` |
+| Integrations | `GOOGLE_GSC_*`, `INSTAGRAM_*`, `META_*`, `WIREWEB_*` (WhatsApp), `DATAFORSEO_*`, `GOOGLE_PAGESPEED_API_KEY` (audits and Web vitals) |
 | AI | `GEMINI_API_KEY` |
 | Scheduled jobs | `CRON_SECRET` |
 | Monitoring | `SENTRY_DSN`, `SENTRY_ENVIRONMENT` (optional; error tracking is off when unset) |

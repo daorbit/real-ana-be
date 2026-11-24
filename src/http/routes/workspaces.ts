@@ -5,6 +5,7 @@ import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
 import { fillMissingFirstEvents } from "../../modules/analytics/site-first-event.js";
 import { parseSiteLogoUrl, uploadSiteLogo } from "../../modules/analytics/site-logo.js";
+import { syncSiteLogoToBrand } from "../../modules/branding/logo-sync.service.js";
 import { cloudinaryConfigured } from "../../infra/storage/cloudinary.js";
 import { requireAuth, blockDemoWrites, AuthedRequest } from "../middleware/auth.js";
 import { generateOnboardingCopy, onboardingCopyReady } from "../../modules/onboarding-ai/generate.js";
@@ -260,11 +261,15 @@ router.post("/:wid/sites", async (req: AuthedRequest, res: Response) => {
     purpose: typeof purpose === "string" ? purpose.trim().slice(0, 140) : "",
     logoUrl: logo,
   });
+  const brandLogoChanged = await syncSiteLogoToBrand({ workspaceId: ws.id, role: access.role, next: logo });
   await recordAudit(req, {
     action: "site.added",
     workspaceId: ws.id,
     target: { kind: "site", id: site.siteId as string, label: site.name as string },
-    meta: { domain: (site.domain as string) || (site.bundleId as string) || "" },
+    meta: {
+      domain: (site.domain as string) || (site.bundleId as string) || "",
+      ...(brandLogoChanged ? { brandLogoChanged: true } : {}),
+    },
   });
   res.status(201).json(site);
 });
@@ -387,6 +392,14 @@ router.patch(
     }
 
     await site.save();
+    const brandLogoChanged =
+      logoUrl !== undefined &&
+      (await syncSiteLogoToBrand({
+        workspaceId: ws.id,
+        role: access.role,
+        previous: before.logoUrl,
+        next: site.get("logoUrl") as string,
+      }));
     await recordAudit(req, {
       action: "site.updated",
       workspaceId: ws.id,
@@ -395,6 +408,7 @@ router.patch(
         ...(before.name !== site.name ? { fromName: before.name, toName: site.name as string } : {}),
         ...(before.domain !== site.domain ? { fromDomain: before.domain, toDomain: site.domain as string } : {}),
         ...(before.logoUrl !== site.get("logoUrl") ? { logoChanged: true } : {}),
+        ...(brandLogoChanged ? { brandLogoChanged: true } : {}),
       },
     });
     res.json(site);

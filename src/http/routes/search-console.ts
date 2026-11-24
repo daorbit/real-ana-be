@@ -19,8 +19,6 @@ import {
   getSearchDrilldown,
   getSearchHourly,
   getSearchInsights,
-  getSearchInspection,
-  isInspectionCached,
   getSearchPerformance,
   getSearchSitemaps,
   isUsablePermission,
@@ -39,9 +37,12 @@ import {
   SitemapWriteDenied,
   submitSitemap,
 } from "../../modules/seo/search-sitemaps.service.js";
+import { parseSearchFilters } from "../../modules/seo/search-filters.js";
+import { checkNextPages, getSearchIndexing } from "../../modules/seo/search-indexing.service.js";
+import { inspectPage } from "../../modules/seo/search-inspections.service.js";
+import { clampDevice, getPageVitals, getWebVitals } from "../../modules/seo/web-vitals.service.js";
 import type { WorkspaceRole } from "../../modules/workspace/models/Membership.js";
 import { AppError, badRequest } from "../../shared/errors/index.js";
-import { hasQuota, spendQuota } from "../../modules/billing/quota.service.js";
 import {
   ensureSearchDays,
   ensureSearchInsights,
@@ -242,20 +243,35 @@ async function linkedSite(
       siteId,
       connectionId: String(connection._id),
       propertyUrl: String(link.get("propertyUrl")),
+      domain: String(found.site.get("domain") ?? ""),
     },
   };
 }
 
+const FILTER_REFUSED =
+  "Google didn't accept that filter. Check the pattern, or remove the filter if this property doesn't support it.";
+
+function refusedFilter(req: AuthedRequest, err: unknown): boolean {
+  return Boolean(req.query.filters) && err instanceof GoogleApiError && err.status === 400;
+}
+
+function searchRequest(req: AuthedRequest, ent: SearchEntitlement) {
+  const type = clampType(req.query.type);
+  return { days: daysFrom(req.query.days, ent), type, filters: parseSearchFilters(req.query.filters, type) };
+}
+
 function withLinkedSite(
   load: (site: SiteRef, req: AuthedRequest, ent: SearchEntitlement) => Promise<unknown>,
+  minimum: WorkspaceRole = "viewer",
 ) {
   return asyncHandler(async (req: AuthedRequest, res: Response) => {
-    const linked = await linkedSite(req, res);
+    const linked = await linkedSite(req, res, minimum);
     if (!linked) return;
     try {
       res.json(await withGoogleSession(linked.site.connectionId, () => load(linked.site, req, linked.ent)));
     } catch (err) {
       if (err instanceof SearchPlanDenied) return planLimit(res, err.message, err.limit, err.code);
+      if (refusedFilter(req, err)) return res.status(400).json({ error: FILTER_REFUSED, kind: "filter" });
       googleFailure(res, err);
     }
   });
@@ -269,9 +285,10 @@ function daysFrom(value: unknown, ent: SearchEntitlement): number {
 
 router.get(
   "/:wid/sites/:siteId/search-console/performance",
-  withLinkedSite((site, req, ent) =>
-    getSearchPerformance(site, daysFrom(req.query.days, ent), clampType(req.query.type), ent.pageViews),
-  ),
+  withLinkedSite((site, req, ent) => {
+    const { days, type, filters } = searchRequest(req, ent);
+    return getSearchPerformance(site, days, type, ent.pageViews, filters);
+  }),
 );
 
 router.get(
@@ -280,14 +297,16 @@ router.get(
     const dimension = String(req.query.dimension ?? "query") as BreakdownDimension;
     if (!BREAKDOWN_DIMENSIONS.includes(dimension)) throw badRequest("unknown dimension");
     const sort = String(req.query.sort ?? "clicks") as BreakdownSort;
-    return getSearchBreakdownPage(site, dimension, daysFrom(req.query.days, ent), clampType(req.query.type), {
+    const { days, type, filters } = searchRequest(req, ent);
+    return getSearchBreakdownPage(site, dimension, days, type, {
       page: Number(req.query.page ?? 1) || 1,
       pageSize: Number(req.query.pageSize ?? 50) || 50,
       sort: BREAKDOWN_SORTS.includes(sort) ? sort : "clicks",
       desc: req.query.dir !== "asc",
       q: String(req.query.q ?? "").slice(0, 200),
-      rowLimit: dimension === "device" ? null : ent.rowLimit,
+      rowLimit: dimension === "device" || dimension === "searchAppearance" ? null : ent.rowLimit,
       withViews: ent.pageViews,
+      filters,
     });
   }),
 );
@@ -296,7 +315,8 @@ router.get(
   "/:wid/sites/:siteId/search-console/insights",
   withLinkedSite((site, req, ent) => {
     ensureSearchInsights(ent);
-    return getSearchInsights(site, daysFrom(req.query.days, ent), clampType(req.query.type), ent.insightRows);
+    const { days, type, filters } = searchRequest(req, ent);
+    return getSearchInsights(site, days, type, ent.insightRows, filters);
   }),
 );
 
@@ -307,7 +327,8 @@ router.get(
     const value = String(req.query.value ?? "").slice(0, 2048);
     if (dimension !== "query" && dimension !== "page") throw badRequest("dimension must be query or page");
     if (!value) throw badRequest("value is required");
-    const drill = await getSearchDrilldown(site, dimension, value, daysFrom(req.query.days, ent), clampType(req.query.type));
+    const { days, type, filters } = searchRequest(req, ent);
+    const drill = await getSearchDrilldown(site, dimension, value, days, type, filters);
     return ent.pageViews ? drill : { ...drill, views: undefined };
   }),
 );
@@ -317,30 +338,38 @@ router.get(
   withLinkedSite(async (site, req, ent) => {
     const url = String(req.query.url ?? "").slice(0, 2048);
     if (!url) throw badRequest("url is required");
-    if (await isInspectionCached(site, url)) return getSearchInspection(site, url);
-
-    if (!(await hasQuota(site.workspaceId, "inspection"))) {
-      throw ent.inspectionQuota > 0
-        ? new SearchPlanDenied(
-            `You've used all ${ent.inspectionQuota} Google index checks this month. Upgrade for more.`,
-            { kind: "search_inspections", label: "Google index checks", quota: ent.inspectionQuota, plan: ent.planName },
-            "quota_exceeded",
-          )
-        : new SearchPlanDenied(
-            "Checking a page's Google index status is included from the Starter plan.",
-            { kind: "search_inspections", label: "Google index checks", plan: ent.planName },
-          );
-    }
-
-    const inspection = await getSearchInspection(site, url);
-    await spendQuota(site.workspaceId, "inspection");
-    return inspection;
+    return inspectPage(site, ent, url);
   }),
 );
 
 router.get(
+  "/:wid/sites/:siteId/search-console/indexing",
+  withLinkedSite((site, _req, ent) => getSearchIndexing(site, ent)),
+);
+
+router.post(
+  "/:wid/sites/:siteId/search-console/indexing/check",
+  withLinkedSite((site, req, ent) => checkNextPages(site, ent, Number(req.body?.count) || 10), "editor"),
+);
+
+router.get(
   "/:wid/sites/:siteId/search-console/hourly",
-  withLinkedSite((site, req) => getSearchHourly(site, clampType(req.query.type))),
+  withLinkedSite((site, req) => {
+    const type = clampType(req.query.type);
+    return getSearchHourly(site, type, parseSearchFilters(req.query.filters, type));
+  }),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/vitals",
+  withLinkedSite((site, req) => getWebVitals(site, clampDevice(req.query.device))),
+);
+
+router.get(
+  "/:wid/sites/:siteId/search-console/vitals/pages",
+  withLinkedSite((site, req, ent) =>
+    getPageVitals(site, clampDevice(req.query.device), clampRange(Math.min(28, ent.maxDays))),
+  ),
 );
 
 router.get(

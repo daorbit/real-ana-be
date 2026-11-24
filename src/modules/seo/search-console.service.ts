@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import { SearchConsoleConnection } from "./models/SearchConsoleConnection.js";
-import { SearchConsoleCache } from "./models/SearchConsoleCache.js";
 import { SearchConsoleProperty } from "./models/SearchConsoleProperty.js";
 import { GoogleApiError } from "../../infra/http-client/google-oauth.js";
 import { badRequest } from "../../shared/errors/index.js";
@@ -9,6 +7,7 @@ import {
   listSearchConsoleSitemaps,
   querySearchAnalytics,
   refreshSearchConsoleToken,
+  type SearchAnalyticsFilter,
   type SearchAnalyticsRow,
   type SearchConsoleSitemap,
   type SearchType,
@@ -16,9 +15,16 @@ import {
 } from "../../infra/http-client/search-console.js";
 import { decryptSecret, encryptSecret, readStoredSecret } from "../../shared/utils/crypto-box.js";
 import { isProductionDeployment } from "../../shared/utils/deployment.js";
+import { loadBrandedSplit, type BrandedSplit } from "./search-branded.js";
+import { cached, forgetCached, hashKey, isCached, type SiteRef } from "./search-cache.js";
+import { filtersKey, withoutDimension } from "./search-filters.js";
 import { pageViewSeries, pageViewsByPath, pathOf, type PageViewSeries } from "./search-page-views.js";
+import { typeHasQueries } from "./search-types.js";
 
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+export type { SiteRef } from "./search-cache.js";
+export { clearSiteCache } from "./search-cache.js";
+export { clampType, SEARCH_TYPES, typeHasQueries } from "./search-types.js";
+
 const TOP_ROWS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SIGNED_OUT_MESSAGE =
@@ -141,7 +147,7 @@ export function explainSearchConsoleError(err: unknown): string {
   }
 }
 
-function hostOf(value: string): string {
+export function hostOf(value: string): string {
   return String(value)
     .trim()
     .replace(/^sc-domain:/i, "")
@@ -168,13 +174,6 @@ export function isUsablePermission(permissionLevel: string): boolean {
 
 type Metrics = { clicks: number; impressions: number; ctr: number; position: number };
 
-export type SiteRef = {
-  workspaceId: string;
-  siteId: string;
-  connectionId: string;
-  propertyUrl: string;
-};
-
 export async function searchSiteRef(workspaceId: string, siteId: string): Promise<SiteRef | null> {
   const [link, connection] = await Promise.all([
     SearchConsoleProperty.findOne({ workspaceId, siteId }).select("propertyUrl"),
@@ -189,18 +188,6 @@ export async function searchSiteRef(workspaceId: string, siteId: string): Promis
   };
 }
 
-export const SEARCH_TYPES = ["web", "image", "video", "news", "discover", "googleNews"] as const;
-
-const TYPES_WITHOUT_QUERIES: readonly SearchType[] = ["discover", "googleNews"];
-
-export function clampType(value: unknown): SearchType {
-  return (SEARCH_TYPES as readonly string[]).includes(String(value)) ? (value as SearchType) : "web";
-}
-
-export function typeHasQueries(type: SearchType): boolean {
-  return !TYPES_WITHOUT_QUERIES.includes(type);
-}
-
 export type SearchPerformance = {
   propertyUrl: string;
   days: number;
@@ -212,10 +199,11 @@ export type SearchPerformance = {
   daily: Array<Metrics & { date: string }>;
   queries: Array<Metrics & { query: string }>;
   pages: Array<Metrics & { page: string; views?: number }>;
+  branded?: BrandedSplit | null;
   fetchedAt: string;
 };
 
-export const BREAKDOWN_DIMENSIONS = ["query", "page", "country", "device"] as const;
+export const BREAKDOWN_DIMENSIONS = ["query", "page", "country", "device", "searchAppearance"] as const;
 export type BreakdownDimension = (typeof BREAKDOWN_DIMENSIONS)[number];
 
 export type BreakdownRow = Metrics & {
@@ -338,6 +326,7 @@ const ROW_LIMITS: Record<BreakdownDimension, number> = {
   page: 25000,
   country: 250,
   device: 10,
+  searchAppearance: 100,
 };
 
 const INSIGHT_ROWS = 25;
@@ -373,74 +362,18 @@ function metricsOf(row?: SearchAnalyticsRow): Metrics {
   };
 }
 
-function hashKey(value: string): string {
-  return createHash("sha1").update(value).digest("hex");
-}
-
-const MEMORY_ENTRIES = 60;
-const memory = new Map<string, { data: unknown; expiresAt: number }>();
-const inflight = new Map<string, Promise<unknown>>();
-
-function remember(key: string, data: unknown, expiresAt: number) {
-  memory.delete(key);
-  memory.set(key, { data, expiresAt });
-  while (memory.size > MEMORY_ENTRIES) memory.delete(memory.keys().next().value as string);
-}
-
-async function loadCached<T>(site: SiteRef, key: string, load: () => Promise<T>, ttlMs: number): Promise<T> {
-  const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).lean();
-  if (hit && hit.expiresAt.getTime() > Date.now()) {
-    remember(`${site.siteId}|${key}`, hit.data, hit.expiresAt.getTime());
-    return hit.data as T;
-  }
-
-  const data = await load();
-  const expiresAt = Date.now() + ttlMs;
-  remember(`${site.siteId}|${key}`, data, expiresAt);
-  await SearchConsoleCache.findOneAndUpdate(
-    { siteId: site.siteId, key },
-    {
-      workspaceId: site.workspaceId,
-      siteId: site.siteId,
-      key,
-      data,
-      expiresAt: new Date(expiresAt),
-    },
-    { upsert: true },
-  );
-  return data;
-}
-
-async function cached<T>(
+function loadPerformance(
   site: SiteRef,
-  key: string,
-  load: () => Promise<T>,
-  ttlMs: number = CACHE_TTL_MS,
-): Promise<T> {
-  const memoryKey = `${site.siteId}|${key}`;
-  const hot = memory.get(memoryKey);
-  if (hot && hot.expiresAt > Date.now()) return hot.data as T;
-
-  const running = inflight.get(memoryKey);
-  if (running) return running as Promise<T>;
-
-  const pending = loadCached(site, key, load, ttlMs).finally(() => inflight.delete(memoryKey));
-  inflight.set(memoryKey, pending);
-  return pending;
-}
-
-export async function clearSiteCache(siteId: string): Promise<void> {
-  for (const key of [...memory.keys()]) if (key.startsWith(`${siteId}|`)) memory.delete(key);
-  await SearchConsoleCache.deleteMany({ siteId });
-}
-
-function loadPerformance(site: SiteRef, days: number, type: SearchType) {
-  return cached(site, `performance:${type}:${site.propertyUrl}:${days}`, async () => {
+  days: number,
+  type: SearchType,
+  filters: SearchAnalyticsFilter[],
+): Promise<SearchPerformance> {
+  return cached(site, `performance:${type}:${site.propertyUrl}:${days}${filtersKey(filters)}`, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
-    const base = { type };
+    const base = { type, filters };
 
-    const [totals, previous, daily, queries, pages] = await Promise.all([
+    const [totals, previous, daily, queries, pages, branded] = await Promise.all([
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.current }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.previous }),
       querySearchAnalytics(accessToken, site.propertyUrl, { ...base, ...range.current, dimensions: ["date"] }),
@@ -458,6 +391,7 @@ function loadPerformance(site: SiteRef, days: number, type: SearchType) {
         dimensions: ["page"],
         rowLimit: TOP_ROWS,
       }),
+      loadBrandedSplit(accessToken, site.propertyUrl, { ...range, ...base }),
     ]);
 
     return {
@@ -473,6 +407,7 @@ function loadPerformance(site: SiteRef, days: number, type: SearchType) {
         .sort((a, b) => a.date.localeCompare(b.date)),
       queries: queries.map((row) => ({ query: row.keys[0] ?? "", ...metricsOf(row) })),
       pages: pages.map((row) => ({ page: row.keys[0] ?? "", ...metricsOf(row) })),
+      branded,
       fetchedAt: new Date().toISOString(),
     };
   });
@@ -487,9 +422,10 @@ export async function getSearchPerformance(
   days: number,
   type: SearchType,
   withViews = true,
+  filters: SearchAnalyticsFilter[] = [],
 ): Promise<SearchPerformance> {
   const [performance, views] = await Promise.all([
-    loadPerformance(site, days, type),
+    loadPerformance(site, days, type, filters),
     withViews ? viewsFor(site, days) : Promise.resolve(null),
   ]);
   if (!views) return performance;
@@ -504,13 +440,15 @@ function loadBreakdown(
   dimension: BreakdownDimension,
   days: number,
   type: SearchType,
+  requested: SearchAnalyticsFilter[] = [],
 ): Promise<BreakdownData> {
   if (dimension === "query" && !typeHasQueries(type)) {
     const range = periods(days).current;
     return Promise.resolve({ ...range, rows: [], lost: [], fetchedAt: new Date().toISOString() });
   }
 
-  return cached(site, `breakdown:${type}:${dimension}:${site.propertyUrl}:${days}`, async () => {
+  const filters = dimension === "searchAppearance" ? withoutDimension(requested, "searchAppearance") : requested;
+  return cached(site, `breakdown:${type}:${dimension}:${site.propertyUrl}:${days}${filtersKey(filters)}`, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
     const rowLimit = ROW_LIMITS[dimension];
@@ -519,12 +457,14 @@ function loadBreakdown(
       querySearchAnalytics(accessToken, site.propertyUrl, {
         ...range.current,
         type,
+        filters,
         dimensions: [dimension],
         rowLimit,
       }),
       querySearchAnalytics(accessToken, site.propertyUrl, {
         ...range.previous,
         type,
+        filters,
         dimensions: [dimension],
         rowLimit,
       }),
@@ -584,10 +524,11 @@ export async function getSearchBreakdownPage(
     q: string;
     rowLimit?: number | null;
     withViews?: boolean;
+    filters?: SearchAnalyticsFilter[];
   },
 ): Promise<BreakdownPage> {
   const [data, views] = await Promise.all([
-    loadBreakdown(site, dimension, days, type),
+    loadBreakdown(site, dimension, days, type, options.filters),
     dimension === "page" && options.withViews !== false ? viewsFor(site, days) : Promise.resolve(null),
   ]);
   const q = options.q.trim().toLowerCase();
@@ -639,10 +580,11 @@ export async function getSearchInsights(
   days: number,
   type: SearchType,
   limit: number = INSIGHT_ROWS,
+  filters: SearchAnalyticsFilter[] = [],
 ): Promise<SearchInsights> {
   const [queries, pages] = await Promise.all([
-    loadBreakdown(site, "query", days, type),
-    loadBreakdown(site, "page", days, type),
+    loadBreakdown(site, "query", days, type, filters),
+    loadBreakdown(site, "page", days, type, filters),
   ]);
 
   const top = <T>(list: T[], score: (item: T) => number) =>
@@ -698,15 +640,18 @@ export function getSearchDrilldown(
   value: string,
   days: number,
   type: SearchType,
+  requested: SearchAnalyticsFilter[] = [],
 ): Promise<SearchDrilldown> {
   if (dimension === "query" && !typeHasQueries(type)) {
     return Promise.reject(badRequest("Google does not report queries for this search type"));
   }
 
-  return cached(site, `drill:${type}:${dimension}:${days}:${hashKey(`${site.propertyUrl}|${value}`)}`, async () => {
+  const extra = dimension === "query" ? withoutDimension(requested, "brandedClassification") : requested;
+  const key = `drill:${type}:${dimension}:${days}:${hashKey(`${site.propertyUrl}|${value}`)}${filtersKey(extra)}`;
+  return cached(site, key, async () => {
     const accessToken = await usableSearchConsoleToken(site.connectionId);
     const range = periods(days);
-    const filters = [{ dimension, operator: "equals" as const, expression: value }];
+    const filters = [...extra, { dimension, operator: "equals" as const, expression: value }];
     const counterpart = dimension === "query" ? "page" : "query";
 
     const [totals, previous, daily, related, views] = await Promise.all([
@@ -783,10 +728,14 @@ function hourlySeries(rows: SearchAnalyticsRow[]): Array<Metrics & { hour: strin
   });
 }
 
-export function getSearchHourly(site: SiteRef, type: SearchType): Promise<SearchHourly> {
+export function getSearchHourly(
+  site: SiteRef,
+  type: SearchType,
+  filters: SearchAnalyticsFilter[] = [],
+): Promise<SearchHourly> {
   return cached(
     site,
-    `hourly:${type}:${site.propertyUrl}`,
+    `hourly:${type}:${site.propertyUrl}${filtersKey(filters)}`,
     async () => {
       const accessToken = await usableSearchConsoleToken(site.connectionId);
       const now = new Date();
@@ -794,6 +743,7 @@ export function getSearchHourly(site: SiteRef, type: SearchType): Promise<Search
         startDate: isoDay(new Date(now.getTime() - 3 * DAY_MS)),
         endDate: isoDay(now),
         type,
+        filters,
         dimensions: ["hour"],
         dataState: "hourly_all",
         rowLimit: 500,
@@ -825,21 +775,16 @@ export function getSearchSitemaps(site: SiteRef): Promise<SearchSitemaps> {
   });
 }
 
-export async function forgetSearchSitemaps(site: SiteRef): Promise<void> {
-  const key = sitemapsKey(site);
-  memory.delete(`${site.siteId}|${key}`);
-  await SearchConsoleCache.deleteOne({ siteId: site.siteId, key });
+export function forgetSearchSitemaps(site: SiteRef): Promise<void> {
+  return forgetCached(site, sitemapsKey(site));
 }
+
 function inspectionKey(site: SiteRef, url: string) {
   return `inspect:${hashKey(`${site.propertyUrl}|${url}`)}`;
 }
 
-export async function isInspectionCached(site: SiteRef, url: string): Promise<boolean> {
-  const key = inspectionKey(site, url);
-  const hot = memory.get(`${site.siteId}|${key}`);
-  if (hot && hot.expiresAt > Date.now()) return true;
-  const hit = await SearchConsoleCache.findOne({ siteId: site.siteId, key }).select("expiresAt").lean();
-  return Boolean(hit && hit.expiresAt.getTime() > Date.now());
+export function isInspectionCached(site: SiteRef, url: string): Promise<boolean> {
+  return isCached(site, inspectionKey(site, url));
 }
 
 export function getSearchInspection(site: SiteRef, url: string): Promise<SearchInspection> {

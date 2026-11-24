@@ -48,7 +48,7 @@ Express 4 + Mongoose 9 + TypeScript (ESM: relative imports end in `.js`). This A
 | `notifications` | The bell (`Notification`), preferences, web push; send with `emit`, `emitTo`, `emitToMany` |
 | `orbit`, `orbit-history` | Orbit AI (see below) and saved conversations |
 | `forms-ai`, `form-alerts` | AI generate and edit for da-forms forms; form alerts to the bell and WhatsApp |
-| `seo` | Site audits and crawls, Search Console, Compare (competitors, baselines, briefs), AI search checks, screenshots |
+| `seo` | Site audits and crawls, Search Console (`search-cache.ts`, `search-filters.ts`, `search-branded.ts`; index checks in `search-indexing.service.ts` are kept for 90 days under `lasting:` cache keys that Refresh doesn't clear), Web vitals from the Chrome UX Report (`web-vitals.service.ts`, cached for a day), Compare (competitors, baselines, briefs), AI search checks, screenshots |
 | `backlinks` | Backlink discovery, verification, link gap against competitors |
 | `social` | Scheduled posts for `linkedin` and `instagram` (`POST_PROVIDERS`), post runner, stats refresh |
 | `reviews` | Google Business Profile sync, with a Places API fallback (`places.service.ts`) |
