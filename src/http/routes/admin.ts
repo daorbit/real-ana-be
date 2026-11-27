@@ -4,7 +4,6 @@ import { User } from "../../modules/identity/models/User.js";
 import { Workspace } from "../../modules/workspace/models/Workspace.js";
 import { Site } from "../../modules/analytics/models/Site.js";
 import { Event } from "../../modules/analytics/models/Event.js";
-import { deleteUserAccount } from "../../modules/identity/account-deletion.service.js";
 import { getDemoDailyLimit, setDemoDailyLimit } from "../../config/AppSetting.js";
 import { demoUsageSnapshot } from "../../modules/billing/demo-limit.js";
 import { Plan } from "../../modules/billing/models/Plan.js";
@@ -16,7 +15,7 @@ import { accountBillingSummary } from "../../modules/billing/quota.service.js";
 import { getPlanCatalogEntry } from "../../modules/billing/plans.catalog.js";
 import { CURRENCIES } from "../../modules/billing/currency.js";
 import { FX_BASE, fxConfigured, getCachedRates, repriceAllPlans } from "../../modules/billing/fx.js";
-import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, sendAdminSecurityResetEmail, type BodyLayout } from "../../infra/mail/mailer.js";
+import { mailConfigured, mailFrom, sendBulk, sendOne, renderBody, personalize, forBrowser, type BodyLayout } from "../../infra/mail/mailer.js";
 import { emitToMany } from "../../modules/notifications/notify.service.js";
 import { MAIL_TEMPLATES } from "../../infra/mail/templates.js";
 import { cloudinaryUsage } from "../../infra/storage/cloudinary.js";
@@ -34,6 +33,14 @@ import {
   removeDbConnection,
 } from "../../modules/admin/db-connections.service.js";
 import { changeUserRole, isRole } from "../../modules/admin/user-role.service.js";
+import {
+  deleteUserAsAdmin,
+  disableUserTwoFactor,
+  grantWorkspaceSiteSlot,
+  isAudience,
+  resetUserScreenLock,
+  setUserAudience,
+} from "../../modules/admin/user-actions.service.js";
 import { hasOwnershipFactor, rejectUnconfirmed } from "../../modules/security/confirm-identity.service.js";
 import { sendOpsTestAlert } from "../../infra/monitoring/ops-alert.js";
 import { TelegramError } from "../../infra/messaging/telegram.js";
@@ -233,22 +240,7 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
  * admin included, can read them back — resetting is the only lever here.
  */
 router.post("/users/:userId/2fa/disable", async (req: AuthedRequest, res: Response) => {
-  const target = await User.findById(req.params.userId);
-  if (!target) return res.status(404).json({ error: "user not found" });
-  if (!target.totpEnabled) return res.status(400).json({ error: "2fa is already off for this account" });
-
-  target.totpEnabled = false;
-  target.totpSecretEnc = "";
-  target.totpBackupCodeHashes = [];
-  await target.save();
-
-  console.log(`[admin] ${req.userId} disabled 2fa for user ${target.id} (${target.email})`);
-
-  sendAdminSecurityResetEmail(
-    { email: target.email, name: target.name },
-    "Two-factor authentication was turned off",
-  ).catch((e) => console.error("[admin] 2fa-disable notice failed:", (e as Error)?.message));
-
+  await disableUserTwoFactor(String(req.params.userId), String(req.userId));
   res.json({ ok: true });
 });
 
@@ -259,36 +251,14 @@ router.post("/users/:userId/2fa/disable", async (req: AuthedRequest, res: Respon
  * next time they're in Settings.
  */
 router.post("/users/:userId/screen-lock/reset", async (req: AuthedRequest, res: Response) => {
-  const target = await User.findById(req.params.userId);
-  if (!target) return res.status(404).json({ error: "user not found" });
-  if (!target.screenLockEnabled && !target.pinHash)
-    return res.status(400).json({ error: "this account has no screen lock or PIN set" });
-
-  target.screenLockEnabled = false;
-  target.pinHash = "";
-  target.lockedAt = null;
-  await target.save();
-
-  console.log(`[admin] ${req.userId} reset the screen lock for user ${target.id} (${target.email})`);
-
-  sendAdminSecurityResetEmail(
-    { email: target.email, name: target.name },
-    "Your screen lock and PIN were reset",
-  ).catch((e) => console.error("[admin] screen-lock-reset notice failed:", (e as Error)?.message));
-
+  await resetUserScreenLock(String(req.params.userId), String(req.userId));
   res.json({ ok: true });
 });
 
 router.put("/users/:userId/audience", async (req: AuthedRequest, res: Response) => {
   const audience = req.body?.audience;
-  if (audience !== "internal" && audience !== "external")
-    return res.status(400).json({ error: "audience must be internal or external" });
-
-  const target = await User.findByIdAndUpdate(req.params.userId, { audience }, { new: true }).select("email audience");
-  if (!target) return res.status(404).json({ error: "user not found" });
-
-  console.log(`[admin] ${req.userId} marked user ${target.id} (${target.email}) as ${audience}`);
-  res.json({ id: target.id, audience });
+  if (!isAudience(audience)) return res.status(400).json({ error: "audience must be internal or external" });
+  res.json(await setUserAudience(String(req.params.userId), audience, String(req.userId)));
 });
 
 router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
@@ -319,36 +289,11 @@ router.put("/users/:userId/role", async (req: AuthedRequest, res: Response) => {
 });
 
 router.post("/workspaces/:workspaceId/site-slots", async (req: AuthedRequest, res: Response) => {
-  const ws = await Workspace.findById(req.params.workspaceId).select("_id");
-  if (!ws) return res.status(404).json({ error: "workspace not found" });
-
-  const sub = await Subscription.findOneAndUpdate(
-    { workspaceId: ws.id },
-    { $inc: { addonSiteSlots: 1 } },
-    { upsert: true, new: true },
-  );
-
-  console.log(`[admin] ${req.userId} granted a site slot to workspace ${ws.id}`);
-
-  res.json({ workspaceId: ws.id, addonSiteSlots: sub.get("addonSiteSlots") });
+  res.json(await grantWorkspaceSiteSlot(String(req.params.workspaceId), String(req.userId)));
 });
 
- 
 router.delete("/users/:userId", async (req: AuthedRequest, res: Response) => {
-  const target = await User.findById(req.params.userId).select("email role");
-  if (!target) return res.status(404).json({ error: "user not found" });
-
-  // Deleting an admin — or yourself — is an own-goal with no undo, so block
-  // both at the door. The role guard also stops one admin from wiping another.
-  if (target.role === "admin" || target.role === "super_admin")
-    return res.status(400).json({ error: "cannot delete an admin account" });
-  if (target.id === req.userId)
-    return res.status(400).json({ error: "cannot delete your own account" });
-
-  await deleteUserAccount(target.id);
-
-  console.log(`[admin] ${req.userId} deleted user ${target.id} (${target.email})`);
-
+  await deleteUserAsAdmin(String(req.params.userId), String(req.userId), req.userId);
   res.json({ ok: true });
 });
 

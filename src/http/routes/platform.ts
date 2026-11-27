@@ -5,10 +5,24 @@ import { databaseHealth, metricsSummary, readRange } from "../../modules/platfor
 import { listPlatformPayments } from "../../modules/platform/payments.service.js";
 import { listPlatformSubscriptions } from "../../modules/platform/subscriptions.service.js";
 import { listPlatformUsers, platformUserDetail } from "../../modules/platform/users.service.js";
+import { changeUserRole } from "../../modules/admin/user-role.service.js";
+import {
+  deleteUserAsAdmin,
+  disableUserTwoFactor,
+  grantWorkspaceSiteSlot,
+  isAudience,
+  resetUserScreenLock,
+  setUserAudience,
+} from "../../modules/admin/user-actions.service.js";
 
 const router = Router();
 
-const CAPABILITIES = ["users", "billing", "payments", "metrics", "health"];
+const CAPABILITIES = ["users", "billing", "payments", "metrics", "health", "user-actions"];
+const PLATFORM_ROLES = ["user", "admin"] as const;
+
+function actorOf(req: PlatformRequest): string {
+  return `platform:${req.platformAdmin?.email ?? "unknown"}`;
+}
 
 router.get("/capabilities", requirePlatform("products:read"), (_req: PlatformRequest, res: Response) => {
   res.json({ product: PLATFORM_AUDIENCE, connectorVersion: "v1", capabilities: CAPABILITIES });
@@ -32,6 +46,40 @@ router.get("/users/:userId", requirePlatform("users:read"), async (req: Platform
   const detail = await platformUserDetail(String(req.params.userId));
   if (!detail) return res.status(404).json({ error: "user not found" });
   res.json(detail);
+});
+
+router.post("/users/:userId/two-factor/reset", requirePlatform("users:suspend"), async (req: PlatformRequest, res: Response) => {
+  res.json(await disableUserTwoFactor(String(req.params.userId), actorOf(req)));
+});
+
+router.post("/users/:userId/screen-lock/reset", requirePlatform("users:suspend"), async (req: PlatformRequest, res: Response) => {
+  res.json(await resetUserScreenLock(String(req.params.userId), actorOf(req)));
+});
+
+router.put("/users/:userId/audience", requirePlatform("users:roles"), async (req: PlatformRequest, res: Response) => {
+  const audience = req.body?.audience;
+  if (!isAudience(audience)) return res.status(400).json({ error: "audience must be internal or external" });
+  res.json(await setUserAudience(String(req.params.userId), audience, actorOf(req)));
+});
+
+router.put("/users/:userId/role", requirePlatform("users:roles"), async (req: PlatformRequest, res: Response) => {
+  const role = req.body?.role;
+  if (!(PLATFORM_ROLES as readonly string[]).includes(role)) {
+    return res.status(400).json({ error: "role must be user or admin. Grant super admin from Quantalog itself." });
+  }
+  const change = await changeUserRole(actorOf(req), String(req.params.userId), role);
+  if (change.previousRole !== change.role) {
+    console.log(`[platform] ${actorOf(req)} changed ${change.id} (${change.email}) from ${change.previousRole} to ${change.role}`);
+  }
+  res.json(change);
+});
+
+router.delete("/users/:userId", requirePlatform("users:delete"), async (req: PlatformRequest, res: Response) => {
+  res.json(await deleteUserAsAdmin(String(req.params.userId), actorOf(req)));
+});
+
+router.post("/workspaces/:workspaceId/site-slots", requirePlatform("subscriptions:extend"), async (req: PlatformRequest, res: Response) => {
+  res.json(await grantWorkspaceSiteSlot(String(req.params.workspaceId), actorOf(req)));
 });
 
 router.get("/subscriptions", requirePlatform("subscriptions:read"), async (req: PlatformRequest, res: Response) => {
