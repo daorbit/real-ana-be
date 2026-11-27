@@ -78,6 +78,7 @@ import oauthRoutes from "./http/routes/oauth.js";
 import oauthConsentRoutes from "./http/routes/oauth-consent.js";
 import wellKnownRoutes from "./http/routes/well-known.js";
 import mcpRoutes from "./http/routes/mcp.js";
+import platformRoutes from "./http/routes/platform.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
@@ -305,6 +306,7 @@ app.use("/api/cron", cronRoutes);
 app.use("/api/internal/forms", formsInternalRoutes);
 app.use("/api/internal/invoices/ai", invoicesAiInternalRoutes);
 app.use("/api/internal/invoices", invoicesInternalRoutes);
+app.use("/api/platform/v1", platformRoutes);
 
 app.use("/.well-known", connectorCors, requireMcpEnabled, wellKnownRoutes);
 app.use("/oauth", connectorCors, requireMcpEnabled, oauthRoutes);

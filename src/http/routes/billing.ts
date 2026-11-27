@@ -46,6 +46,7 @@ import { applyCoupon, claimCoupon, planPurchaseLabel, redeemCoupon } from "../..
 import { qualifyReferralOnPayment } from "../../modules/referrals/referral.service.js";
 import { applyPriceLock } from "../../modules/billing/price-lock.js";
 import { resolveCurrency, type Currency } from "../../modules/billing/currency.js";
+import { taggedNotes } from "../../modules/billing/payment-tag.js";
 import { User } from "../../modules/identity/models/User.js";
 import {
   appPurchaseDescription,
@@ -136,7 +137,8 @@ async function openOrder(params: {
     }
   | { ok: false; error: string }
 > {
-  const { gateway, amountMinor, currency, notes, buyer } = params;
+  const { gateway, amountMinor, currency, buyer } = params;
+  const notes = taggedNotes(params.notes);
 
   try {
     if (gateway === "cashfree") {

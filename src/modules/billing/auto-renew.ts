@@ -10,6 +10,7 @@ import {
 } from "./models/Subscription.js";
 import { previewPeriodEnd } from "./quota.service.js";
 import type { Currency } from "./currency.js";
+import { taggedNotes } from "./payment-tag.js";
 
 const TOTAL_CHARGES: Record<BillingCycle, number> = { monthly: 60, yearly: 5 };
 const CYCLE_MS: Record<BillingCycle, number> = { monthly: 30 * 86_400_000, yearly: 365 * 86_400_000 };
@@ -129,7 +130,7 @@ export async function openAutoRenewCheckout(params: {
     ...(upfront > 0
       ? { addons: [{ item: { name: `Quantalog ${planName} — first ${cycle === "yearly" ? "year" : "month"}`, amount: upfront, currency } }] }
       : {}),
-    notes: { workspaceId, userId, planSlug, cycle },
+    notes: taggedNotes({ workspaceId, userId, planSlug, cycle }),
   });
 
   if (!keepsCurrentPeriod) {
