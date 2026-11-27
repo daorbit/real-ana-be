@@ -6,6 +6,8 @@ import { listPlatformPayments } from "../../modules/platform/payments.service.js
 import { listPlatformSubscriptions } from "../../modules/platform/subscriptions.service.js";
 import { listPlatformUsers, platformUserDetail } from "../../modules/platform/users.service.js";
 import { changeUserRole } from "../../modules/admin/user-role.service.js";
+import { User } from "../../modules/identity/models/User.js";
+import { signImpersonationHandoff } from "../../modules/platform/impersonation-handoff.js";
 import {
   deleteUserAsAdmin,
   disableUserTwoFactor,
@@ -62,6 +64,17 @@ router.put("/users/:userId/audience", requirePlatform("users:roles"), async (req
   const audience = req.body?.audience;
   if (!isAudience(audience)) return res.status(400).json({ error: "audience must be internal or external" });
   res.json(await setUserAudience(String(req.params.userId), audience, actorOf(req)));
+});
+
+router.post("/users/:userId/impersonation", requirePlatform("users:impersonate"), async (req: PlatformRequest, res: Response) => {
+  const target = await User.findById(String(req.params.userId)).select("email role");
+  if (!target) return res.status(404).json({ error: "user not found" });
+  if (target.role === "super_admin") return res.status(400).json({ error: "cannot open the super admin's account" });
+
+  const code = signImpersonationHandoff(target.id, req.platformAdmin?.email ?? "unknown");
+  const origin = `${req.protocol}://${req.get("host")}`;
+  console.log(`[platform] ${actorOf(req)} requested a sign-in link for ${target.id} (${target.email})`);
+  res.json({ url: `${origin}/api/auth/impersonation/handoff?code=${encodeURIComponent(code)}`, expiresInSeconds: 60 });
 });
 
 router.put("/users/:userId/status", requirePlatform("users:suspend"), async (req: PlatformRequest, res: Response) => {

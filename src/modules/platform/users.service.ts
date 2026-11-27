@@ -18,9 +18,10 @@ export type PlatformUser = {
   createdAt: string;
   lastActiveAt: string | null;
   plan: PlanSummary | null;
+  avatarUrl: string | null;
 };
 
-type UserRow = { _id: Types.ObjectId; email: string; name: string; role: string; status?: string; createdAt: Date };
+type UserRow = { _id: Types.ObjectId; email: string; name: string; role: string; status?: string; avatarUrl?: string; createdAt: Date };
 
 function accountStatus(value: unknown): PlatformUser["status"] {
   return value === "suspended" ? "suspended" : "active";
@@ -56,6 +57,7 @@ async function present(rows: UserRow[]): Promise<PlatformUser[]> {
     createdAt: iso(row.createdAt) as string,
     lastActiveAt: iso(lastActive.get(String(row._id)) ?? null),
     plan: plans.get(String(row._id)) ?? null,
+    avatarUrl: row.avatarUrl || null,
   }));
 }
 
@@ -68,7 +70,7 @@ export async function listPlatformUsers(query: { q?: unknown; cursor?: unknown; 
     filter.$or = [{ email: pattern }, { name: pattern }, ...(Types.ObjectId.isValid(term) ? [{ _id: new Types.ObjectId(term) }] : [])];
   }
 
-  const rows = await User.find(filter).sort({ _id: -1 }).limit(limit + 1).select("email name role status createdAt").lean<UserRow[]>();
+  const rows = await User.find(filter).sort({ _id: -1 }).limit(limit + 1).select("email name role status avatarUrl createdAt").lean<UserRow[]>();
   return { items: await present(rows.slice(0, limit)), nextCursor: nextCursor(rows, limit) };
 }
 
@@ -79,7 +81,7 @@ export async function platformUserDetail(userId: string) {
     subscriptionsForOwner(userId),
     listPlatformPayments({ userId, limit: 50 }),
     lastActiveByUser([new Types.ObjectId(userId)]),
-    User.findById(userId).select("status statusReason audience").lean(),
+    User.findById(userId).select("status statusReason audience avatarUrl").lean(),
   ]);
   if (!overview) return null;
   const { user, totals, workspaces, signIns } = overview;
@@ -94,6 +96,8 @@ export async function platformUserDetail(userId: string) {
       role: user.role,
       createdAt: iso(user.createdAt) as string,
       lastActiveAt: iso(lastActive.get(user.id) ?? null),
+      avatarUrl: account?.avatarUrl || null,
+      audience: account?.audience === "internal" ? "internal" : "external",
       plan: bestPlan(subscriptions.map((sub) => ({ planSlug: sub.planKey, status: sub.status === "expired" ? "expired" : "active", currentPeriodEnd: sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd) : null }))),
     },
     workspaces: workspaces.map((workspace) => ({

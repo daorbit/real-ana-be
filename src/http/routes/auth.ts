@@ -31,12 +31,13 @@ import { captureServerError } from "../../infra/monitoring/sentry.js";
 import { recordAudit, accountAuditPage, parseCursor } from "../../modules/audit/audit.service.js";
 import {
   signToken, signDemoToken, requireAuth, requireUnlocked, blockDemoWrites, AuthedRequest,
-  signPending2faToken, verifyPending2faToken, verifySessionToken, isTrustedWrite,
+  signPending2faToken, verifyPending2faToken, verifySessionToken, isTrustedWrite, signImpersonationToken,
 } from "../middleware/auth.js";
 import {
   ADMIN_SESSION_COOKIE, bearerToken, clearAdminSession, cookieSessionToken, endSession,
-  readCookie, sessionHint, startSession, type SessionHint,
+  readCookie, sessionHint, startSession, stashAdminSession, type SessionHint,
 } from "../session-cookie.js";
+import { redeemImpersonationHandoff } from "../../modules/platform/impersonation-handoff.js";
 
 const router = Router();
 
@@ -898,6 +899,27 @@ router.post("/logout", async (req: Request, res: Response) => {
   if (jti) await Session.updateOne({ jti, revokedAt: null }, { revokedAt: new Date() }).catch(() => {});
   endSession(res);
   res.json({ ok: true });
+});
+
+function dashboardUrl(): string {
+  return (process.env.APP_URL || "https://studio-quantalog.daorbit.in").replace(/\/+$/, "");
+}
+
+router.get("/impersonation/handoff", async (req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const handoff = code ? await redeemImpersonationHandoff(code) : null;
+  if (!handoff) return res.status(410).type("text/plain").send("This sign-in link has expired or was already used. Start again from the console.");
+
+  const target = await User.findById(handoff.userId).select("email role");
+  if (!target || target.role === "super_admin") return res.status(404).type("text/plain").send("This account can't be opened.");
+
+  const own = cookieSessionToken(req);
+  if (own && (await verifySessionToken(own))) stashAdminSession(res, own);
+  const token = await signImpersonationToken(target.id, `platform:${handoff.by}`, req);
+  startSession(res, token);
+  console.log(`[impersonate] platform ${handoff.by} -> user ${target.id} (${target.email})`);
+  res.redirect(303, `${dashboardUrl()}/`);
 });
 
 router.post("/impersonation/exit", async (req: Request, res: Response) => {

@@ -90,7 +90,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
 
   const [users, total] = await Promise.all([
     User.find(filter)
-      .select("email name role audience avatarUrl createdAt totpEnabled screenLockEnabled")
+      .select("email name role audience status avatarUrl createdAt totpEnabled screenLockEnabled")
       .sort({ createdAt: -1 })
       .skip((page - 1) * USERS_PAGE_SIZE)
       .limit(USERS_PAGE_SIZE),
@@ -165,6 +165,7 @@ router.get("/users", async (req: AuthedRequest, res: Response) => {
         name: u.name,
         role: u.role,
         audience: u.audience === "internal" ? "internal" : "external",
+        status: u.get("status") === "suspended" ? "suspended" : "active",
         avatarUrl: u.avatarUrl ?? "",
         createdAt: u.get("createdAt"),
         totpEnabled: Boolean(u.totpEnabled),
@@ -214,7 +215,7 @@ router.post("/impersonate/:userId", async (req: AuthedRequest, res: Response) =>
   if (target.role === "admin" && requester?.role !== "super_admin")
     return res.status(400).json({ error: "cannot impersonate an admin" });
 
-  const token = signImpersonationToken(target.id, req.userId as string);
+  const token = await signImpersonationToken(target.id, req.userId as string, req);
   await recordAudit(req, {
     action: "account.impersonated",
     actorId: target.id,

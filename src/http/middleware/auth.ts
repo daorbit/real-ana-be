@@ -92,8 +92,12 @@ export function signDemoToken(userId: string): string {
 }
 
  
-export function signImpersonationToken(userId: string, impersonatorId: string): string {
-  return jwt.sign({ userId, impersonatorId }, jwtSecret(), { expiresIn: "1h" });
+export const IMPERSONATION_TTL_SECONDS = 60 * 60;
+
+export async function signImpersonationToken(userId: string, impersonatorId: string, req: Request): Promise<string> {
+  const jti = randomUUID();
+  await Session.create({ userId, jti, ...sessionInfoFor(req) });
+  return jwt.sign({ userId, impersonatorId, jti }, jwtSecret(), { expiresIn: IMPERSONATION_TTL_SECONDS });
 }
 
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
