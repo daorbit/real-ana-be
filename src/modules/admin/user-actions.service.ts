@@ -1,4 +1,5 @@
 import { User } from "../identity/models/User.js";
+import { Session } from "../identity/models/Session.js";
 import { Workspace } from "../workspace/models/Workspace.js";
 import { Subscription } from "../billing/models/Subscription.js";
 import { deleteUserAccount } from "../identity/account-deletion.service.js";
@@ -64,6 +65,26 @@ export async function grantWorkspaceSiteSlot(workspaceId: string, actor: string)
 
   console.log(`[admin] ${actor} granted a site slot to workspace ${ws.id}`);
   return { workspaceId: ws.id, addonSiteSlots: Number(sub.get("addonSiteSlots") ?? 0) };
+}
+
+export const ACCOUNT_STATUSES = ["active", "suspended"] as const;
+export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
+
+export function isAccountStatus(value: unknown): value is AccountStatus {
+  return typeof value === "string" && (ACCOUNT_STATUSES as readonly string[]).includes(value);
+}
+
+export async function setUserStatus(userId: string, status: AccountStatus, reason: string, actor: string) {
+  const target = await User.findById(userId).select("email role status");
+  if (!target) throw notFound("user not found");
+  if (status === "suspended" && (target.role === "admin" || target.role === "super_admin")) throw badRequest("cannot suspend an admin account");
+
+  target.set({ status, statusReason: reason.slice(0, 300), statusChangedAt: new Date() });
+  await target.save();
+  if (status === "suspended") await Session.updateMany({ userId: target._id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+
+  console.log(`[admin] ${actor} set user ${target.id} (${target.email}) to ${status}`);
+  return { id: target.id, status };
 }
 
 export async function deleteUserAsAdmin(userId: string, actor: string, requesterId?: string) {

@@ -79,6 +79,7 @@ import oauthConsentRoutes from "./http/routes/oauth-consent.js";
 import wellKnownRoutes from "./http/routes/well-known.js";
 import mcpRoutes from "./http/routes/mcp.js";
 import platformRoutes from "./http/routes/platform.js";
+import { PLATFORM_ADMIN_BASE, platformAdminGate } from "./http/middleware/platform-admin-gate.js";
 import swaggerUi from "swagger-ui-express";
 import { buildOpenApiSpec } from "./http/openapi.js";
 import { renderStatusPage } from "./http/views/status-page.js";
@@ -307,6 +308,9 @@ app.use("/api/internal/forms", formsInternalRoutes);
 app.use("/api/internal/invoices/ai", invoicesAiInternalRoutes);
 app.use("/api/internal/invoices", invoicesInternalRoutes);
 app.use("/api/platform/v1", platformRoutes);
+app.use(`${PLATFORM_ADMIN_BASE}/referrals`, platformAdminGate, adminReferralRoutes);
+app.use(`${PLATFORM_ADMIN_BASE}/status`, platformAdminGate, adminStatusRoutes);
+app.use(PLATFORM_ADMIN_BASE, platformAdminGate, adminRoutes);
 
 app.use("/.well-known", connectorCors, requireMcpEnabled, wellKnownRoutes);
 app.use("/oauth", connectorCors, requireMcpEnabled, oauthRoutes);

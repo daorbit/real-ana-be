@@ -10,9 +10,11 @@ import {
   deleteUserAsAdmin,
   disableUserTwoFactor,
   grantWorkspaceSiteSlot,
+  isAccountStatus,
   isAudience,
   resetUserScreenLock,
   setUserAudience,
+  setUserStatus,
 } from "../../modules/admin/user-actions.service.js";
 
 const router = Router();
@@ -60,6 +62,13 @@ router.put("/users/:userId/audience", requirePlatform("users:roles"), async (req
   const audience = req.body?.audience;
   if (!isAudience(audience)) return res.status(400).json({ error: "audience must be internal or external" });
   res.json(await setUserAudience(String(req.params.userId), audience, actorOf(req)));
+});
+
+router.put("/users/:userId/status", requirePlatform("users:suspend"), async (req: PlatformRequest, res: Response) => {
+  const status = req.body?.status;
+  if (!isAccountStatus(status)) return res.status(400).json({ error: "status must be active or suspended" });
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  res.json(await setUserStatus(String(req.params.userId), status, reason, actorOf(req)));
 });
 
 router.put("/users/:userId/role", requirePlatform("users:roles"), async (req: PlatformRequest, res: Response) => {

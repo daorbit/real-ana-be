@@ -621,7 +621,7 @@ router.post("/email/test", async (req: AuthedRequest, res: Response) => {
     return res.status(400).json({ error: "subject and body are required" });
   }
 
-  const me = await User.findById(req.userId).select("email name");
+  const me = req.platformActor ? { email: req.platformActor.email, name: "" } : await User.findById(req.userId).select("email name");
   if (!me) return res.status(404).json({ error: "user not found" });
 
   const [result] = await sendBulk(

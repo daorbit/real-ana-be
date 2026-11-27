@@ -29,6 +29,7 @@ export interface AuthedRequest extends Request {
   isDemo?: boolean;
   sessionJti?: string;
   unlockRequired?: boolean;
+  platformActor?: { id: string; email: string };
 }
 
 async function isScreenLocked(userId: string): Promise<boolean> {
@@ -56,6 +57,9 @@ type Pending2faPayload = { userId: string; pending2fa: true };
 
 export async function signToken(userId: string, req?: Request): Promise<string> {
   if (!req) return jwt.sign({ userId }, jwtSecret(), { expiresIn: SESSION_TTL_SECONDS });
+
+  const account = await User.findById(userId).select("status").lean();
+  if (account?.status === "suspended") throw forbidden("This account is suspended. Contact support to restore access.");
 
   const jti = randomUUID();
   const info = sessionInfoFor(req);
@@ -120,6 +124,7 @@ function isNavigation(req: Request): boolean {
 }
 
 export const requireAuth = asyncHandler<AuthedRequest>(async (req, res, next) => {
+  if (req.platformActor) return next();
   const source = sessionTokenFrom(req);
   if (!source) return res.status(401).json({ error: "no token" });
   if (source.viaCookie && (!isTrustedWrite(req) || isNavigation(req))) {
@@ -186,6 +191,7 @@ export function blockDemoWrites(
 
  
 export const requireAdmin = asyncHandler<AuthedRequest>(async (req, _res, next) => {
+  if (req.platformActor) return next();
   if (req.impersonatorId) throw forbidden("not available while impersonating");
 
   const user = await User.findById(req.userId).select("role");
@@ -195,6 +201,7 @@ export const requireAdmin = asyncHandler<AuthedRequest>(async (req, _res, next) 
 
  
 export const requireSuperAdmin = asyncHandler<AuthedRequest>(async (req, _res, next) => {
+  if (req.platformActor) return next();
   if (req.impersonatorId) throw forbidden("not available while impersonating");
 
   const user = await User.findById(req.userId).select("role");

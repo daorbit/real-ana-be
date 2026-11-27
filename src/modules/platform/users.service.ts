@@ -13,14 +13,18 @@ export type PlatformUser = {
   email: string;
   name: string;
   emailVerified: boolean;
-  status: "active";
+  status: "active" | "suspended";
   role: string;
   createdAt: string;
   lastActiveAt: string | null;
   plan: PlanSummary | null;
 };
 
-type UserRow = { _id: Types.ObjectId; email: string; name: string; role: string; createdAt: Date };
+type UserRow = { _id: Types.ObjectId; email: string; name: string; role: string; status?: string; createdAt: Date };
+
+function accountStatus(value: unknown): PlatformUser["status"] {
+  return value === "suspended" ? "suspended" : "active";
+}
 
 async function lastActiveByUser(ids: Types.ObjectId[]) {
   if (!ids.length) return new Map<string, Date>();
@@ -47,7 +51,7 @@ async function present(rows: UserRow[]): Promise<PlatformUser[]> {
     email: row.email,
     name: row.name,
     emailVerified: true,
-    status: "active",
+    status: accountStatus(row.status),
     role: row.role,
     createdAt: iso(row.createdAt) as string,
     lastActiveAt: iso(lastActive.get(String(row._id)) ?? null),
@@ -64,17 +68,18 @@ export async function listPlatformUsers(query: { q?: unknown; cursor?: unknown; 
     filter.$or = [{ email: pattern }, { name: pattern }, ...(Types.ObjectId.isValid(term) ? [{ _id: new Types.ObjectId(term) }] : [])];
   }
 
-  const rows = await User.find(filter).sort({ _id: -1 }).limit(limit + 1).select("email name role createdAt").lean<UserRow[]>();
+  const rows = await User.find(filter).sort({ _id: -1 }).limit(limit + 1).select("email name role status createdAt").lean<UserRow[]>();
   return { items: await present(rows.slice(0, limit)), nextCursor: nextCursor(rows, limit) };
 }
 
 export async function platformUserDetail(userId: string) {
   if (!Types.ObjectId.isValid(userId)) return null;
-  const [overview, subscriptions, payments, lastActive] = await Promise.all([
+  const [overview, subscriptions, payments, lastActive, account] = await Promise.all([
     adminUserOverview(userId),
     subscriptionsForOwner(userId),
     listPlatformPayments({ userId, limit: 50 }),
     lastActiveByUser([new Types.ObjectId(userId)]),
+    User.findById(userId).select("status statusReason audience").lean(),
   ]);
   if (!overview) return null;
   const { user, totals, workspaces, signIns } = overview;
@@ -85,7 +90,7 @@ export async function platformUserDetail(userId: string) {
       email: user.email,
       name: user.name,
       emailVerified: true,
-      status: "active" as const,
+      status: accountStatus(account?.status),
       role: user.role,
       createdAt: iso(user.createdAt) as string,
       lastActiveAt: iso(lastActive.get(user.id) ?? null),
@@ -106,6 +111,8 @@ export async function platformUserDetail(userId: string) {
     subscriptions,
     payments: payments.items,
     facts: [
+      { label: "Account type", value: account?.audience === "internal" ? "Internal" : "External" },
+      ...(account?.status === "suspended" ? [{ label: "Suspended because", value: account.statusReason || "No reason given" }] : []),
       { label: "Two-factor authentication", value: user.totpEnabled ? "On" : "Off" },
       { label: "Screen lock", value: user.screenLockEnabled ? "On" : "Off" },
       { label: "Workspaces", value: `${totals.owned} owned, ${totals.shared} shared` },
