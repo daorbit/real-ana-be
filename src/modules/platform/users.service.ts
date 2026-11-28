@@ -114,6 +114,7 @@ export async function platformUserDetail(userId: string) {
     })),
     subscriptions,
     payments: payments.items,
+    security: { totpEnabled: Boolean(user.totpEnabled), screenLockEnabled: Boolean(user.screenLockEnabled) },
     facts: [
       { label: "Account type", value: account?.audience === "internal" ? "Internal" : "External" },
       ...(account?.status === "suspended" ? [{ label: "Suspended because", value: account.statusReason || "No reason given" }] : []),
